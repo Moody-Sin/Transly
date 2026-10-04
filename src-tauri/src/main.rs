@@ -17,6 +17,10 @@ fn main() {
     // 初始化持久化翻译缓存
     let cache = TranslationCache::default_shared();
 
+    // 启动时自动做轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）
+    let _ = cache.cleanup_older_than_days(90);
+    let _ = cache.trim_to_max_items(100_000);
+
     // 初始化全局术语库
     let glossary = Arc::new(RwLock::new(Glossary::new()));
 

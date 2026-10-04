@@ -131,6 +131,49 @@ impl TranslationCache {
 
         Ok(())
     }
+
+    /// 清理超过指定天数的过期缓存
+    pub fn cleanup_older_than_days(&self, days: u32) -> Result<usize> {
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+            - (days as i64 * 86400);
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let deleted = conn.execute(
+            "DELETE FROM translation_cache WHERE created_at < ?1",
+            params![cutoff],
+        )?;
+
+        Ok(deleted)
+    }
+
+    /// 限制缓存总条目数，保留最新的 max_items 条
+    pub fn trim_to_max_items(&self, max_items: usize) -> Result<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let deleted = conn.execute(
+            r#"
+            DELETE FROM translation_cache
+            WHERE cache_key NOT IN (
+                SELECT cache_key FROM translation_cache
+                ORDER BY created_at DESC
+                LIMIT ?1
+            )
+            "#,
+            params![max_items as i64],
+        )?;
+
+        Ok(deleted)
+    }
 }
 
 fn dirs_cache_path() -> Option<std::path::PathBuf> {
@@ -172,5 +215,21 @@ mod tests {
             .get(text, "en", "zh-CN", "mock")
             .expect("query should succeed");
         assert_eq!(hit, Some(translated.to_string()));
+    }
+
+    #[test]
+    fn test_cache_cleanup_and_trim() {
+        let cache = TranslationCache::in_memory().unwrap();
+        cache.set("1", "一", "en", "zh-CN", "m").unwrap();
+        cache.set("2", "二", "en", "zh-CN", "m").unwrap();
+        cache.set("3", "三", "en", "zh-CN", "m").unwrap();
+
+        // trim 保留最新 2 条
+        let deleted = cache.trim_to_max_items(2).unwrap();
+        assert_eq!(deleted, 1);
+
+        // cleanup 不会误删当前刚插入的条目
+        let expired = cache.cleanup_older_than_days(1).unwrap();
+        assert_eq!(expired, 0);
     }
 }

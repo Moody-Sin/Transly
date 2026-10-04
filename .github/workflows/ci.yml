@@ -51,5 +51,7 @@ jobs:
           git diff --exit-code src/bindings.ts
       - name: 桌面端构建校验
         run: pnpm run build
+      - name: 前端规范检查
+        run: pnpm run lint
       - name: 浏览器插件构建校验
         run: pnpm --filter transly-extension run build

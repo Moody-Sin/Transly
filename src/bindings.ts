@@ -10,6 +10,7 @@ export const commands = {
 	saveApiKey: (engine: string, key: string) => typedError<null, string>(__TAURI_INVOKE("save_api_key", { engine, key })),
 	getApiKey: (engine: string) => typedError<string, string>(__TAURI_INVOKE("get_api_key", { engine })),
 	deleteApiKey: (engine: string) => typedError<null, string>(__TAURI_INVOKE("delete_api_key", { engine })),
+	addGlossaryTerm: (source: string, target: string) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target })),
 };
 
 /* Tauri Specta runtime */

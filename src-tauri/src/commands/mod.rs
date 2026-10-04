@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use transly_core::{
-    detect::detect_language, TranslateEngine, TranslationCache, TranslationRequest,
+    detect::detect_language, Glossary, TranslateEngine, TranslationCache, TranslationRequest,
 };
 
 #[tauri::command]
@@ -11,13 +12,15 @@ pub async fn translate(
     target_lang: String,
     cache: tauri::State<'_, Arc<TranslationCache>>,
     engine: tauri::State<'_, Arc<dyn TranslateEngine>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<String, String> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
     let engine_id = engine.id();
 
     // 1. 优先查缓存
     if let Ok(Some(cached_text)) = cache.get(&text, &sl, &target_lang, engine_id) {
-        return Ok(cached_text);
+        let g = glossary.read().await;
+        return Ok(g.apply(&cached_text));
     }
 
     // 2. 缓存未命中，调用引擎翻译
@@ -31,10 +34,23 @@ pub async fn translate(
         Ok(res) => {
             // 3. 异步写入缓存
             let _ = cache.set(&text, &res.text, &sl, &target_lang, engine_id);
-            Ok(res.text)
+            let g = glossary.read().await;
+            Ok(g.apply(&res.text))
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn add_glossary_term(
+    source: String,
+    target: String,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<(), String> {
+    let mut g = glossary.write().await;
+    g.insert(source, target);
+    Ok(())
 }
 
 #[tauri::command]

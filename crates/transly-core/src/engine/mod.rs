@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+pub mod fallback;
 pub mod google;
+pub use fallback::FallbackEngine;
 pub use google::GoogleWebEngine;
 
 use crate::Result;

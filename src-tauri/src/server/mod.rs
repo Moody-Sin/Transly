@@ -9,8 +9,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use transly_core::{TranslateEngine, TranslationCache, TranslationRequest};
+use transly_core::{Glossary, TranslateEngine, TranslationCache, TranslationRequest};
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -35,17 +36,20 @@ pub struct ServerState {
     pub token: Arc<String>,
     pub engine: Arc<dyn TranslateEngine>,
     pub cache: Arc<TranslationCache>,
+    pub glossary: Arc<RwLock<Glossary>>,
 }
 
 pub fn create_router(
     token: String,
     cache: Arc<TranslationCache>,
     engine: Arc<dyn TranslateEngine>,
+    glossary: Arc<RwLock<Glossary>>,
 ) -> Router {
     let state = ServerState {
         token: Arc::new(token),
         engine,
         cache,
+        glossary,
     };
 
     let protected = Router::new()
@@ -56,7 +60,18 @@ pub fn create_router(
         ));
 
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(
+            |origin: &axum::http::HeaderValue, _parts| {
+                if let Ok(s) = origin.to_str() {
+                    s.starts_with("chrome-extension://")
+                        || s.starts_with("moz-extension://")
+                        || s.starts_with("http://127.0.0.1")
+                        || s.starts_with("http://localhost")
+                } else {
+                    false
+                }
+            },
+        ))
         .allow_methods(Any)
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
@@ -136,6 +151,14 @@ async fn translate_batch_handler(
         }
     }
 
+    // 3. 统一应用全局术语库修正
+    let g = state.glossary.read().await;
+    if !g.is_empty() {
+        for t in &mut translations {
+            *t = g.apply(t);
+        }
+    }
+
     Ok(Json(TranslateBatchResponse { translations }))
 }
 
@@ -144,10 +167,11 @@ pub async fn start_server(
     token: String,
     cache: Arc<TranslationCache>,
     engine: Arc<dyn TranslateEngine>,
+    glossary: Arc<RwLock<Glossary>>,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, create_router(token, cache, engine)).await?;
+    axum::serve(listener, create_router(token, cache, engine, glossary)).await?;
     Ok(())
 }
 
@@ -163,7 +187,8 @@ mod tests {
     async fn test_health_check() {
         let cache = TranslationCache::in_memory().unwrap();
         let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
-        let app = create_router("test-token".to_string(), Arc::new(cache), engine);
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+        let app = create_router("test-token".to_string(), Arc::new(cache), engine, glossary);
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
@@ -174,10 +199,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_cors_origin_policy() {
+        let cache = TranslationCache::in_memory().unwrap();
+        let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+        let app = create_router("test-token".to_string(), Arc::new(cache), engine, glossary);
+
+        // 1. 允许扩展协议与本地开发
+        let allowed_req = Request::builder()
+            .method("OPTIONS")
+            .uri("/health")
+            .header(header::ORIGIN, "chrome-extension://abcdefg")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .body(Body::empty())
+            .unwrap();
+        let allowed_res = app.clone().oneshot(allowed_req).await.unwrap();
+        assert_eq!(
+            allowed_res
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .map(|v| v.to_str().unwrap()),
+            Some("chrome-extension://abcdefg")
+        );
+
+        // 2. 拒绝普通不受信外部网页
+        let denied_req = Request::builder()
+            .method("OPTIONS")
+            .uri("/health")
+            .header(header::ORIGIN, "https://malicious-site.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .body(Body::empty())
+            .unwrap();
+        let denied_res = app.oneshot(denied_req).await.unwrap();
+        assert!(denied_res
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn test_translate_unauthorized() {
         let cache = TranslationCache::in_memory().unwrap();
         let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
-        let app = create_router("valid-token".to_string(), Arc::new(cache), engine);
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+        let app = create_router("valid-token".to_string(), Arc::new(cache), engine, glossary);
         let req = Request::builder()
             .method("POST")
             .uri("/translate")
@@ -213,10 +278,14 @@ mod tests {
         }
 
         let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let mut glossary_instance = Glossary::new();
+        glossary_instance.insert("hello", "世界你好");
+        let glossary = Arc::new(RwLock::new(glossary_instance));
         let state = ServerState {
             token: Arc::new("valid-token".to_string()),
             engine: Arc::new(MockEngine),
             cache: cache.clone(),
+            glossary,
         };
 
         let app = Router::new()
@@ -242,9 +311,10 @@ mod tests {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(resp.translations, vec!["[zh-CN] hello"]);
+        // 验证经过了术语库替换 ("hello" -> "世界你好")
+        assert_eq!(resp.translations, vec!["[zh-CN] 世界你好"]);
 
-        // 验证翻译结果已自动写入缓存
+        // 验证翻译结果已自动写入缓存（缓存存的是引擎原始译文）
         let cached = cache.get("hello", "auto", "zh-CN", "mock").unwrap();
         assert_eq!(cached, Some("[zh-CN] hello".to_string()));
     }

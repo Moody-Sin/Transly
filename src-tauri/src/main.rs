@@ -10,11 +10,15 @@ use tauri::{
     Manager, WindowEvent,
 };
 use tauri_specta::{collect_commands, Builder};
-use transly_core::{GoogleWebEngine, TranslateEngine, TranslationCache};
+use tokio::sync::RwLock;
+use transly_core::{Glossary, GoogleWebEngine, TranslateEngine, TranslationCache};
 
 fn main() {
     // 初始化持久化翻译缓存
     let cache = TranslationCache::default_shared();
+
+    // 初始化全局术语库
+    let glossary = Arc::new(RwLock::new(Glossary::new()));
 
     // 初始化全局共享翻译引擎（保持 HTTP Client 连接池长连接）
     let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
@@ -27,8 +31,16 @@ fn main() {
     let token_clone = token.clone();
     let server_cache = cache.clone();
     let server_engine = engine.clone();
+    let server_glossary = glossary.clone();
     tokio::spawn(async move {
-        if let Err(e) = server::start_server(39281, token_clone, server_cache, server_engine).await
+        if let Err(e) = server::start_server(
+            39281,
+            token_clone,
+            server_cache,
+            server_engine,
+            server_glossary,
+        )
+        .await
         {
             eprintln!("本地 HTTP 服务启动失败: {e}");
         }
@@ -40,7 +52,8 @@ fn main() {
         commands::get_server_token,
         commands::save_api_key,
         commands::get_api_key,
-        commands::delete_api_key
+        commands::delete_api_key,
+        commands::add_glossary_term
     ]);
 
     #[cfg(debug_assertions)]
@@ -51,6 +64,7 @@ fn main() {
     tauri::Builder::default()
         .manage(cache)
         .manage(engine)
+        .manage(glossary)
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             // 构建系统托盘菜单

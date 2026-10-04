@@ -25,4 +25,30 @@ impl Glossary {
         }
         result
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.terms.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.terms.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_glossary_apply() {
+        let mut glossary = Glossary::new();
+        glossary.insert("LLM", "大语言模型");
+        glossary.insert("Rust", "Rust语言");
+
+        let text = "学习 Rust 与 LLM 很有趣";
+        let result = glossary.apply(text);
+        assert_eq!(result, "学习 Rust语言 与 大语言模型 很有趣");
+        assert_eq!(glossary.len(), 2);
+        assert!(!glossary.is_empty());
+    }
 }

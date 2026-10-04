@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe } from 'lucide-react'
+import { listen } from '@tauri-apps/api/event'
 import { commands } from './bindings'
 import { getTranslation, Locale } from './i18n'
 
@@ -78,13 +79,14 @@ export default function App() {
     }
   }
 
-  const handleTranslate = async () => {
-    if (!sourceText.trim()) return
+  const handleTranslate = useCallback(async (customText?: string) => {
+    const textToTranslate = customText !== undefined ? customText : sourceText
+    if (!textToTranslate.trim()) return
     setIsTranslating(true)
     setErrorMsg(null)
     try {
       // 使用 tauri-specta 强类型命令安全调用，传递所选引擎
-      const res = await commands.translate(sourceText, 'auto', targetLang, engine)
+      const res = await commands.translate(textToTranslate, 'auto', targetLang, engine)
       if (res.status === 'ok') {
         setTranslatedText(res.data)
       } else {
@@ -93,11 +95,29 @@ export default function App() {
     } catch (err: unknown) {
       console.warn('Tauri IPC 暂不可用或调用失败，降级本地预览模式:', err)
       // 若在纯浏览器环境预览，提供占位回退
-      setTranslatedText(`[${targetLang}] ${sourceText}`)
+      setTranslatedText(`[${targetLang}] ${textToTranslate}`)
     } finally {
       setIsTranslating(false)
     }
-  }
+  }, [sourceText, targetLang, engine])
+
+  // 监听全局快捷键划词/剪贴板翻译事件
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    listen<string>('quick-translate', (event) => {
+      const text = event.payload
+      if (text && text.trim()) {
+        setSourceText(text)
+        handleTranslate(text)
+      }
+    }).then((fn) => {
+      unlisten = fn
+    }).catch(() => {})
+
+    return () => {
+      if (unlisten) unlisten()
+    }
+  }, [handleTranslate])
 
   const handleCopy = () => {
     if (!translatedText) return
@@ -192,7 +212,7 @@ export default function App() {
             )}
             <div className="mt-2 flex justify-end">
               <button
-                onClick={handleTranslate}
+                onClick={() => handleTranslate()}
                 disabled={isTranslating || !sourceText.trim()}
                 className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
               >

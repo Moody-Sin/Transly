@@ -7,8 +7,10 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
+use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
 use transly_core::{Glossary, TranslationCache};
@@ -66,11 +68,32 @@ fn main() {
         .expect("Failed to export typescript bindings");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(cache)
         .manage(pool)
         .manage(glossary)
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
+            // 注册全局快捷键 (Alt+Shift+D)，触发读取选中文本/剪贴板并激活主窗口翻译
+            let app_handle = app.handle().clone();
+            let _ =
+                app.global_shortcut()
+                    .on_shortcut("Alt+Shift+D", move |_app, _shortcut, event| {
+                        if event.state() == ShortcutState::Pressed {
+                            let handle = app_handle.clone();
+                            // 尝试从剪贴板读取最新选中文本
+                            let text = handle.clipboard().read_text().unwrap_or_default();
+                            if let Some(window) = handle.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                if !text.trim().is_empty() {
+                                    let _ = window.emit("quick-translate", text);
+                                }
+                            }
+                        }
+                    });
+
             // 构建系统托盘菜单
             let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "退出 Transly", true, None::<&str>)?;

@@ -30,6 +30,8 @@ keyring = "3.6"
 tauri-specta = { version = "2.0.0-rc.25", features = ["javascript", "typescript"] }
 specta = "=2.0.0-rc.25"
 specta-typescript = "0.0.12"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-clipboard-manager = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Languages, ArrowRight, Copy, Check } from 'lucide-react'
-import { invoke } from '@tauri-apps/api/core'
+import { commands } from './bindings'
 
 export default function App() {
   const [sourceText, setSourceText] = useState('')
@@ -15,13 +15,13 @@ export default function App() {
     setIsTranslating(true)
     setErrorMsg(null)
     try {
-      // 优先尝试 Tauri IPC 调用 Rust 后端真实的 translate command
-      const res = await invoke<string>('translate', {
-        text: sourceText,
-        sourceLang: 'auto',
-        targetLang: targetLang,
-      })
-      setTranslatedText(res)
+      // 使用 tauri-specta 强类型命令安全调用
+      const res = await commands.translate(sourceText, 'auto', targetLang)
+      if (res.status === 'ok') {
+        setTranslatedText(res.data)
+      } else {
+        setErrorMsg(res.error)
+      }
     } catch (err: unknown) {
       console.warn('Tauri IPC 暂不可用或调用失败，降级本地预览模式:', err)
       // 若在纯浏览器环境预览，提供占位回退

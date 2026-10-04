@@ -10,6 +10,7 @@ fn get_engine() -> Arc<dyn TranslateEngine> {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn translate(
     text: String,
     source_lang: Option<String>,
@@ -43,26 +44,31 @@ pub async fn translate(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn detect_lang(text: String) -> String {
     detect_language(&text)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_server_token() -> Result<String, String> {
     crate::secrets::get_or_create_server_token().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn save_api_key(engine: String, key: String) -> Result<(), String> {
     crate::secrets::set_secret(&engine, &key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_api_key(engine: String) -> Result<String, String> {
     crate::secrets::get_secret(&engine).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn delete_api_key(engine: String) -> Result<(), String> {
     crate::secrets::delete_secret(&engine).map_err(|e| e.to_string())
 }

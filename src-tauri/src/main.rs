@@ -1,10 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod commands;
-mod secrets;
-mod server;
-
+use specta_typescript::Typescript;
+use src_tauri::{commands, secrets, server};
+use tauri_specta::{collect_commands, Builder};
 use transly_core::TranslationCache;
 
 fn main() {
@@ -24,16 +23,23 @@ fn main() {
         }
     });
 
+    let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
+        commands::translate,
+        commands::detect_lang,
+        commands::get_server_token,
+        commands::save_api_key,
+        commands::get_api_key,
+        commands::delete_api_key
+    ]);
+
+    #[cfg(debug_assertions)]
+    builder
+        .export(Typescript::default(), "../src/bindings.ts")
+        .expect("Failed to export typescript bindings");
+
     tauri::Builder::default()
         .manage(cache)
-        .invoke_handler(tauri::generate_handler![
-            commands::translate,
-            commands::detect_lang,
-            commands::get_server_token,
-            commands::save_api_key,
-            commands::get_api_key,
-            commands::delete_api_key
-        ])
+        .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

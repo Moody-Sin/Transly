@@ -9,6 +9,10 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "action": {
+    "default_title": "Transly 沉浸式翻译",
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

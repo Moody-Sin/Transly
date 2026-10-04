@@ -8,6 +8,9 @@
 ## [Unreleased]
 
 ### 新增
+- 集成 `tauri-specta` 自动强类型 IPC 绑定生成器，消除手写 invoke 字符串与类型断裂风险。
+- 实现浏览器插件 DOM 文本节点 TreeWalker 智能提取与分批并发翻译原地替换。
+- 浏览器插件增加 Popup 工具栏交互弹窗与整页一键翻译、还原原文支持。
 - 串联 SQLite 持久化缓存至桌面端 IPC 命令与本地 HTTP 服务，支持自动查存与批量异步回写。
 - 引入 `GoogleWebEngine` 免费网页翻译实现，接入核心翻译抽象层。
 - 本地扩展通信 HTTP 服务新增 Bearer Token 鉴权中间件与 `/translate` 批量接口。

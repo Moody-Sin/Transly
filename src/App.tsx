@@ -24,7 +24,16 @@ export default function App() {
   const [deepseekKey, setDeepseekKey] = useState('')
   const [glossarySource, setGlossarySource] = useState('')
   const [glossaryTarget, setGlossaryTarget] = useState('')
+  const [glossaryList, setGlossaryList] = useState<[string, string][]>([])
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
+
+  const loadGlossaryList = () => {
+    commands.getGlossaryTerms().then((res) => {
+      if (res.status === 'ok') {
+        setGlossaryList(res.data)
+      }
+    }).catch(() => {})
+  }
 
   useEffect(() => {
     // 获取本地服务器 Token 供插件端授权配对
@@ -41,6 +50,8 @@ export default function App() {
     commands.getApiKey('deepseek').then((res) => {
       if (res.status === 'ok') setDeepseekKey(res.data)
     }).catch(() => {})
+
+    loadGlossaryList()
   }, [])
 
   const handleCopyToken = () => {
@@ -72,8 +83,18 @@ export default function App() {
       await commands.addGlossaryTerm(glossarySource.trim(), glossaryTarget.trim())
       setGlossarySource('')
       setGlossaryTarget('')
+      loadGlossaryList()
       setSaveStatus(t.settings.statusGlossaryAdded)
       setTimeout(() => setSaveStatus(null), 2000)
+    } catch {
+      setSaveStatus(t.settings.statusGlossaryFailed)
+    }
+  }
+
+  const handleDeleteGlossary = async (source: string) => {
+    try {
+      await commands.deleteGlossaryTerm(source)
+      loadGlossaryList()
     } catch {
       setSaveStatus(t.settings.statusGlossaryFailed)
     }
@@ -319,6 +340,31 @@ export default function App() {
                     {t.settings.btnAddGlossary}
                   </button>
                 </div>
+
+                {/* 已保存术语列表 */}
+                {glossaryList.length > 0 && (
+                  <div className="mt-2 max-h-32 overflow-y-auto border-t border-slate-200 pt-2 flex flex-col gap-1.5">
+                    {glossaryList.map(([src, tgt]) => (
+                      <div
+                        key={src}
+                        className="flex items-center justify-between rounded bg-white px-2 py-1 border border-slate-200"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-700">{src}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="text-slate-600">{tgt}</span>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteGlossary(src)}
+                          className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          title="删除术语"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {saveStatus && (

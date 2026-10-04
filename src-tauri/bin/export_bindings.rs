@@ -10,7 +10,9 @@ fn main() {
         commands::save_api_key,
         commands::get_api_key,
         commands::delete_api_key,
-        commands::add_glossary_term
+        commands::add_glossary_term,
+        commands::get_glossary_terms,
+        commands::delete_glossary_term
     ]);
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());

@@ -23,8 +23,14 @@ fn main() {
     let _ = cache.cleanup_older_than_days(90);
     let _ = cache.trim_to_max_items(100_000);
 
-    // 初始化全局术语库
-    let glossary = Arc::new(RwLock::new(Glossary::new()));
+    // 初始化全局术语库并从 SQLite 加载持久化规则
+    let mut initial_glossary = Glossary::new();
+    if let Ok(terms) = cache.get_all_glossary_terms() {
+        for (src, tgt) in terms {
+            initial_glossary.insert(src, tgt);
+        }
+    }
+    let glossary = Arc::new(RwLock::new(initial_glossary));
 
     // 初始化全局共享引擎池（长连接复用）
     let pool = Arc::new(EnginePool::new());
@@ -59,7 +65,9 @@ fn main() {
         commands::save_api_key,
         commands::get_api_key,
         commands::delete_api_key,
-        commands::add_glossary_term
+        commands::add_glossary_term,
+        commands::get_glossary_terms,
+        commands::delete_glossary_term
     ]);
 
     #[cfg(debug_assertions)]

@@ -11,6 +11,8 @@ export const commands = {
 	getApiKey: (engine: string) => typedError<string, string>(__TAURI_INVOKE("get_api_key", { engine })),
 	deleteApiKey: (engine: string) => typedError<null, string>(__TAURI_INVOKE("delete_api_key", { engine })),
 	addGlossaryTerm: (source: string, target: string) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target })),
+	getGlossaryTerms: () => typedError<([string, string])[], string>(__TAURI_INVOKE("get_glossary_terms")),
+	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
 };
 
 /* Tauri Specta runtime */

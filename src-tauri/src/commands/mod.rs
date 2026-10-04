@@ -54,10 +54,42 @@ pub async fn translate(
 pub async fn add_glossary_term(
     source: String,
     target: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
+    cache
+        .set_glossary_term(&source, &target)
+        .map_err(|e| e.to_string())?;
     let mut g = glossary.write().await;
     g.insert(source, target);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_glossary_terms(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<Vec<(String, String)>, String> {
+    cache.get_all_glossary_terms().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_glossary_term(
+    source: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<(), String> {
+    cache
+        .delete_glossary_term(&source)
+        .map_err(|e| e.to_string())?;
+    // 重新构建内存术语库
+    let terms = cache.get_all_glossary_terms().map_err(|e| e.to_string())?;
+    let mut g = glossary.write().await;
+    *g = Glossary::new();
+    for (src, tgt) in terms {
+        g.insert(src, tgt);
+    }
     Ok(())
 }
 

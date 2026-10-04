@@ -27,6 +27,12 @@ impl TranslationCache {
                 created_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_cache_created_at ON translation_cache(created_at);
+
+            CREATE TABLE IF NOT EXISTS glossary (
+                source_term TEXT PRIMARY KEY,
+                target_term TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
             "#,
         )?;
         Ok(Self {
@@ -45,6 +51,12 @@ impl TranslationCache {
                 source_lang TEXT NOT NULL,
                 target_lang TEXT NOT NULL,
                 engine TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS glossary (
+                source_term TEXT PRIMARY KEY,
+                target_term TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
             "#,
@@ -184,6 +196,60 @@ impl TranslationCache {
         } else {
             Ok(0)
         }
+    }
+
+    /// 读取持久化保存的所有术语库规则
+    pub fn get_all_glossary_terms(&self) -> Result<Vec<(String, String)>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let mut stmt = conn.prepare_cached("SELECT source_term, target_term FROM glossary")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
+        let mut terms = Vec::new();
+        for item in rows {
+            terms.push(item?);
+        }
+        Ok(terms)
+    }
+
+    /// 持久化保存或更新术语
+    pub fn set_glossary_term(&self, source: &str, target: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO glossary (source_term, target_term, created_at)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![source, target, now],
+        )?;
+
+        Ok(())
+    }
+
+    /// 删除指定术语
+    pub fn delete_glossary_term(&self, source: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        conn.execute(
+            "DELETE FROM glossary WHERE source_term = ?1",
+            params![source],
+        )?;
+        Ok(())
     }
 }
 

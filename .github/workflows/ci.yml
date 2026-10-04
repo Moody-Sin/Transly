@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  rust-checks:
+    name: Rust 校验与测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust 依赖与系统库准备
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: 格式校验
+        run: cargo fmt --all --check
+      - name: Clippy 校验
+        run: cargo clippy --workspace -- -D warnings
+      - name: 测试套件
+        run: cargo test --workspace
+
+  frontend-checks:
+    name: 前端与插件编译检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - name: 安装依赖
+        run: pnpm install
+      - name: 桌面端构建校验
+        run: pnpm run build
+      - name: 浏览器插件构建校验
+        run: pnpm --filter transly-extension run build

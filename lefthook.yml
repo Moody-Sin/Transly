@@ -1,0 +1,13 @@
+pre-commit:
+  parallel: true
+  commands:
+    rust-fmt:
+      run: cargo fmt --all --check
+    rust-clippy:
+      run: cargo clippy --workspace -- -D warnings
+    rust-test:
+      run: cargo test --workspace
+    type-check-desktop:
+      run: pnpm --filter transly build
+    type-check-extension:
+      run: pnpm --filter transly-extension build

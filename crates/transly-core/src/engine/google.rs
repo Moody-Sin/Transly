@@ -82,37 +82,43 @@ impl Default for GoogleWebEngine {
 
 #[async_trait]
 impl TranslateEngine for GoogleWebEngine {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "google_web"
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "Google 网页翻译"
     }
 
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
-        // 如果文本超过 1200 字符，按段落/换行切片翻译并合并，防止 GET 请求 URL 超长溢出 (HTTP 414)
-        if req.text.chars().count() > 1200 {
+        // 如果文本超过 1000 字符，按段落和固定长度双重切片，彻底防止超长单行溢出
+        if req.text.chars().count() > 1000 {
             let mut full_translated = String::new();
             let mut detected_lang = None;
-            for paragraph in req.text.split("\n\n") {
+
+            for paragraph in req.text.split('\n') {
                 if paragraph.trim().is_empty() {
-                    full_translated.push_str("\n\n");
+                    full_translated.push('\n');
                     continue;
                 }
-                let res = self
-                    .translate_single_chunk(paragraph, &req.source_lang, &req.target_lang)
-                    .await?;
-                if detected_lang.is_none() {
-                    detected_lang = res.detected_source_lang;
+
+                // 若单段仍超出 800 字符，按句/固定窗口切块
+                let chars: Vec<char> = paragraph.chars().collect();
+                for chunk in chars.chunks(800) {
+                    let chunk_str: String = chunk.iter().collect();
+                    let res = self
+                        .translate_single_chunk(&chunk_str, &req.source_lang, &req.target_lang)
+                        .await?;
+                    if detected_lang.is_none() {
+                        detected_lang = res.detected_source_lang;
+                    }
+                    full_translated.push_str(&res.text);
                 }
-                if !full_translated.is_empty() && !full_translated.ends_with("\n\n") {
-                    full_translated.push_str("\n\n");
-                }
-                full_translated.push_str(&res.text);
+                full_translated.push('\n');
             }
+
             return Ok(TranslationResponse {
-                text: full_translated,
+                text: full_translated.trim_end_matches('\n').to_string(),
                 detected_source_lang: detected_lang,
                 engine: self.id().to_string(),
             });

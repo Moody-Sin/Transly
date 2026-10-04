@@ -88,11 +88,11 @@ impl DeepLEngine {
 
 #[async_trait]
 impl TranslateEngine for DeepLEngine {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         "deepl"
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "DeepL"
     }
 

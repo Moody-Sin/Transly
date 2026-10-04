@@ -41,31 +41,12 @@ fn main() {
     let token = secrets::get_or_create_server_token()
         .unwrap_or_else(|_| "transly-default-token".to_string());
 
-    // 异步启动本地插件通信服务
-    let token_clone = token.clone();
-    let server_cache = cache.clone();
-    let server_pool = pool.clone();
-    let server_glossary = glossary.clone();
-    tokio::spawn(async move {
-        if let Err(e) = server::start_server(
-            39281,
-            token_clone,
-            server_cache,
-            server_pool,
-            server_glossary,
-        )
-        .await
-        {
-            eprintln!("本地 HTTP 服务启动失败: {e}");
-        }
-    });
-
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::translate,
         commands::detect_lang,
         commands::get_server_token,
         commands::save_api_key,
-        commands::get_api_key,
+        commands::is_api_key_configured,
         commands::delete_api_key,
         commands::add_glossary_term,
         commands::get_glossary_terms,
@@ -80,13 +61,22 @@ fn main() {
         .export(Typescript::default(), "../src/bindings.ts")
         .expect("Failed to export typescript bindings");
 
-    // 剪贴板监听开关（默认关闭）
-    let clipboard_monitor_enabled = Arc::new(AtomicBool::new(false));
+    // 剪贴板监听开关（从持久化凭据库加载状态，默认关闭）
+    let initial_monitor = secrets::get_secret("clipboard_monitor_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let clipboard_monitor_enabled = Arc::new(AtomicBool::new(initial_monitor));
 
     // 初始化系统原生轻量 OCR 引擎
     let ocr_engine = Arc::new(SystemOcrEngine::new());
 
     let monitor_flag = clipboard_monitor_enabled.clone();
+
+    // 克隆传递给 setup 内部异步启动
+    let server_token = token;
+    let server_cache = cache.clone();
+    let server_pool = pool.clone();
+    let server_glossary = glossary.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -98,6 +88,21 @@ fn main() {
         .manage(clipboard_monitor_enabled)
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
+            // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = server::start_server(
+                    39281,
+                    server_token,
+                    server_cache,
+                    server_pool,
+                    server_glossary,
+                )
+                .await
+                {
+                    eprintln!("本地 HTTP 服务启动失败: {e}");
+                }
+            });
+
             // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
             let app_handle = app.handle().clone();
             let _ =
@@ -105,7 +110,11 @@ fn main() {
                     .on_shortcut("Alt+Shift+D", move |_app, _shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             let handle = app_handle.clone();
-                            tokio::spawn(async move {
+                            tauri::async_runtime::spawn(async move {
+                                // 0. 备份旧剪贴板内容
+                                let old_clipboard =
+                                    handle.clipboard().read_text().unwrap_or_default();
+
                                 // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
                                 if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
                                     #[cfg(target_os = "macos")]
@@ -119,7 +128,7 @@ fn main() {
                                 }
 
                                 // 2. 稍微等待系统剪贴板更新
-                                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
 
                                 // 3. 提取剪贴板文本并唤起轻量悬浮窗
                                 let text = handle.clipboard().read_text().unwrap_or_default();
@@ -130,6 +139,11 @@ fn main() {
                                         let _ = float_win.emit("float-translate", text);
                                     }
                                 }
+
+                                // 4. 恢复原剪贴板内容，避免污染用户复制历史
+                                if !old_clipboard.is_empty() {
+                                    let _ = handle.clipboard().write_text(old_clipboard);
+                                }
                             });
                         }
                     });
@@ -137,7 +151,7 @@ fn main() {
             // 启动后台剪贴板变动监听任务
             let clip_handle = app.handle().clone();
             let flag = monitor_flag.clone();
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 let mut last_clipboard = String::new();
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

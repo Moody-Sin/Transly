@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use transly_core::{Glossary, TranslationCache, TranslationRequest};
 
 #[derive(Serialize, Deserialize)]
@@ -64,16 +64,26 @@ pub fn create_router(
         .allow_origin(tower_http::cors::AllowOrigin::predicate(
             |origin: &axum::http::HeaderValue, _parts| {
                 if let Ok(s) = origin.to_str() {
-                    s.starts_with("chrome-extension://")
-                        || s.starts_with("moz-extension://")
-                        || s.starts_with("http://127.0.0.1")
-                        || s.starts_with("http://localhost")
+                    // 严格校验 Origin，防止 localhost.evil.com 假借前缀绕过
+                    if s.starts_with("chrome-extension://") || s.starts_with("moz-extension://") {
+                        return true;
+                    }
+                    if let Ok(uri) = s.parse::<axum::http::Uri>() {
+                        if let Some(host) = uri.host() {
+                            return host == "127.0.0.1" || host == "localhost";
+                        }
+                    }
+                    false
                 } else {
                     false
                 }
             },
         ))
-        .allow_methods(Any)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
+        ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     Router::new()
@@ -112,6 +122,16 @@ async fn translate_batch_handler(
     State(state): State<ServerState>,
     Json(payload): Json<TranslateBatchRequest>,
 ) -> Result<Json<TranslateBatchResponse>, StatusCode> {
+    // 限制单次批量文本数量与长度，防御过载攻击
+    if payload.texts.len() > 100 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    for t in &payload.texts {
+        if t.chars().count() > 10_000 {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+    }
+
     let target = payload.target_lang;
     let source = payload.source_lang.unwrap_or_else(|| "auto".to_string());
 
@@ -146,13 +166,25 @@ async fn translate_batch_handler(
     if !missing_requests.is_empty() {
         match active_engine.translate_batch(&missing_requests).await {
             Ok(results) => {
+                // 安全防范：处理返回条数与请求条数一致性
                 for (req_idx, res) in results.into_iter().enumerate() {
-                    let original_idx = missing_indices[req_idx];
-                    let original_text = &payload.texts[original_idx];
-                    let _ = state
-                        .cache
-                        .set(original_text, &res.text, &source, &target, engine_id);
-                    translations[original_idx] = res.text;
+                    if req_idx < missing_indices.len() {
+                        let original_idx = missing_indices[req_idx];
+                        let original_text = &payload.texts[original_idx];
+                        let actual_engine = if res.engine.ends_with("(fallback)") {
+                            "google_web"
+                        } else {
+                            engine_id
+                        };
+                        let _ = state.cache.set(
+                            original_text,
+                            &res.text,
+                            &source,
+                            &target,
+                            actual_engine,
+                        );
+                        translations[original_idx] = res.text;
+                    }
                 }
             }
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -264,6 +296,10 @@ mod tests {
     #[tokio::test]
     async fn test_translate_authorized() {
         let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        // 预写入缓存避免测试发出真实网络请求
+        cache
+            .set("hello", "你好", "auto", "zh-CN", "google_web")
+            .unwrap();
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let mut glossary_instance = Glossary::new();
         glossary_instance.insert("你好", "世界你好");

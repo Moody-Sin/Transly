@@ -8,7 +8,7 @@ fn main() {
         commands::detect_lang,
         commands::get_server_token,
         commands::save_api_key,
-        commands::get_api_key,
+        commands::is_api_key_configured,
         commands::delete_api_key,
         commands::add_glossary_term,
         commands::get_glossary_terms,

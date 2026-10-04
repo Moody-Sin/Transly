@@ -10,6 +10,7 @@ pub struct OpenAIEngine {
     api_key: String,
     base_url: String,
     model: String,
+    engine_id: String,
 }
 
 #[derive(Serialize)]
@@ -52,6 +53,7 @@ impl OpenAIEngine {
             .to_string();
 
         let model = model.unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let engine_id = format!("openai:{model}");
 
         Self {
             client: Client::builder()
@@ -61,23 +63,26 @@ impl OpenAIEngine {
             api_key: api_key.into(),
             base_url: base,
             model,
+            engine_id,
         }
     }
 
     /// 针对 DeepSeek 预设的便捷构造函数
     pub fn deepseek(api_key: impl Into<String>) -> Self {
-        Self::new(
+        let mut engine = Self::new(
             api_key,
             Some("https://api.deepseek.com".to_string()),
             Some("deepseek-chat".to_string()),
-        )
+        );
+        engine.engine_id = "deepseek:deepseek-chat".to_string();
+        engine
     }
 }
 
 #[async_trait]
 impl TranslateEngine for OpenAIEngine {
-    fn id(&self) -> &'static str {
-        "openai_compatible"
+    fn id(&self) -> &str {
+        &self.engine_id
     }
 
     fn name(&self) -> &'static str {
@@ -180,7 +185,7 @@ mod tests {
     #[test]
     fn test_openai_engine_initialization() {
         let engine = OpenAIEngine::new("test-key", None, None);
-        assert_eq!(engine.id(), "openai_compatible");
+        assert_eq!(engine.id(), "openai:gpt-4o-mini");
         assert_eq!(engine.base_url, "https://api.openai.com/v1");
         assert_eq!(engine.model, "gpt-4o-mini");
     }
@@ -190,5 +195,6 @@ mod tests {
         let ds = OpenAIEngine::deepseek("ds-key");
         assert_eq!(ds.base_url, "https://api.deepseek.com");
         assert_eq!(ds.model, "deepseek-chat");
+        assert_eq!(ds.id(), "deepseek:deepseek-chat");
     }
 }

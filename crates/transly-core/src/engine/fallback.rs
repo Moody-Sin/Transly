@@ -19,11 +19,11 @@ impl FallbackEngine {
 
 #[async_trait]
 impl TranslateEngine for FallbackEngine {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         self.primary.id()
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.primary.name()
     }
 
@@ -72,10 +72,10 @@ mod tests {
     struct SuccessEngine(&'static str);
     #[async_trait]
     impl TranslateEngine for SuccessEngine {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             self.0
         }
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             self.0
         }
         async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
@@ -90,10 +90,10 @@ mod tests {
     struct FailingEngine;
     #[async_trait]
     impl TranslateEngine for FailingEngine {
-        fn id(&self) -> &'static str {
+        fn id(&self) -> &str {
             "failing"
         }
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "Failing"
         }
         async fn translate(&self, _req: &TranslationRequest) -> Result<TranslationResponse> {

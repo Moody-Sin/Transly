@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && cp popup.html dist/popup.html"
+    "build": "tsc && vite build && node scripts/postbuild.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.308",

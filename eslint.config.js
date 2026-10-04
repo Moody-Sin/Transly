@@ -9,6 +9,7 @@ export default tseslint.config(
       '**/node_modules/**',
       'src/bindings.ts',
       'src-tauri/**',
+      'extension/scripts/**',
     ],
   },
   js.configs.recommended,

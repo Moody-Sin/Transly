@@ -40,8 +40,13 @@ pub async fn translate(
 
     match active_engine.translate(&req).await {
         Ok(res) => {
-            // 3. 异步写入缓存
-            let _ = cache.set(&text, &res.text, &sl, &target_lang, engine_id);
+            // 3. 异步写入缓存（若为 fallback 降级结果，只使用实际响应引擎或不污染主引擎）
+            let cache_target_engine = if res.engine.ends_with("(fallback)") {
+                "google_web"
+            } else {
+                engine_id
+            };
+            let _ = cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine);
             let g = glossary.read().await;
             Ok(g.apply(&res.text))
         }
@@ -102,12 +107,18 @@ pub fn set_clipboard_monitor(
     flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
 ) {
     flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    let _ = crate::secrets::set_secret(
+        "clipboard_monitor_enabled",
+        if enabled { "true" } else { "false" },
+    );
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_clipboard_monitor(flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>) -> bool {
-    flag.load(std::sync::atomic::Ordering::Relaxed)
+pub fn get_clipboard_monitor(_flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>) -> bool {
+    crate::secrets::get_secret("clipboard_monitor_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -167,8 +178,10 @@ pub async fn save_api_key(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_api_key(engine: String) -> Result<String, String> {
-    crate::secrets::get_secret(&engine).map_err(|e| e.to_string())
+pub fn is_api_key_configured(engine: String) -> bool {
+    crate::secrets::get_secret(&engine)
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
 }
 
 #[tauri::command]

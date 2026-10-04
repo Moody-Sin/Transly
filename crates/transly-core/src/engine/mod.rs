@@ -28,8 +28,8 @@ pub struct TranslationResponse {
 
 #[async_trait]
 pub trait TranslateEngine: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn name(&self) -> &'static str;
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
 
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse>;
 

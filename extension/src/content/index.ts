@@ -4,8 +4,9 @@
 
 console.log('[Transly Content Script] 沉浸式翻译引擎已就绪')
 
-// 标记节点属性以支持一键还原原文
-export const ORIGINAL_TEXT_ATTR = 'data-transly-original'
+// 使用 WeakMap 严格基于 Text 节点维护原始内容，杜绝父节点多 Text 节点互相覆盖
+const originalTextMap = new WeakMap<Text, string>()
+const translatedTextSet = new WeakSet<Text>()
 
 // 需要忽略的非正文/代码标签
 const IGNORED_TAGS = new Set([
@@ -29,24 +30,28 @@ export function shouldTranslateElement(element: Element): boolean {
 }
 
 export function replaceTextNode(node: Text, translatedText: string) {
-  const parent = node.parentElement
-  if (!parent) return
-
-  if (!parent.hasAttribute(ORIGINAL_TEXT_ATTR)) {
-    parent.setAttribute(ORIGINAL_TEXT_ATTR, node.nodeValue || '')
+  if (!originalTextMap.has(node)) {
+    originalTextMap.set(node, node.nodeValue || '')
   }
+  translatedTextSet.add(node)
   node.nodeValue = translatedText
 }
 
-export function restoreOriginalText(container: HTMLElement = document.body) {
-  const elements = container.querySelectorAll(`[${ORIGINAL_TEXT_ATTR}]`)
-  elements.forEach((el) => {
-    const original = el.getAttribute(ORIGINAL_TEXT_ATTR)
-    if (original && el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE) {
-      el.firstChild.nodeValue = original
-      el.removeAttribute(ORIGINAL_TEXT_ATTR)
+export function restoreOriginalText(container: Node = document.body) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  let curr = walker.nextNode()
+  while (curr) {
+    const textNode = curr as Text
+    if (originalTextMap.has(textNode)) {
+      const orig = originalTextMap.get(textNode)
+      if (orig !== undefined) {
+        textNode.nodeValue = orig
+        originalTextMap.delete(textNode)
+        translatedTextSet.delete(textNode)
+      }
     }
-  })
+    curr = walker.nextNode()
+  }
 }
 
 interface TextNodeEntry {
@@ -59,12 +64,26 @@ interface TextNodeEntry {
  */
 export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
   const entries: TextNodeEntry[] = []
+
+  // 如果 root 自身即是文本节点且尚未翻译
+  if (root.nodeType === Node.TEXT_NODE) {
+    const textNode = root as Text
+    const parent = textNode.parentElement
+    if (parent && shouldTranslateElement(parent) && !translatedTextSet.has(textNode)) {
+      const text = textNode.nodeValue?.trim()
+      if (text && text.length >= 2 && !/^[\d\s.,/#!$%^&*;:{}=\-_`~()]+$/.test(text)) {
+        return [{ node: textNode, text: textNode.nodeValue || '' }]
+      }
+    }
+    return []
+  }
+
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement
       if (!parent) return NodeFilter.FILTER_REJECT
       if (!shouldTranslateElement(parent)) return NodeFilter.FILTER_REJECT
-      if (parent.hasAttribute(ORIGINAL_TEXT_ATTR)) return NodeFilter.FILTER_REJECT
+      if (translatedTextSet.has(node as Text)) return NodeFilter.FILTER_REJECT
 
       const text = node.nodeValue?.trim()
       if (!text || text.length < 2) return NodeFilter.FILTER_SKIP
@@ -90,16 +109,17 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 let isObserving = false
 let currentObserver: MutationObserver | null = null
 let currentTargetLang = 'zh-CN'
-
 let currentEngine = 'google'
 
 /**
- * 启动动态增量监听（针对 SPA 单页或瀑布流懒加载内容）
+ * 启动动态增量监听（针对 SPA 单页或瀑布流懒加载内容，监听 childList 与 characterData）
  */
 export function startDynamicObserver(targetLang: string = 'zh-CN', engine: string = 'google') {
-  if (isObserving && currentObserver) return
   currentTargetLang = targetLang
   currentEngine = engine
+
+  // 若已在监听，更新语言和引擎即可
+  if (isObserving && currentObserver) return
   isObserving = true
 
   let pendingNodes: Node[] = []
@@ -113,6 +133,13 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
             pendingNodes.push(node)
           }
         })
+      } else if (mutation.type === 'characterData') {
+        if (mutation.target.nodeType === Node.TEXT_NODE) {
+          const textNode = mutation.target as Text
+          if (!translatedTextSet.has(textNode)) {
+            pendingNodes.push(textNode)
+          }
+        }
       }
     }
 
@@ -136,6 +163,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
   currentObserver.observe(document.body, {
     childList: true,
     subtree: true,
+    characterData: true,
   })
 }
 

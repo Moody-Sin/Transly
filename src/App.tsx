@@ -20,8 +20,12 @@ export default function App() {
 
   // 设置面板状态
   const [showSettings, setShowSettings] = useState(false)
+  const [deeplConfigured, setDeeplConfigured] = useState(false)
+  const [deepseekConfigured, setDeepseekConfigured] = useState(false)
+  const [openaiConfigured, setOpenaiConfigured] = useState(false)
   const [deeplKey, setDeeplKey] = useState('')
   const [deepseekKey, setDeepseekKey] = useState('')
+  const [openaiKey, setOpenaiKey] = useState('')
   const [clipboardMonitor, setClipboardMonitor] = useState(false)
   const [glossarySource, setGlossarySource] = useState('')
   const [glossaryTarget, setGlossaryTarget] = useState('')
@@ -38,6 +42,12 @@ export default function App() {
     }).catch(() => {})
   }
 
+  const checkConfiguredKeys = () => {
+    commands.isApiKeyConfigured('deepl').then(setDeeplConfigured).catch(() => {})
+    commands.isApiKeyConfigured('deepseek').then(setDeepseekConfigured).catch(() => {})
+    commands.isApiKeyConfigured('openai').then(setOpenaiConfigured).catch(() => {})
+  }
+
   useEffect(() => {
     // 获取本地服务器 Token 供插件端授权配对
     commands.getServerToken().then((res) => {
@@ -46,13 +56,7 @@ export default function App() {
       }
     }).catch(() => {})
 
-    // 初始化读取已配置的密钥（若有）
-    commands.getApiKey('deepl').then((res) => {
-      if (res.status === 'ok') setDeeplKey(res.data)
-    }).catch(() => {})
-    commands.getApiKey('deepseek').then((res) => {
-      if (res.status === 'ok') setDeepseekKey(res.data)
-    }).catch(() => {})
+    checkConfiguredKeys()
 
     commands.getClipboardMonitor().then((enabled) => {
       setClipboardMonitor(enabled)
@@ -78,15 +82,36 @@ export default function App() {
     setSaveStatus(t.settings.statusSaving)
     try {
       if (deeplKey.trim()) {
-        await commands.saveApiKey('deepl', deeplKey.trim())
+        const res = await commands.saveApiKey('deepl', deeplKey.trim())
+        if (res.status === 'error') throw new Error(res.error)
+        setDeeplKey('')
       }
       if (deepseekKey.trim()) {
-        await commands.saveApiKey('deepseek', deepseekKey.trim())
+        const res = await commands.saveApiKey('deepseek', deepseekKey.trim())
+        if (res.status === 'error') throw new Error(res.error)
+        setDeepseekKey('')
       }
+      if (openaiKey.trim()) {
+        const res = await commands.saveApiKey('openai', openaiKey.trim())
+        if (res.status === 'error') throw new Error(res.error)
+        setOpenaiKey('')
+      }
+      checkConfiguredKeys()
       setSaveStatus(t.settings.statusKeysSaved)
       setTimeout(() => setSaveStatus(null), 2500)
     } catch {
       setSaveStatus(t.settings.statusSaveFailed)
+    }
+  }
+
+  const handleDeleteKey = async (eng: string) => {
+    try {
+      await commands.deleteApiKey(eng)
+      checkConfiguredKeys()
+      setSaveStatus('密钥已从系统凭据库移除')
+      setTimeout(() => setSaveStatus(null), 2000)
+    } catch {
+      setSaveStatus('删除密钥失败')
     }
   }
 
@@ -125,11 +150,12 @@ export default function App() {
         setTranslatedText(res.data)
       } else {
         setErrorMsg(res.error)
+        setTranslatedText('')
       }
     } catch (err: unknown) {
-      console.warn('Tauri IPC 暂不可用或调用失败，降级本地预览模式:', err)
-      // 若在纯浏览器环境预览，提供占位回退
-      setTranslatedText(`[${targetLang}] ${textToTranslate}`)
+      console.error('Tauri IPC 调用失败:', err)
+      setErrorMsg(err instanceof Error ? err.message : String(err))
+      setTranslatedText('')
     } finally {
       setIsTranslating(false)
     }
@@ -356,22 +382,71 @@ export default function App() {
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
                 <span className="font-medium text-slate-700">{t.settings.credentialsTitle}</span>
                 <div>
-                  <label className="text-slate-500 mb-1 block">{t.settings.deeplKeyLabel}</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-500">{t.settings.deeplKeyLabel}</label>
+                    {deeplConfigured && (
+                      <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
+                        已配置 ✓
+                        <button
+                          onClick={() => handleDeleteKey('deepl')}
+                          className="text-slate-400 hover:text-rose-600 ml-1 underline"
+                        >
+                          删除
+                        </button>
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="password"
                     value={deeplKey}
                     onChange={(e) => setDeeplKey(e.target.value)}
-                    placeholder="例如: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+                    placeholder={deeplConfigured ? '重新输入以覆盖当前密钥' : '例如: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx'}
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-500 mb-1 block">{t.settings.deepseekKeyLabel}</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-500">{t.settings.deepseekKeyLabel}</label>
+                    {deepseekConfigured && (
+                      <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
+                        已配置 ✓
+                        <button
+                          onClick={() => handleDeleteKey('deepseek')}
+                          className="text-slate-400 hover:text-rose-600 ml-1 underline"
+                        >
+                          删除
+                        </button>
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="password"
                     value={deepseekKey}
                     onChange={(e) => setDeepseekKey(e.target.value)}
-                    placeholder="例如: sk-xxxxxxxx"
+                    placeholder={deepseekConfigured ? '重新输入以覆盖当前密钥' : '例如: sk-xxxxxxxx'}
+                    className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-500">OpenAI API Key:</label>
+                    {openaiConfigured && (
+                      <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
+                        已配置 ✓
+                        <button
+                          onClick={() => handleDeleteKey('openai')}
+                          className="text-slate-400 hover:text-rose-600 ml-1 underline"
+                        >
+                          删除
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    value={openaiKey}
+                    onChange={(e) => setOpenaiKey(e.target.value)}
+                    placeholder={openaiConfigured ? '重新输入以覆盖当前密钥' : '例如: sk-proj-xxxxxxxx'}
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>

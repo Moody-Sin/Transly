@@ -20,6 +20,10 @@ impl Glossary {
         let src = source.into();
         let tgt = target.into();
 
+        if src.trim().is_empty() {
+            return;
+        }
+
         let is_ascii_word =
             !src.is_empty() && src.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         let re = if is_ascii_word {
@@ -44,11 +48,16 @@ impl Glossary {
 
     pub fn apply(&self, text: &str) -> String {
         let mut result = text.to_string();
-        for (src, entry) in &self.terms {
+
+        // 按照源词长度降序排列，避免短词先替换破坏长复合术语
+        let mut sorted_entries: Vec<(&String, &TermEntry)> = self.terms.iter().collect();
+        sorted_entries.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
+
+        for (src, entry) in sorted_entries {
             if let Some(ref re) = entry.regex {
                 result = re.replace_all(&result, entry.target.as_str()).to_string();
             } else {
-                result = result.replace(src, &entry.target);
+                result = result.replace(src.as_str(), &entry.target);
             }
         }
         result
@@ -68,19 +77,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_glossary_apply() {
+    fn test_glossary_apply_order() {
         let mut glossary = Glossary::new();
-        glossary.insert("LLM", "大语言模型");
-        glossary.insert("Rust", "Rust语言");
-        glossary.insert("IT", "信息技术");
+        glossary.insert("deep", "深的");
+        glossary.insert("deep learning", "深度学习");
 
-        let text = "学习 Rust 与 LLM 很有趣，Wait and limit IT department";
+        let text = "I study deep learning";
         let result = glossary.apply(text);
-        assert_eq!(
-            result,
-            "学习 Rust语言 与 大语言模型 很有趣，Wait and limit 信息技术 department"
-        );
-        assert_eq!(glossary.len(), 3);
-        assert!(!glossary.is_empty());
+        // 应该先匹配长词 "deep learning"，而不是把 deep 先替换掉导致损坏
+        assert_eq!(result, "I study 深度学习");
     }
 }

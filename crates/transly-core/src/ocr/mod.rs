@@ -56,13 +56,14 @@ impl OcrEngine for SystemOcrEngine {
         "系统原生 OCR"
     }
 
-    async fn recognize(&self, _req: &OcrRequest) -> Result<OcrResponse> {
-        // 平台原生调用预留入口；未装配特定模型时返回系统就绪标识
-        Ok(OcrResponse {
-            text: String::new(),
-            lines: Vec::new(),
-            engine: self.id().to_string(),
-        })
+    async fn recognize(&self, req: &OcrRequest) -> Result<OcrResponse> {
+        if req.image_bytes.is_empty() {
+            return Err(crate::Error::Internal("图像数据为空".to_string()));
+        }
+        // 当前版本未挂载原生 OCR 动态库时返回明确未支持错误，绝不伪装空成功
+        Err(crate::Error::UnsupportedLanguage(
+            "当前平台原生 OCR 引擎驱动尚未就绪或不可用".to_string(),
+        ))
     }
 }
 
@@ -80,7 +81,7 @@ mod tests {
             image_bytes: vec![1, 2, 3],
             lang: Some("zh-CN".to_string()),
         };
-        let res = engine.recognize(&req).await.unwrap();
-        assert_eq!(res.engine, "system_ocr");
+        let res = engine.recognize(&req).await;
+        assert!(res.is_err());
     }
 }

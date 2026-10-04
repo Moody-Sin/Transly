@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Transly Authors"]
 description = "Tauri backend and platform integration for Transly."
 license = "MIT"
+default-run = "transly"
 
 [[bin]]
 name = "export_bindings"

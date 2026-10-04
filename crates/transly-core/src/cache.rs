@@ -78,12 +78,14 @@ impl TranslationCache {
 
     fn generate_key(text: &str, source_lang: &str, target_lang: &str, engine: &str) -> String {
         let mut hasher = Sha256::new();
+        // 使用明确的长度前缀编码，杜绝字段含冒号或分隔符碰撞
+        hasher.update((text.len() as u64).to_le_bytes());
         hasher.update(text.as_bytes());
-        hasher.update(b":");
+        hasher.update((source_lang.len() as u64).to_le_bytes());
         hasher.update(source_lang.as_bytes());
-        hasher.update(b":");
+        hasher.update((target_lang.len() as u64).to_le_bytes());
         hasher.update(target_lang.as_bytes());
-        hasher.update(b":");
+        hasher.update((engine.len() as u64).to_le_bytes());
         hasher.update(engine.as_bytes());
         format!("{:x}", hasher.finalize())
     }

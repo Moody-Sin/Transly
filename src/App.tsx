@@ -106,7 +106,8 @@ export default function App() {
 
   const handleDeleteKey = async (eng: string) => {
     try {
-      await commands.deleteApiKey(eng)
+      const res = await commands.deleteApiKey(eng)
+      if (res.status === 'error') throw new Error(res.error)
       checkConfiguredKeys()
       setSaveStatus('密钥已从系统凭据库移除')
       setTimeout(() => setSaveStatus(null), 2000)
@@ -118,7 +119,8 @@ export default function App() {
   const handleAddGlossary = async () => {
     if (!glossarySource.trim() || !glossaryTarget.trim()) return
     try {
-      await commands.addGlossaryTerm(glossarySource.trim(), glossaryTarget.trim())
+      const res = await commands.addGlossaryTerm(glossarySource.trim(), glossaryTarget.trim())
+      if (res.status === 'error') throw new Error(res.error)
       setGlossarySource('')
       setGlossaryTarget('')
       loadGlossaryList()
@@ -131,7 +133,8 @@ export default function App() {
 
   const handleDeleteGlossary = async (source: string) => {
     try {
-      await commands.deleteGlossaryTerm(source)
+      const res = await commands.deleteGlossaryTerm(source)
+      if (res.status === 'error') throw new Error(res.error)
       loadGlossaryList()
     } catch {
       setSaveStatus(t.settings.statusGlossaryFailed)

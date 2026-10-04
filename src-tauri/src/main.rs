@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
+#[cfg(debug_assertions)]
 use specta_typescript::Typescript;
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,9 +38,14 @@ fn main() {
     // 初始化全局共享引擎池（长连接复用）
     let pool = Arc::new(EnginePool::new());
 
-    // 获取或生成用于本地扩展通信的 Bearer Token
-    let token = secrets::get_or_create_server_token()
-        .unwrap_or_else(|_| "transly-default-token".to_string());
+    // 获取或生成用于本地扩展通信的 Bearer Token（失败则不启动服务，杜绝固定 Token 降级）
+    let token = match secrets::get_or_create_server_token() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            eprintln!("系统安全凭据管理器不可用，已禁用本地扩展服务: {e}");
+            None
+        }
+    };
 
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::translate,
@@ -88,20 +94,22 @@ fn main() {
         .manage(clipboard_monitor_enabled)
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
-            // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = server::start_server(
-                    39281,
-                    server_token,
-                    server_cache,
-                    server_pool,
-                    server_glossary,
-                )
-                .await
-                {
-                    eprintln!("本地 HTTP 服务启动失败: {e}");
-                }
-            });
+            // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
+            if let Some(token_val) = server_token {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = server::start_server(
+                        39281,
+                        token_val,
+                        server_cache,
+                        server_pool,
+                        server_glossary,
+                    )
+                    .await
+                    {
+                        eprintln!("本地 HTTP 服务启动失败: {e}");
+                    }
+                });
+            }
 
             // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
             let app_handle = app.handle().clone();

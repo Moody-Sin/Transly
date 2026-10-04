@@ -16,6 +16,11 @@ pub async fn translate(
 ) -> Result<String, String> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
+    // 限制单次输入文本最大长度为 10,000 字符，与 HTTP 批量服务统一防线
+    if text.chars().count() > 10_000 {
+        return Err("输入文本过长 (单次最大限制 10,000 字符)".to_string());
+    }
+
     // 从全局引擎池中快速复用长连接实例
     let active_engine = if let Some(ref name) = engine_name {
         pool.get_engine(name).await
@@ -129,6 +134,10 @@ pub async fn ocr_image(
 ) -> Result<String, String> {
     use transly_core::{OcrEngine, OcrRequest};
     let clean = image_base64.trim();
+    // 限制 Base64 图像大小不超过 10MB
+    if clean.len() > 10 * 1024 * 1024 {
+        return Err("图像数据超出最大限制 (10MB)".to_string());
+    }
     // 兼容可能传入的 data:image/...;base64, 前缀
     let raw_b64 = if let Some(idx) = clean.find(',') {
         &clean[idx + 1..]

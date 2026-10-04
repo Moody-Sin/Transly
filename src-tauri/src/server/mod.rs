@@ -64,13 +64,16 @@ pub fn create_router(
         .allow_origin(tower_http::cors::AllowOrigin::predicate(
             |origin: &axum::http::HeaderValue, _parts| {
                 if let Ok(s) = origin.to_str() {
-                    // 严格校验 Origin，防止 localhost.evil.com 假借前缀绕过
+                    // 严格校验 Origin，限制扩展协议与本地开发端口
                     if s.starts_with("chrome-extension://") || s.starts_with("moz-extension://") {
                         return true;
                     }
-                    if let Ok(uri) = s.parse::<axum::http::Uri>() {
-                        if let Some(host) = uri.host() {
-                            return host == "127.0.0.1" || host == "localhost";
+                    #[cfg(debug_assertions)]
+                    {
+                        if let Ok(uri) = s.parse::<axum::http::Uri>() {
+                            if let Some(host) = uri.host() {
+                                return host == "127.0.0.1" || host == "localhost";
+                            }
                         }
                     }
                     false
@@ -166,25 +169,26 @@ async fn translate_batch_handler(
     if !missing_requests.is_empty() {
         match active_engine.translate_batch(&missing_requests).await {
             Ok(results) => {
-                // 安全防范：处理返回条数与请求条数一致性
+                // 安全防范：验证引擎返回条数与请求条数完全一致，不一致则返回错误避免残缺数据
+                if results.len() != missing_requests.len() {
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
                 for (req_idx, res) in results.into_iter().enumerate() {
-                    if req_idx < missing_indices.len() {
-                        let original_idx = missing_indices[req_idx];
-                        let original_text = &payload.texts[original_idx];
-                        let actual_engine = if res.engine.ends_with("(fallback)") {
-                            "google_web"
-                        } else {
-                            engine_id
-                        };
-                        let _ = state.cache.set(
-                            original_text,
-                            &res.text,
-                            &source,
-                            &target,
-                            actual_engine,
-                        );
-                        translations[original_idx] = res.text;
-                    }
+                    let original_idx = missing_indices[req_idx];
+                    let original_text = &payload.texts[original_idx];
+                    let actual_engine = if res.engine.ends_with("(fallback)") {
+                        "google_web"
+                    } else {
+                        engine_id
+                    };
+                    let _ = state.cache.set(
+                        original_text,
+                        &res.text,
+                        &source,
+                        &target,
+                        actual_engine,
+                    );
+                    translations[original_idx] = res.text;
                 }
             }
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),

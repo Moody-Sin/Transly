@@ -16,6 +16,8 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
 urlencoding = "2.1"
+regex = "1.11"
+futures = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1.43", features = ["full"] }

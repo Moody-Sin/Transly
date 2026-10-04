@@ -18,35 +18,22 @@ impl GoogleWebEngine {
                 .unwrap_or_default(),
         }
     }
-}
-
-impl Default for GoogleWebEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl TranslateEngine for GoogleWebEngine {
-    fn id(&self) -> &'static str {
-        "google_web"
-    }
-
-    fn name(&self) -> &'static str {
-        "Google 网页翻译"
-    }
-
-    async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
-        let sl = if req.source_lang.is_empty() {
+    async fn translate_single_chunk(
+        &self,
+        text: &str,
+        source_lang: &str,
+        target_lang: &str,
+    ) -> Result<TranslationResponse> {
+        let sl = if source_lang.is_empty() {
             "auto"
         } else {
-            &req.source_lang
+            source_lang
         };
-        let tl = &req.target_lang;
+        let tl = target_lang;
 
         let url = format!(
             "https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tl}&dt=t&q={}",
-            urlencoding::encode(&req.text)
+            urlencoding::encode(text)
         );
 
         let resp = self.client.get(&url).send().await?;
@@ -84,6 +71,55 @@ impl TranslateEngine for GoogleWebEngine {
             detected_source_lang: detected,
             engine: self.id().to_string(),
         })
+    }
+}
+
+impl Default for GoogleWebEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl TranslateEngine for GoogleWebEngine {
+    fn id(&self) -> &'static str {
+        "google_web"
+    }
+
+    fn name(&self) -> &'static str {
+        "Google 网页翻译"
+    }
+
+    async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
+        // 如果文本超过 1200 字符，按段落/换行切片翻译并合并，防止 GET 请求 URL 超长溢出 (HTTP 414)
+        if req.text.chars().count() > 1200 {
+            let mut full_translated = String::new();
+            let mut detected_lang = None;
+            for paragraph in req.text.split("\n\n") {
+                if paragraph.trim().is_empty() {
+                    full_translated.push_str("\n\n");
+                    continue;
+                }
+                let res = self
+                    .translate_single_chunk(paragraph, &req.source_lang, &req.target_lang)
+                    .await?;
+                if detected_lang.is_none() {
+                    detected_lang = res.detected_source_lang;
+                }
+                if !full_translated.is_empty() && !full_translated.ends_with("\n\n") {
+                    full_translated.push_str("\n\n");
+                }
+                full_translated.push_str(&res.text);
+            }
+            return Ok(TranslationResponse {
+                text: full_translated,
+                detected_source_lang: detected_lang,
+                engine: self.id().to_string(),
+            });
+        }
+
+        self.translate_single_chunk(&req.text, &req.source_lang, &req.target_lang)
+            .await
     }
 }
 

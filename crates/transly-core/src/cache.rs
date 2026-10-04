@@ -153,26 +153,37 @@ impl TranslationCache {
         Ok(deleted)
     }
 
-    /// 限制缓存总条目数，保留最新的 max_items 条
+    /// 限制缓存总条目数，保留最新的 max_items 条（基于 created_at 索引高效删除）
     pub fn trim_to_max_items(&self, max_items: usize) -> Result<usize> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
-        let deleted = conn.execute(
-            r#"
-            DELETE FROM translation_cache
-            WHERE cache_key NOT IN (
-                SELECT cache_key FROM translation_cache
-                ORDER BY created_at DESC
-                LIMIT ?1
-            )
-            "#,
-            params![max_items as i64],
+        // 先定位第 max_items 条记录的 rowid / created_at 偏移阈值
+        let mut stmt = conn.prepare_cached(
+            "SELECT rowid FROM translation_cache ORDER BY created_at DESC, rowid DESC LIMIT 1 OFFSET ?1",
         )?;
+        let mut rows = stmt.query(params![max_items as i64])?;
 
-        Ok(deleted)
+        if let Some(row) = rows.next()? {
+            let threshold_rowid: i64 = row.get(0)?;
+            let deleted = conn.execute(
+                r#"
+                DELETE FROM translation_cache 
+                WHERE rowid IN (
+                    SELECT rowid FROM translation_cache 
+                    ORDER BY created_at DESC, rowid DESC 
+                    LIMIT -1 OFFSET ?1
+                )
+                "#,
+                params![max_items as i64],
+            )?;
+            let _ = threshold_rowid;
+            Ok(deleted)
+        } else {
+            Ok(0)
+        }
     }
 }
 

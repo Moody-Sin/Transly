@@ -143,6 +143,34 @@ impl TranslateEngine for OpenAIEngine {
             message: "LLM API 返回内容为空".to_string(),
         })
     }
+
+    async fn translate_batch(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Result<Vec<TranslationResponse>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 当请求项较少（<= 1 条）直接单次处理
+        if requests.len() == 1 {
+            return Ok(vec![self.translate(&requests[0]).await?]);
+        }
+
+        // 使用受控并发（并发度 4）并发执行单项翻译，避免串行循环过度耗时与整体超时
+        let chunk_size = 4;
+        let mut all_results = Vec::with_capacity(requests.len());
+
+        for chunk in requests.chunks(chunk_size) {
+            let futures: Vec<_> = chunk.iter().map(|req| self.translate(req)).collect();
+            let chunk_results = futures::future::join_all(futures).await;
+            for res in chunk_results {
+                all_results.push(res?);
+            }
+        }
+
+        Ok(all_results)
+    }
 }
 
 #[cfg(test)]

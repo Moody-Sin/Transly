@@ -30,6 +30,8 @@
     "deeplKeyLabel": "DeepL API Key (支持 Free 与 Pro):",
     "deepseekKeyLabel": "DeepSeek API Key:",
     "btnSaveKeys": "保存密钥到系统凭据库",
+    "clipboardMonitorLabel": "系统剪贴板监听自动翻译",
+    "clipboardMonitorDesc": "复制外文时自动弹出迷你浮窗，无需手动呼出",
     "glossaryTitle": "添加全局术语库规则",
     "glossarySourcePlaceholder": "源术语 (如: LLM)",
     "glossaryTargetPlaceholder": "目标译文 (如: 大语言模型)",

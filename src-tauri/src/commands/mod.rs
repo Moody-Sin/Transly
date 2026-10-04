@@ -97,6 +97,21 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[tauri::command]
 #[specta::specta]
+pub fn set_clipboard_monitor(
+    enabled: bool,
+    flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+) {
+    flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_clipboard_monitor(flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>) -> bool {
+    flag.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn ocr_image(
     image_base64: String,
     ocr: tauri::State<'_, Arc<transly_core::SystemOcrEngine>>,

@@ -4,6 +4,7 @@
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use specta_typescript::Typescript;
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -69,7 +70,9 @@ fn main() {
         commands::add_glossary_term,
         commands::get_glossary_terms,
         commands::delete_glossary_term,
-        commands::ocr_image
+        commands::ocr_image,
+        commands::set_clipboard_monitor,
+        commands::get_clipboard_monitor
     ]);
 
     #[cfg(debug_assertions)]
@@ -77,8 +80,13 @@ fn main() {
         .export(Typescript::default(), "../src/bindings.ts")
         .expect("Failed to export typescript bindings");
 
+    // 剪贴板监听开关（默认关闭）
+    let clipboard_monitor_enabled = Arc::new(AtomicBool::new(false));
+
     // 初始化系统原生轻量 OCR 引擎
     let ocr_engine = Arc::new(SystemOcrEngine::new());
+
+    let monitor_flag = clipboard_monitor_enabled.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -87,9 +95,10 @@ fn main() {
         .manage(pool)
         .manage(glossary)
         .manage(ocr_engine)
+        .manage(clipboard_monitor_enabled)
         .invoke_handler(builder.invoke_handler())
-        .setup(|app| {
-            // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤出主窗口翻译
+        .setup(move |app| {
+            // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
             let app_handle = app.handle().clone();
             let _ =
                 app.global_shortcut()
@@ -112,18 +121,41 @@ fn main() {
                                 // 2. 稍微等待系统剪贴板更新
                                 tokio::time::sleep(std::time::Duration::from_millis(60)).await;
 
-                                // 3. 提取剪贴板文本并唤出窗口
+                                // 3. 提取剪贴板文本并唤起轻量悬浮窗
                                 let text = handle.clipboard().read_text().unwrap_or_default();
-                                if let Some(window) = handle.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                    if !text.trim().is_empty() {
-                                        let _ = window.emit("quick-translate", text);
+                                if !text.trim().is_empty() {
+                                    if let Some(float_win) = handle.get_webview_window("float") {
+                                        let _ = float_win.show();
+                                        let _ = float_win.set_focus();
+                                        let _ = float_win.emit("float-translate", text);
                                     }
                                 }
                             });
                         }
                     });
+
+            // 启动后台剪贴板变动监听任务
+            let clip_handle = app.handle().clone();
+            let flag = monitor_flag.clone();
+            tokio::spawn(async move {
+                let mut last_clipboard = String::new();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    if flag.load(Ordering::Relaxed) {
+                        if let Ok(curr) = clip_handle.clipboard().read_text() {
+                            let trimmed = curr.trim();
+                            if !trimmed.is_empty() && trimmed != last_clipboard {
+                                last_clipboard = trimmed.to_string();
+                                // 检测文本且非纯空
+                                if let Some(float_win) = clip_handle.get_webview_window("float") {
+                                    let _ = float_win.show();
+                                    let _ = float_win.emit("float-translate", trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            });
 
             // 构建系统托盘菜单
             let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
@@ -170,6 +202,11 @@ fn main() {
                 // 点击关闭按钮时隐藏窗口常驻托盘，不中断后台服务
                 api.prevent_close();
                 let _ = window.hide();
+            } else if let WindowEvent::Focused(false) = event {
+                // 悬浮迷你窗在失去焦点时自动隐藏收起
+                if window.label() == "float" {
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())

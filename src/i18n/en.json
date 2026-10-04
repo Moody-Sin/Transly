@@ -30,6 +30,8 @@
     "deeplKeyLabel": "DeepL API Key (Free & Pro supported):",
     "deepseekKeyLabel": "DeepSeek API Key:",
     "btnSaveKeys": "Save to System Vault",
+    "clipboardMonitorLabel": "Clipboard Auto-Translation",
+    "clipboardMonitorDesc": "Pop up mini float window automatically on copying text",
     "glossaryTitle": "Add Global Glossary Rule",
     "glossarySourcePlaceholder": "Source term (e.g. LLM)",
     "glossaryTargetPlaceholder": "Target translation (e.g. Large Language Model)",

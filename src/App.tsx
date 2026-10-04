@@ -22,10 +22,13 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [deeplKey, setDeeplKey] = useState('')
   const [deepseekKey, setDeepseekKey] = useState('')
+  const [clipboardMonitor, setClipboardMonitor] = useState(false)
   const [glossarySource, setGlossarySource] = useState('')
   const [glossaryTarget, setGlossaryTarget] = useState('')
   const [glossaryList, setGlossaryList] = useState<[string, string][]>([])
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
+
+  const isFloatWindow = window.location.hash === '#float'
 
   const loadGlossaryList = () => {
     commands.getGlossaryTerms().then((res) => {
@@ -51,8 +54,18 @@ export default function App() {
       if (res.status === 'ok') setDeepseekKey(res.data)
     }).catch(() => {})
 
+    commands.getClipboardMonitor().then((enabled) => {
+      setClipboardMonitor(enabled)
+    }).catch(() => {})
+
     loadGlossaryList()
   }, [])
+
+  const handleToggleClipboardMonitor = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.checked
+    setClipboardMonitor(val)
+    await commands.setClipboardMonitor(val)
+  }
 
   const handleCopyToken = () => {
     if (!serverToken) return
@@ -124,7 +137,9 @@ export default function App() {
 
   // 监听全局快捷键划词/剪贴板翻译事件
   useEffect(() => {
-    let unlisten: (() => void) | undefined
+    let unlistenQuick: (() => void) | undefined
+    let unlistenFloat: (() => void) | undefined
+
     listen<string>('quick-translate', (event) => {
       const text = event.payload
       if (text && text.trim()) {
@@ -132,11 +147,22 @@ export default function App() {
         handleTranslate(text)
       }
     }).then((fn) => {
-      unlisten = fn
+      unlistenQuick = fn
+    }).catch(() => {})
+
+    listen<string>('float-translate', (event) => {
+      const text = event.payload
+      if (text && text.trim()) {
+        setSourceText(text)
+        handleTranslate(text)
+      }
+    }).then((fn) => {
+      unlistenFloat = fn
     }).catch(() => {})
 
     return () => {
-      if (unlisten) unlisten()
+      if (unlistenQuick) unlistenQuick()
+      if (unlistenFloat) unlistenFloat()
     }
   }, [handleTranslate])
 
@@ -145,6 +171,54 @@ export default function App() {
     navigator.clipboard.writeText(translatedText)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  // 迷你悬浮小窗模式 (无边框、紧凑置顶卡片)
+  if (isFloatWindow) {
+    return (
+      <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-indigo-100 bg-white/95 p-3.5 shadow-2xl backdrop-blur-md select-none">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div className="flex items-center gap-1.5">
+            <Languages className="h-4 w-4 text-indigo-600" />
+            <span className="text-xs font-semibold text-slate-800">Transly 快捷划词</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 outline-none"
+            >
+              <option value="zh-CN">中文</option>
+              <option value="en">EN</option>
+              <option value="ja">日文</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="my-2 flex-1 overflow-auto rounded-lg bg-slate-50/70 p-2 text-xs leading-relaxed text-slate-800 border border-slate-100">
+          {isTranslating ? (
+            <span className="text-slate-400 animate-pulse">正在翻译...</span>
+          ) : (
+            translatedText || <span className="text-slate-400">划词或复制内容后自动展现译文</span>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          <span className="text-[10px] text-slate-400 truncate max-w-[200px]">
+            {sourceText ? `“${sourceText.slice(0, 30)}...”` : '失焦自动收起'}
+          </span>
+          {translatedText && (
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+            >
+              {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+              <span>{copied ? '已复制' : '复制'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -310,6 +384,20 @@ export default function App() {
                     <span>{t.settings.btnSaveKeys}</span>
                   </button>
                 </div>
+              </div>
+
+              {/* 剪贴板监听开关 */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div>
+                  <div className="font-medium text-slate-700">{t.settings.clipboardMonitorLabel}</div>
+                  <div className="text-[11px] text-slate-400">{t.settings.clipboardMonitorDesc}</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={clipboardMonitor}
+                  onChange={handleToggleClipboardMonitor}
+                  className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
               </div>
 
               {/* 术语库管理 */}

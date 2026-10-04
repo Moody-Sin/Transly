@@ -87,18 +87,64 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
   return entries
 }
 
+let isObserving = false
+let currentObserver: MutationObserver | null = null
+let currentTargetLang = 'zh-CN'
+
 /**
- * 执行整页沉浸式翻译（分批次打包请求，原地替换）
+ * 启动动态增量监听（针对 SPA 单页或瀑布流懒加载内容）
  */
-export async function translateFullPage(targetLang: string = 'zh-CN', batchSize: number = 30) {
-  const entries = collectTextNodes(document.body)
-  if (entries.length === 0) {
-    console.log('[Transly] 未检测到可翻译的文本节点')
-    return
+export function startDynamicObserver(targetLang: string = 'zh-CN') {
+  if (isObserving && currentObserver) return
+  currentTargetLang = targetLang
+  isObserving = true
+
+  let pendingNodes: Node[] = []
+  let debounceTimer: number | null = null
+
+  currentObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
+            pendingNodes.push(node)
+          }
+        })
+      }
+    }
+
+    if (pendingNodes.length > 0) {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = window.setTimeout(async () => {
+        const nodesToProcess = [...pendingNodes]
+        pendingNodes = []
+        for (const root of nodesToProcess) {
+          if (document.body.contains(root)) {
+            const entries = collectTextNodes(root)
+            if (entries.length > 0) {
+              await translateEntries(entries, currentTargetLang)
+            }
+          }
+        }
+      }, 500)
+    }
+  })
+
+  currentObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+  })
+}
+
+export function stopDynamicObserver() {
+  if (currentObserver) {
+    currentObserver.disconnect()
+    currentObserver = null
   }
+  isObserving = false
+}
 
-  console.log(`[Transly] 收集到 ${entries.length} 个文本节点，开始批量翻译...`)
-
+async function translateEntries(entries: TextNodeEntry[], targetLang: string, batchSize: number = 30) {
   for (let i = 0; i < entries.length; i += batchSize) {
     const batch = entries.slice(i, i + batchSize)
     const texts = batch.map((item) => item.text)
@@ -124,15 +170,28 @@ export async function translateFullPage(targetLang: string = 'zh-CN', batchSize:
             replaceTextNode(batch[idx].node, translated)
           }
         })
-      } else {
-        console.warn('[Transly] 批量翻译失败:', response?.error)
       }
     } catch (err) {
-      console.error('[Transly] 请求后台服务出错:', err)
+      console.warn('[Transly] 动态增量翻译出错:', err)
     }
   }
+}
 
-  console.log('[Transly] 整页翻译完成')
+/**
+ * 执行整页沉浸式翻译（分批次打包请求，原地替换）
+ */
+export async function translateFullPage(targetLang: string = 'zh-CN', batchSize: number = 30) {
+  const entries = collectTextNodes(document.body)
+  if (entries.length === 0) {
+    console.log('[Transly] 未检测到可翻译的文本节点')
+    startDynamicObserver(targetLang)
+    return
+  }
+
+  console.log(`[Transly] 收集到 ${entries.length} 个文本节点，开始批量翻译...`)
+  await translateEntries(entries, targetLang, batchSize)
+  console.log('[Transly] 首屏整页翻译完成，已开启动态增量监听')
+  startDynamicObserver(targetLang)
 }
 
 // 监听来自扩展 Popup 或快捷指令的消息
@@ -145,6 +204,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'RESTORE_PAGE_TRANSLATION') {
+    stopDynamicObserver()
     restoreOriginalText()
     sendResponse({ ok: true })
     return true

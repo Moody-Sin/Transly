@@ -40,6 +40,45 @@ pub struct ServerState {
     pub glossary: Arc<RwLock<Glossary>>,
 }
 
+fn is_allowed_origin(origin_str: &str) -> bool {
+    // 1. Chrome 扩展校验：chrome-extension://<32位小写a-p字符扩展ID>
+    if let Some(id) = origin_str.strip_prefix("chrome-extension://") {
+        let clean_id = id.trim_end_matches('/');
+        // 校验合法的 Chrome 扩展 ID 格式（标准为 32 位 a-p 字符，或开发环境由用户配置）
+        if !clean_id.is_empty()
+            && clean_id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+
+    // 2. Firefox 扩展校验：moz-extension://<UUID格式扩展ID>
+    if let Some(id) = origin_str.strip_prefix("moz-extension://") {
+        let clean_id = id.trim_end_matches('/');
+        if !clean_id.is_empty()
+            && clean_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return true;
+        }
+    }
+
+    // 3. 仅在开发调试环境下允许本地回环端口
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(uri) = origin_str.parse::<axum::http::Uri>() {
+            if let Some(host) = uri.host() {
+                return host == "127.0.0.1" || host == "localhost";
+            }
+        }
+    }
+
+    false
+}
+
 pub fn create_router(
     token: String,
     cache: Arc<TranslationCache>,
@@ -64,19 +103,7 @@ pub fn create_router(
         .allow_origin(tower_http::cors::AllowOrigin::predicate(
             |origin: &axum::http::HeaderValue, _parts| {
                 if let Ok(s) = origin.to_str() {
-                    // 严格校验 Origin，限制扩展协议与本地开发端口
-                    if s.starts_with("chrome-extension://") || s.starts_with("moz-extension://") {
-                        return true;
-                    }
-                    #[cfg(debug_assertions)]
-                    {
-                        if let Ok(uri) = s.parse::<axum::http::Uri>() {
-                            if let Some(host) = uri.host() {
-                                return host == "127.0.0.1" || host == "localhost";
-                            }
-                        }
-                    }
-                    false
+                    is_allowed_origin(s)
                 } else {
                     false
                 }
@@ -181,13 +208,10 @@ async fn translate_batch_handler(
                     } else {
                         engine_id
                     };
-                    let _ = state.cache.set(
-                        original_text,
-                        &res.text,
-                        &source,
-                        &target,
-                        actual_engine,
-                    );
+                    let _ =
+                        state
+                            .cache
+                            .set(original_text, &res.text, &source, &target, actual_engine);
                     translations[original_idx] = res.text;
                 }
             }
@@ -225,6 +249,18 @@ mod tests {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use tower::util::ServiceExt;
+
+    #[test]
+    fn test_is_allowed_origin() {
+        // 合法的扩展 Origin 格式
+        assert!(is_allowed_origin("chrome-extension://abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(is_allowed_origin("moz-extension://d4e73b40-7988-4e89-a2e6-81525a74e2d3"));
+
+        // 非法伪装前缀与外部网页
+        assert!(!is_allowed_origin("chrome-extension://"));
+        assert!(!is_allowed_origin("https://evil.com"));
+        assert!(!is_allowed_origin("http://localhost.evil.com"));
+    }
 
     #[tokio::test]
     async fn test_health_check() {

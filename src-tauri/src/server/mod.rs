@@ -1,7 +1,16 @@
-use axum::{routing::get, Json, Router};
+use axum::{
+    extract::{Request, State},
+    http::{header, HeaderMap, StatusCode},
+    middleware::{self, Next},
+    response::Response,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
+use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
+use transly_core::{GoogleWebEngine, TranslateEngine, TranslationRequest};
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -9,10 +18,65 @@ pub struct StatusResponse {
     pub version: &'static str,
 }
 
-pub fn create_router() -> Router {
+#[derive(Deserialize)]
+pub struct TranslateBatchRequest {
+    pub texts: Vec<String>,
+    pub source_lang: Option<String>,
+    pub target_lang: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TranslateBatchResponse {
+    pub translations: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct ServerState {
+    pub token: Arc<String>,
+    pub engine: Arc<dyn TranslateEngine>,
+}
+
+pub fn create_router(token: String) -> Router {
+    let state = ServerState {
+        token: Arc::new(token),
+        engine: Arc::new(GoogleWebEngine::new()),
+    };
+
+    let protected = Router::new()
+        .route("/translate", post(translate_batch_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
     Router::new()
         .route("/health", get(health_handler))
-        .layer(CorsLayer::permissive())
+        .merge(protected)
+        .layer(cors)
+        .with_state(state)
+}
+
+async fn auth_middleware(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    match auth_header {
+        Some(val) if val == format!("Bearer {}", state.token.as_str()) => {
+            Ok(next.run(request).await)
+        }
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
 }
 
 async fn health_handler() -> Json<StatusResponse> {
@@ -22,9 +86,123 @@ async fn health_handler() -> Json<StatusResponse> {
     })
 }
 
-pub async fn start_server(port: u16) -> anyhow::Result<()> {
+async fn translate_batch_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<TranslateBatchRequest>,
+) -> Result<Json<TranslateBatchResponse>, StatusCode> {
+    let target = payload.target_lang;
+    let source = payload.source_lang.unwrap_or_else(|| "auto".to_string());
+
+    let requests: Vec<TranslationRequest> = payload
+        .texts
+        .into_iter()
+        .map(|text| TranslationRequest {
+            text,
+            source_lang: source.clone(),
+            target_lang: target.clone(),
+        })
+        .collect();
+
+    match state.engine.translate_batch(&requests).await {
+        Ok(results) => {
+            let translations = results.into_iter().map(|r| r.text).collect();
+            Ok(Json(TranslateBatchResponse { translations }))
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+pub async fn start_server(port: u16, token: String) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, create_router()).await?;
+    axum::serve(listener, create_router(token)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::util::ServiceExt;
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let app = create_router("test-token".to_string());
+        let req = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_translate_unauthorized() {
+        let app = create_router("valid-token".to_string());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"texts":["hello"],"target_lang":"zh-CN"}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_translate_authorized() {
+        struct MockEngine;
+        #[::async_trait::async_trait]
+        impl TranslateEngine for MockEngine {
+            fn id(&self) -> &'static str {
+                "mock"
+            }
+            fn name(&self) -> &'static str {
+                "Mock"
+            }
+            async fn translate(
+                &self,
+                req: &TranslationRequest,
+            ) -> transly_core::Result<transly_core::TranslationResponse> {
+                Ok(transly_core::TranslationResponse {
+                    text: format!("[{}] {}", req.target_lang, req.text),
+                    detected_source_lang: Some("en".to_string()),
+                    engine: "mock".to_string(),
+                })
+            }
+        }
+
+        let state = ServerState {
+            token: Arc::new("valid-token".to_string()),
+            engine: Arc::new(MockEngine),
+        };
+
+        let app = Router::new()
+            .route(
+                "/translate",
+                post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth_middleware,
+                )),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"texts":["hello"],"target_lang":"zh-CN"}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.translations, vec!["[zh-CN] hello"]);
+    }
 }

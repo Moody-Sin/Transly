@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Languages, ArrowRight, Copy, Check } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
 
 export default function App() {
   const [sourceText, setSourceText] = useState('')
@@ -7,12 +8,23 @@ export default function App() {
   const [targetLang, setTargetLang] = useState('zh-CN')
   const [isTranslating, setIsTranslating] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const handleTranslate = async () => {
     if (!sourceText.trim()) return
     setIsTranslating(true)
+    setErrorMsg(null)
     try {
-      // 占位模拟，后续切换为 tauri-specta 生成的强类型客户端
+      // 优先尝试 Tauri IPC 调用 Rust 后端真实的 translate command
+      const res = await invoke<string>('translate', {
+        text: sourceText,
+        sourceLang: 'auto',
+        targetLang: targetLang,
+      })
+      setTranslatedText(res)
+    } catch (err: unknown) {
+      console.warn('Tauri IPC 暂不可用或调用失败，降级本地预览模式:', err)
+      // 若在纯浏览器环境预览，提供占位回退
       setTranslatedText(`[${targetLang}] ${sourceText}`)
     } finally {
       setIsTranslating(false)
@@ -63,6 +75,9 @@ export default function App() {
               placeholder="输入或粘贴需要翻译的文本..."
               className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
             />
+            {errorMsg && (
+              <div className="text-xs text-rose-500 mt-1">{errorMsg}</div>
+            )}
             <div className="mt-2 flex justify-end">
               <button
                 onClick={handleTranslate}

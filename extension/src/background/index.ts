@@ -1,5 +1,11 @@
 const LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
 
+// 获取存储的通信 Token
+async function getServerToken(): Promise<string | null> {
+  const result = await chrome.storage.local.get(['transly_server_token'])
+  return result.transly_server_token || null
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Transly Extension] 插件已安装并就绪')
 })
@@ -13,4 +19,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: err.message }))
     return true
   }
+
+  if (message.type === 'TRANSLATE_BATCH') {
+    getServerToken().then((token) => {
+      fetch(`${LOCAL_SERVER_URL}/translate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          texts: message.texts,
+          source_lang: message.source_lang,
+          target_lang: message.target_lang,
+        }),
+      })
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+          }
+          return res.json()
+        })
+        .then((data) => sendResponse({ ok: true, data }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }))
+    })
+    return true
+  }
 })
+

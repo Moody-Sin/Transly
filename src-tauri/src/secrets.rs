@@ -19,3 +19,25 @@ pub fn delete_secret(key: &str) -> anyhow::Result<()> {
     entry.delete_credential()?;
     Ok(())
 }
+
+const SERVER_TOKEN_KEY: &str = "internal_server_token";
+
+pub fn get_or_create_server_token() -> anyhow::Result<String> {
+    if let Ok(token) = get_secret(SERVER_TOKEN_KEY) {
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+
+    let token = format!(
+        "{:x}{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        std::process::id()
+    );
+
+    let _ = set_secret(SERVER_TOKEN_KEY, &token);
+    Ok(token)
+}

@@ -13,6 +13,7 @@ export const commands = {
 	addGlossaryTerm: (source: string, target: string) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target })),
 	getGlossaryTerms: () => typedError<([string, string])[], string>(__TAURI_INVOKE("get_glossary_terms")),
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
+	ocrImage: (imageBase64: string) => typedError<string, string>(__TAURI_INVOKE("ocr_image", { imageBase64 })),
 };
 
 /* Tauri Specta runtime */

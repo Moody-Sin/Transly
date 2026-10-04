@@ -12,7 +12,8 @@ fn main() {
         commands::delete_api_key,
         commands::add_glossary_term,
         commands::get_glossary_terms,
-        commands::delete_glossary_term
+        commands::delete_glossary_term,
+        commands::ocr_image
     ]);
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());

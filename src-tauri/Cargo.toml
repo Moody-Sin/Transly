@@ -32,6 +32,8 @@ specta = "=2.0.0-rc.25"
 specta-typescript = "0.0.12"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
+enigo = "0.3"
+base64 = "0.22"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

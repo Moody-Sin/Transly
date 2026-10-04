@@ -4,6 +4,7 @@ pub mod detect;
 pub mod engine;
 pub mod error;
 pub mod glossary;
+pub mod ocr;
 
 pub use cache::TranslationCache;
 pub use config::AppConfig;
@@ -14,3 +15,4 @@ pub use engine::{
 };
 pub use error::{Error, Result};
 pub use glossary::Glossary;
+pub use ocr::{OcrEngine, OcrRequest, OcrResponse, SystemOcrEngine};

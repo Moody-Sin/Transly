@@ -93,6 +93,39 @@ pub async fn delete_glossary_term(
     Ok(())
 }
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ocr_image(
+    image_base64: String,
+    ocr: tauri::State<'_, Arc<transly_core::SystemOcrEngine>>,
+) -> Result<String, String> {
+    use transly_core::{OcrEngine, OcrRequest};
+    let clean = image_base64.trim();
+    // 兼容可能传入的 data:image/...;base64, 前缀
+    let raw_b64 = if let Some(idx) = clean.find(',') {
+        &clean[idx + 1..]
+    } else {
+        clean
+    };
+
+    let bytes = match STANDARD.decode(raw_b64.as_bytes()) {
+        Ok(b) => b,
+        Err(_) => return Err("Base64 图像解析失败".to_string()),
+    };
+
+    let req = OcrRequest {
+        image_bytes: bytes,
+        lang: Some("auto".to_string()),
+    };
+
+    match ocr.recognize(&req).await {
+        Ok(res) => Ok(res.text),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn detect_lang(text: String) -> String {

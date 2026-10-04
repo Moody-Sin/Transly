@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use specta_typescript::Typescript;
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
-use transly_core::{Glossary, TranslationCache};
+use transly_core::{Glossary, SystemOcrEngine, TranslationCache};
 
 fn main() {
     // 初始化持久化翻译缓存
@@ -67,7 +68,8 @@ fn main() {
         commands::delete_api_key,
         commands::add_glossary_term,
         commands::get_glossary_terms,
-        commands::delete_glossary_term
+        commands::delete_glossary_term,
+        commands::ocr_image
     ]);
 
     #[cfg(debug_assertions)]
@@ -75,30 +77,51 @@ fn main() {
         .export(Typescript::default(), "../src/bindings.ts")
         .expect("Failed to export typescript bindings");
 
+    // 初始化系统原生轻量 OCR 引擎
+    let ocr_engine = Arc::new(SystemOcrEngine::new());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(cache)
         .manage(pool)
         .manage(glossary)
+        .manage(ocr_engine)
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
-            // 注册全局快捷键 (Alt+Shift+D)，触发读取选中文本/剪贴板并激活主窗口翻译
+            // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤出主窗口翻译
             let app_handle = app.handle().clone();
             let _ =
                 app.global_shortcut()
                     .on_shortcut("Alt+Shift+D", move |_app, _shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             let handle = app_handle.clone();
-                            // 尝试从剪贴板读取最新选中文本
-                            let text = handle.clipboard().read_text().unwrap_or_default();
-                            if let Some(window) = handle.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                                if !text.trim().is_empty() {
-                                    let _ = window.emit("quick-translate", text);
+                            tokio::spawn(async move {
+                                // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
+                                if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                                    #[cfg(target_os = "macos")]
+                                    let modifier = Key::Meta;
+                                    #[cfg(not(target_os = "macos"))]
+                                    let modifier = Key::Control;
+
+                                    let _ = enigo.key(modifier, Direction::Press);
+                                    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+                                    let _ = enigo.key(modifier, Direction::Release);
                                 }
-                            }
+
+                                // 2. 稍微等待系统剪贴板更新
+                                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+
+                                // 3. 提取剪贴板文本并唤出窗口
+                                let text = handle.clipboard().read_text().unwrap_or_default();
+                                if let Some(window) = handle.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                    if !text.trim().is_empty() {
+                                        let _ = window.emit("quick-translate", text);
+                                    }
+                                }
+                            });
                         }
                     });
 

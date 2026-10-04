@@ -180,7 +180,7 @@ export default function App() {
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
           <div className="flex items-center gap-1.5">
             <Languages className="h-4 w-4 text-indigo-600" />
-            <span className="text-xs font-semibold text-slate-800">Transly 快捷划词</span>
+            <span className="text-xs font-semibold text-slate-800">{t.float.title}</span>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -197,15 +197,15 @@ export default function App() {
 
         <div className="my-2 flex-1 overflow-auto rounded-lg bg-slate-50/70 p-2 text-xs leading-relaxed text-slate-800 border border-slate-100">
           {isTranslating ? (
-            <span className="text-slate-400 animate-pulse">正在翻译...</span>
+            <span className="text-slate-400 animate-pulse">{t.float.translating}</span>
           ) : (
-            translatedText || <span className="text-slate-400">划词或复制内容后自动展现译文</span>
+            translatedText || <span className="text-slate-400">{t.float.placeholder}</span>
           )}
         </div>
 
         <div className="flex items-center justify-between pt-1">
           <span className="text-[10px] text-slate-400 truncate max-w-[200px]">
-            {sourceText ? `“${sourceText.slice(0, 30)}...”` : '失焦自动收起'}
+            {sourceText ? `“${sourceText.slice(0, 30)}...”` : t.float.autoHideNotice}
           </span>
           {translatedText && (
             <button
@@ -213,7 +213,7 @@ export default function App() {
               className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
             >
               {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
-              <span>{copied ? '已复制' : '复制'}</span>
+              <span>{copied ? t.translation.copied : t.translation.copy}</span>
             </button>
           )}
         </div>

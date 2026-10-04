@@ -55,3 +55,15 @@ jobs:
         run: pnpm run lint
       - name: 浏览器插件构建校验
         run: pnpm --filter transly-extension run build
+
+  security-scan:
+    name: 安全密钥扫描 (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks 密钥检测
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -153,8 +153,24 @@ impl TranslateEngine for DeepLEngine {
             return Err(Error::MissingCredentials("DeepL API Key 不能为空".into()));
         }
 
-        let target_lang = Self::normalize_target_lang(&requests[0].target_lang);
-        let source_lang = Self::normalize_source_lang(&requests[0].source_lang);
+        // 检查是否所有请求拥有相同的源语言与目标语言
+        let first_target = &requests[0].target_lang;
+        let first_source = &requests[0].source_lang;
+        let is_homogeneous = requests
+            .iter()
+            .all(|r| &r.target_lang == first_target && &r.source_lang == first_source);
+
+        if !is_homogeneous {
+            // 若混合不同语言对，安全降级为逐项翻译
+            let mut results = Vec::with_capacity(requests.len());
+            for r in requests {
+                results.push(self.translate(r).await?);
+            }
+            return Ok(results);
+        }
+
+        let target_lang = Self::normalize_target_lang(first_target);
+        let source_lang = Self::normalize_source_lang(first_source);
         let texts: Vec<&str> = requests.iter().map(|r| r.text.as_str()).collect();
 
         let body = DeepLApiRequest {

@@ -1,4 +1,5 @@
 use keyring::Entry;
+use rand::RngCore;
 
 const SERVICE_NAME: &str = "com.transly.app";
 
@@ -29,14 +30,13 @@ pub fn get_or_create_server_token() -> anyhow::Result<String> {
         }
     }
 
-    let token = format!(
-        "{:x}{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos(),
-        std::process::id()
-    );
+    // 使用系统密码学安全随机数生成 32 字节 (256-bit) 强随机令牌
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let mut token = String::with_capacity(64);
+    for b in bytes {
+        token.push_str(&format!("{:02x}", b));
+    }
 
     let _ = set_secret(SERVER_TOKEN_KEY, &token);
     Ok(token)

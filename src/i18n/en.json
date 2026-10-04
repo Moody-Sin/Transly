@@ -16,6 +16,12 @@
     "copied": "Copied",
     "engineSelect": "Engine"
   },
+  "float": {
+    "title": "Transly Quick Look",
+    "translating": "Translating...",
+    "placeholder": "Select or copy text to translate automatically",
+    "autoHideNotice": "Auto-hides on blur"
+  },
   "languages": {
     "zh-CN": "Simplified Chinese (zh-CN)",
     "en": "English (en)",

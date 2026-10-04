@@ -4,7 +4,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	translate: (text: string, sourceLang: string | null, targetLang: string) => typedError<string, string>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang })),
+	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<string, string>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
 	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
 	saveApiKey: (engine: string, key: string) => typedError<null, string>(__TAURI_INVOKE("save_api_key", { engine, key })),

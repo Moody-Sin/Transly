@@ -9,7 +9,8 @@ pub use cache::TranslationCache;
 pub use config::AppConfig;
 pub use detect::detect_language;
 pub use engine::{
-    FallbackEngine, GoogleWebEngine, TranslateEngine, TranslationRequest, TranslationResponse,
+    DeepLEngine, FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine,
+    TranslationRequest, TranslationResponse,
 };
 pub use error::{Error, Result};
 pub use glossary::Glossary;

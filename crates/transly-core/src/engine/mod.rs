@@ -1,10 +1,14 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+pub mod deepl;
 pub mod fallback;
 pub mod google;
+pub mod openai;
+pub use deepl::DeepLEngine;
 pub use fallback::FallbackEngine;
 pub use google::GoogleWebEngine;
+pub use openai::OpenAIEngine;
 
 use crate::Result;
 

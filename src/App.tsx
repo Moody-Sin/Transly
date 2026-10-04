@@ -1,16 +1,25 @@
 import { useState, useEffect } from 'react'
-import { Languages, ArrowRight, Copy, Check, Key } from 'lucide-react'
+import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save } from 'lucide-react'
 import { commands } from './bindings'
 
 export default function App() {
   const [sourceText, setSourceText] = useState('')
   const [translatedText, setTranslatedText] = useState('')
   const [targetLang, setTargetLang] = useState('zh-CN')
+  const [engine, setEngine] = useState('google')
   const [isTranslating, setIsTranslating] = useState(false)
   const [copied, setCopied] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [serverToken, setServerToken] = useState<string>('')
   const [tokenCopied, setTokenCopied] = useState(false)
+
+  // 设置面板状态
+  const [showSettings, setShowSettings] = useState(false)
+  const [deeplKey, setDeeplKey] = useState('')
+  const [deepseekKey, setDeepseekKey] = useState('')
+  const [glossarySource, setGlossarySource] = useState('')
+  const [glossaryTarget, setGlossaryTarget] = useState('')
+  const [saveStatus, setSaveStatus] = useState<string | null>(null)
 
   useEffect(() => {
     // 获取本地服务器 Token 供插件端授权配对
@@ -18,6 +27,14 @@ export default function App() {
       if (res.status === 'ok') {
         setServerToken(res.data)
       }
+    }).catch(() => {})
+
+    // 初始化读取已配置的密钥（若有）
+    commands.getApiKey('deepl').then((res) => {
+      if (res.status === 'ok') setDeeplKey(res.data)
+    }).catch(() => {})
+    commands.getApiKey('deepseek').then((res) => {
+      if (res.status === 'ok') setDeepseekKey(res.data)
     }).catch(() => {})
   }, [])
 
@@ -28,13 +45,42 @@ export default function App() {
     setTimeout(() => setTokenCopied(false), 2000)
   }
 
+  const handleSaveKeys = async () => {
+    setSaveStatus('保存中...')
+    try {
+      if (deeplKey.trim()) {
+        await commands.saveApiKey('deepl', deeplKey.trim())
+      }
+      if (deepseekKey.trim()) {
+        await commands.saveApiKey('deepseek', deepseekKey.trim())
+      }
+      setSaveStatus('密钥已保存至系统安全凭据！')
+      setTimeout(() => setSaveStatus(null), 2500)
+    } catch {
+      setSaveStatus('保存失败，请检查系统权限')
+    }
+  }
+
+  const handleAddGlossary = async () => {
+    if (!glossarySource.trim() || !glossaryTarget.trim()) return
+    try {
+      await commands.addGlossaryTerm(glossarySource.trim(), glossaryTarget.trim())
+      setGlossarySource('')
+      setGlossaryTarget('')
+      setSaveStatus('术语已添加并生效！')
+      setTimeout(() => setSaveStatus(null), 2000)
+    } catch {
+      setSaveStatus('术语添加失败')
+    }
+  }
+
   const handleTranslate = async () => {
     if (!sourceText.trim()) return
     setIsTranslating(true)
     setErrorMsg(null)
     try {
-      // 使用 tauri-specta 强类型命令安全调用
-      const res = await commands.translate(sourceText, 'auto', targetLang)
+      // 使用 tauri-specta 强类型命令安全调用，传递所选引擎
+      const res = await commands.translate(sourceText, 'auto', targetLang, engine)
       if (res.status === 'ok') {
         setTranslatedText(res.data)
       } else {
@@ -75,24 +121,50 @@ export default function App() {
               <span>{tokenCopied ? '已复制 Token' : '插件配对 Token'}</span>
             </button>
           )}
-          <span>引擎: 默认</span>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
+            title="设置与密钥配置"
+          >
+            <Settings className="h-3.5 w-3.5 text-slate-500" />
+            <span>设置</span>
+          </button>
         </div>
       </header>
 
       {/* 翻译工作区 */}
       <main className="flex flex-1 flex-col p-4 gap-4">
-        <div className="flex items-center gap-3">
-          <span className="text-xs font-medium text-slate-500">自动检测</span>
-          <ArrowRight className="h-4 w-4 text-slate-400" />
-          <select
-            value={targetLang}
-            onChange={(e) => setTargetLang(e.target.value)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
-          >
-            <option value="zh-CN">简体中文 (zh-CN)</option>
-            <option value="en">英语 (en)</option>
-            <option value="ja">日语 (ja)</option>
-          </select>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium text-slate-500">自动检测</span>
+            <ArrowRight className="h-4 w-4 text-slate-400" />
+            <select
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+            >
+              <option value="zh-CN">简体中文 (zh-CN)</option>
+              <option value="en">英语 (en)</option>
+              <option value="ja">日语 (ja)</option>
+              <option value="ko">韩语 (ko)</option>
+              <option value="fr">法语 (fr)</option>
+              <option value="de">德语 (de)</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">翻译引擎:</span>
+            <select
+              value={engine}
+              onChange={(e) => setEngine(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+            >
+              <option value="google">Google 网页翻译 (免Key)</option>
+              <option value="deepl">DeepL (需API Key / 自动降级)</option>
+              <option value="deepseek">DeepSeek LLM (需API Key / 自动降级)</option>
+              <option value="openai">OpenAI (需API Key / 自动降级)</option>
+            </select>
+          </div>
         </div>
 
         <div className="grid flex-1 grid-cols-2 gap-4">
@@ -135,6 +207,97 @@ export default function App() {
           </div>
         </div>
       </main>
+      {/* 设置与密钥配置模态框 */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="w-[480px] rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Settings className="h-4 w-4 text-indigo-600" />
+                <h3 className="font-semibold text-slate-800 text-sm">Transly 设置与凭据管理</h3>
+              </div>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-4 text-xs">
+              {/* API 密钥管理 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <span className="font-medium text-slate-700">系统原生安全凭据托管 (密钥绝不落盘明文)</span>
+                <div>
+                  <label className="text-slate-500 mb-1 block">DeepL API Key (支持 Free 与 Pro):</label>
+                  <input
+                    type="password"
+                    value={deeplKey}
+                    onChange={(e) => setDeeplKey(e.target.value)}
+                    placeholder="例如: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+                    className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-500 mb-1 block">DeepSeek API Key:</label>
+                  <input
+                    type="password"
+                    value={deepseekKey}
+                    onChange={(e) => setDeepseekKey(e.target.value)}
+                    placeholder="例如: sk-xxxxxxxx"
+                    className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    onClick={handleSaveKeys}
+                    className="flex items-center gap-1 rounded bg-indigo-600 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-indigo-700"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    <span>保存密钥到系统凭据库</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 术语库管理 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <span className="font-medium text-slate-700">添加全局术语库规则</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={glossarySource}
+                    onChange={(e) => setGlossarySource(e.target.value)}
+                    placeholder="源术语 (如: LLM)"
+                    className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                  />
+                  <input
+                    type="text"
+                    value={glossaryTarget}
+                    onChange={(e) => setGlossaryTarget(e.target.value)}
+                    placeholder="目标译文 (如: 大语言模型)"
+                    className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    onClick={handleAddGlossary}
+                    disabled={!glossarySource.trim() || !glossaryTarget.trim()}
+                    className="rounded bg-slate-800 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-slate-900 disabled:opacity-40"
+                  >
+                    添加术语
+                  </button>
+                </div>
+              </div>
+
+              {saveStatus && (
+                <div className="rounded bg-emerald-50 border border-emerald-200 p-2 text-center text-emerald-700 font-medium">
+                  {saveStatus}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

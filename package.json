@@ -9,7 +9,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "package:extension": "pnpm --filter transly-extension run build && node -e \"const fs = require('fs'); const archiver = require('archiver');\" 2>/dev/null || true"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

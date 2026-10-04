@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-tauri:
+    name: 构建桌面端 (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+          - os: macos-latest
+            platform: macos-arm64
+          - os: ubuntu-22.04
+            platform: linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node.js 与 pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Linux 系统依赖
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: 安装前端依赖
+        run: pnpm install
+
+      - name: 生成强类型绑定
+        run: pnpm run generate:bindings
+
+      - name: 构建 Tauri 应用程序
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Transly ${{ github.ref_name }}'
+          releaseBody: '参见 CHANGELOG.md 获取完整发布说明。'
+          releaseDraft: false
+          prerelease: false
+
+  build-extension:
+    name: 打包浏览器扩展 (.zip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node.js 与 pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: 构建扩展
+        run: |
+          pnpm install
+          pnpm --filter transly-extension run build
+
+      - name: 压缩扩展产物
+        run: |
+          cd extension/dist
+          zip -r ../../transly-extension-${{ github.ref_name }}.zip ./*
+          cd ../..
+
+      - name: 上传扩展发布产物至 GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: transly-extension-${{ github.ref_name }}.zip

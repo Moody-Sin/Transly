@@ -79,6 +79,14 @@
     <span>Transly</span>
     <span id="conn-status" class="status">检测连接中...</span>
   </div>
+  <div class="engine-box" style="margin-bottom: 8px;">
+    <select id="select-engine" class="token-input" style="margin-bottom: 0;">
+      <option value="google">默认引擎 (Google 免Key)</option>
+      <option value="deepl">DeepL 翻译</option>
+      <option value="deepseek">DeepSeek LLM</option>
+      <option value="openai">OpenAI</option>
+    </select>
+  </div>
   <button id="btn-translate" class="btn btn-primary">翻译此网页 (仅译文)</button>
   <button id="btn-restore" class="btn btn-secondary">还原原文</button>
 

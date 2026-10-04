@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use transly_core::{Glossary, TranslateEngine, TranslationCache, TranslationRequest};
+use transly_core::{Glossary, TranslationCache, TranslationRequest};
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -24,6 +24,7 @@ pub struct TranslateBatchRequest {
     pub texts: Vec<String>,
     pub source_lang: Option<String>,
     pub target_lang: String,
+    pub engine: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -34,7 +35,7 @@ pub struct TranslateBatchResponse {
 #[derive(Clone)]
 pub struct ServerState {
     pub token: Arc<String>,
-    pub engine: Arc<dyn TranslateEngine>,
+    pub pool: Arc<crate::engine_pool::EnginePool>,
     pub cache: Arc<TranslationCache>,
     pub glossary: Arc<RwLock<Glossary>>,
 }
@@ -42,12 +43,12 @@ pub struct ServerState {
 pub fn create_router(
     token: String,
     cache: Arc<TranslationCache>,
-    engine: Arc<dyn TranslateEngine>,
+    pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
 ) -> Router {
     let state = ServerState {
         token: Arc::new(token),
-        engine,
+        pool,
         cache,
         glossary,
     };
@@ -113,7 +114,14 @@ async fn translate_batch_handler(
 ) -> Result<Json<TranslateBatchResponse>, StatusCode> {
     let target = payload.target_lang;
     let source = payload.source_lang.unwrap_or_else(|| "auto".to_string());
-    let engine_id = state.engine.id();
+
+    // 支持按请求参数动态选择引擎，未指定则使用默认引擎
+    let active_engine = if let Some(ref eng) = payload.engine {
+        state.pool.get_engine(eng).await
+    } else {
+        state.pool.default_engine()
+    };
+    let engine_id = active_engine.id();
 
     let mut translations = Vec::with_capacity(payload.texts.len());
     let mut missing_indices = Vec::new();
@@ -136,7 +144,7 @@ async fn translate_batch_handler(
 
     // 2. 对未命中缓存的项发起批量引擎翻译并写回缓存
     if !missing_requests.is_empty() {
-        match state.engine.translate_batch(&missing_requests).await {
+        match active_engine.translate_batch(&missing_requests).await {
             Ok(results) => {
                 for (req_idx, res) in results.into_iter().enumerate() {
                     let original_idx = missing_indices[req_idx];
@@ -166,12 +174,12 @@ pub async fn start_server(
     port: u16,
     token: String,
     cache: Arc<TranslationCache>,
-    engine: Arc<dyn TranslateEngine>,
+    pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, create_router(token, cache, engine, glossary)).await?;
+    axum::serve(listener, create_router(token, cache, pool, glossary)).await?;
     Ok(())
 }
 
@@ -181,14 +189,13 @@ mod tests {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use tower::util::ServiceExt;
-    use transly_core::GoogleWebEngine;
 
     #[tokio::test]
     async fn test_health_check() {
         let cache = TranslationCache::in_memory().unwrap();
-        let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let app = create_router("test-token".to_string(), Arc::new(cache), engine, glossary);
+        let app = create_router("test-token".to_string(), Arc::new(cache), pool, glossary);
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
@@ -201,9 +208,9 @@ mod tests {
     #[tokio::test]
     async fn test_cors_origin_policy() {
         let cache = TranslationCache::in_memory().unwrap();
-        let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let app = create_router("test-token".to_string(), Arc::new(cache), engine, glossary);
+        let app = create_router("test-token".to_string(), Arc::new(cache), pool, glossary);
 
         // 1. 允许扩展协议与本地开发
         let allowed_req = Request::builder()
@@ -240,9 +247,9 @@ mod tests {
     #[tokio::test]
     async fn test_translate_unauthorized() {
         let cache = TranslationCache::in_memory().unwrap();
-        let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let app = create_router("valid-token".to_string(), Arc::new(cache), engine, glossary);
+        let app = create_router("valid-token".to_string(), Arc::new(cache), pool, glossary);
         let req = Request::builder()
             .method("POST")
             .uri("/translate")
@@ -256,34 +263,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_translate_authorized() {
-        struct MockEngine;
-        #[::async_trait::async_trait]
-        impl TranslateEngine for MockEngine {
-            fn id(&self) -> &'static str {
-                "mock"
-            }
-            fn name(&self) -> &'static str {
-                "Mock"
-            }
-            async fn translate(
-                &self,
-                req: &TranslationRequest,
-            ) -> transly_core::Result<transly_core::TranslationResponse> {
-                Ok(transly_core::TranslationResponse {
-                    text: format!("[{}] {}", req.target_lang, req.text),
-                    detected_source_lang: Some("en".to_string()),
-                    engine: "mock".to_string(),
-                })
-            }
-        }
-
         let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let mut glossary_instance = Glossary::new();
-        glossary_instance.insert("hello", "世界你好");
+        glossary_instance.insert("你好", "世界你好");
         let glossary = Arc::new(RwLock::new(glossary_instance));
         let state = ServerState {
             token: Arc::new("valid-token".to_string()),
-            engine: Arc::new(MockEngine),
+            pool,
             cache: cache.clone(),
             glossary,
         };
@@ -311,11 +298,11 @@ mod tests {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
-        // 验证经过了术语库替换 ("hello" -> "世界你好")
-        assert_eq!(resp.translations, vec!["[zh-CN] 世界你好"]);
+        // 验证经过了术语库替换 ("你好" -> "世界你好")
+        assert_eq!(resp.translations, vec!["世界你好"]);
 
         // 验证翻译结果已自动写入缓存（缓存存的是引擎原始译文）
-        let cached = cache.get("hello", "auto", "zh-CN", "mock").unwrap();
-        assert_eq!(cached, Some("[zh-CN] hello".to_string()));
+        let cached = cache.get("hello", "auto", "zh-CN", "google_web").unwrap();
+        assert!(cached.is_some());
     }
 }

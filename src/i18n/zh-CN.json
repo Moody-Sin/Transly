@@ -1,0 +1,43 @@
+{
+  "app": {
+    "title": "Transly",
+    "engine": "引擎",
+    "settings": "设置",
+    "copyToken": "插件配对 Token",
+    "tokenCopied": "已复制 Token"
+  },
+  "translation": {
+    "autoDetect": "自动检测",
+    "inputPlaceholder": "输入或粘贴需要翻译的文本...",
+    "outputPlaceholder": "译文将显示在这里...",
+    "btnTranslate": "翻译",
+    "translating": "翻译中...",
+    "copy": "复制",
+    "copied": "已复制",
+    "engineSelect": "翻译引擎"
+  },
+  "languages": {
+    "zh-CN": "简体中文 (zh-CN)",
+    "en": "英语 (en)",
+    "ja": "日语 (ja)",
+    "ko": "韩语 (ko)",
+    "fr": "法语 (fr)",
+    "de": "德语 (de)"
+  },
+  "settings": {
+    "title": "Transly 设置与凭据管理",
+    "credentialsTitle": "系统原生安全凭据托管 (密钥绝不落盘明文)",
+    "deeplKeyLabel": "DeepL API Key (支持 Free 与 Pro):",
+    "deepseekKeyLabel": "DeepSeek API Key:",
+    "btnSaveKeys": "保存密钥到系统凭据库",
+    "glossaryTitle": "添加全局术语库规则",
+    "glossarySourcePlaceholder": "源术语 (如: LLM)",
+    "glossaryTargetPlaceholder": "目标译文 (如: 大语言模型)",
+    "btnAddGlossary": "添加术语",
+    "statusSaving": "保存中...",
+    "statusKeysSaved": "密钥已保存至系统安全凭据！",
+    "statusSaveFailed": "保存失败，请检查系统权限",
+    "statusGlossaryAdded": "术语已添加并生效！",
+    "statusGlossaryFailed": "术语添加失败"
+  }
+}

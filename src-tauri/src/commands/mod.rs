@@ -1,39 +1,7 @@
+use crate::engine_pool::EnginePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use transly_core::{
-    detect::detect_language, DeepLEngine, FallbackEngine, Glossary, GoogleWebEngine, OpenAIEngine,
-    TranslateEngine, TranslationCache, TranslationRequest,
-};
-
-/// 根据引擎名称和当前系统凭据动态构造引擎实例（支持主备降级）
-pub fn resolve_engine(engine_id: &str) -> Arc<dyn TranslateEngine> {
-    let google = Arc::new(GoogleWebEngine::new());
-    match engine_id {
-        "deepl" => {
-            if let Ok(key) = crate::secrets::get_secret("deepl") {
-                if !key.is_empty() {
-                    let deepl = Arc::new(DeepLEngine::new(key));
-                    return Arc::new(FallbackEngine::new(deepl, google));
-                }
-            }
-            google
-        }
-        "openai" | "deepseek" => {
-            if let Ok(key) = crate::secrets::get_secret(engine_id) {
-                if !key.is_empty() {
-                    let llm = if engine_id == "deepseek" {
-                        Arc::new(OpenAIEngine::deepseek(key))
-                    } else {
-                        Arc::new(OpenAIEngine::new(key, None, None))
-                    };
-                    return Arc::new(FallbackEngine::new(llm, google));
-                }
-            }
-            google
-        }
-        _ => google,
-    }
-}
+use transly_core::{detect::detect_language, Glossary, TranslationCache, TranslationRequest};
 
 #[tauri::command]
 #[specta::specta]
@@ -43,16 +11,16 @@ pub async fn translate(
     target_lang: String,
     engine_name: Option<String>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
-    default_engine: tauri::State<'_, Arc<dyn TranslateEngine>>,
+    pool: tauri::State<'_, Arc<EnginePool>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<String, String> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
-    // 如果指定了引擎且不同于默认，则动态解析并附加 Fallback 降级
-    let active_engine: Arc<dyn TranslateEngine> = if let Some(ref name) = engine_name {
-        resolve_engine(name)
+    // 从全局引擎池中快速复用长连接实例
+    let active_engine = if let Some(ref name) = engine_name {
+        pool.get_engine(name).await
     } else {
-        default_engine.inner().clone()
+        pool.default_engine()
     };
 
     let engine_id = active_engine.id();
@@ -107,8 +75,14 @@ pub fn get_server_token() -> Result<String, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_api_key(engine: String, key: String) -> Result<(), String> {
-    crate::secrets::set_secret(&engine, &key).map_err(|e| e.to_string())
+pub async fn save_api_key(
+    engine: String,
+    key: String,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+) -> Result<(), String> {
+    crate::secrets::set_secret(&engine, &key).map_err(|e| e.to_string())?;
+    pool.invalidate(&engine).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -119,6 +93,11 @@ pub fn get_api_key(engine: String) -> Result<String, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn delete_api_key(engine: String) -> Result<(), String> {
-    crate::secrets::delete_secret(&engine).map_err(|e| e.to_string())
+pub async fn delete_api_key(
+    engine: String,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+) -> Result<(), String> {
+    crate::secrets::delete_secret(&engine).map_err(|e| e.to_string())?;
+    pool.invalidate(&engine).await;
+    Ok(())
 }

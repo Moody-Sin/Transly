@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use specta_typescript::Typescript;
-use src_tauri::{commands, secrets, server};
+use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -11,7 +11,7 @@ use tauri::{
 };
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
-use transly_core::{Glossary, GoogleWebEngine, TranslateEngine, TranslationCache};
+use transly_core::{Glossary, TranslationCache};
 
 fn main() {
     // 初始化持久化翻译缓存
@@ -24,8 +24,8 @@ fn main() {
     // 初始化全局术语库
     let glossary = Arc::new(RwLock::new(Glossary::new()));
 
-    // 初始化全局共享翻译引擎（保持 HTTP Client 连接池长连接）
-    let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+    // 初始化全局共享引擎池（长连接复用）
+    let pool = Arc::new(EnginePool::new());
 
     // 获取或生成用于本地扩展通信的 Bearer Token
     let token = secrets::get_or_create_server_token()
@@ -34,14 +34,14 @@ fn main() {
     // 异步启动本地插件通信服务
     let token_clone = token.clone();
     let server_cache = cache.clone();
-    let server_engine = engine.clone();
+    let server_pool = pool.clone();
     let server_glossary = glossary.clone();
     tokio::spawn(async move {
         if let Err(e) = server::start_server(
             39281,
             token_clone,
             server_cache,
-            server_engine,
+            server_pool,
             server_glossary,
         )
         .await
@@ -67,7 +67,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(cache)
-        .manage(engine)
+        .manage(pool)
         .manage(glossary)
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {

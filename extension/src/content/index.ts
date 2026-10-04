@@ -91,12 +91,15 @@ let isObserving = false
 let currentObserver: MutationObserver | null = null
 let currentTargetLang = 'zh-CN'
 
+let currentEngine = 'google'
+
 /**
  * 启动动态增量监听（针对 SPA 单页或瀑布流懒加载内容）
  */
-export function startDynamicObserver(targetLang: string = 'zh-CN') {
+export function startDynamicObserver(targetLang: string = 'zh-CN', engine: string = 'google') {
   if (isObserving && currentObserver) return
   currentTargetLang = targetLang
+  currentEngine = engine
   isObserving = true
 
   let pendingNodes: Node[] = []
@@ -122,7 +125,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN') {
           if (document.body.contains(root)) {
             const entries = collectTextNodes(root)
             if (entries.length > 0) {
-              await translateEntries(entries, currentTargetLang)
+              await translateEntries(entries, currentTargetLang, currentEngine)
             }
           }
         }
@@ -144,7 +147,12 @@ export function stopDynamicObserver() {
   isObserving = false
 }
 
-async function translateEntries(entries: TextNodeEntry[], targetLang: string, batchSize: number = 30) {
+async function translateEntries(
+  entries: TextNodeEntry[],
+  targetLang: string,
+  engine: string = 'google',
+  batchSize: number = 30,
+) {
   for (let i = 0; i < entries.length; i += batchSize) {
     const batch = entries.slice(i, i + batchSize)
     const texts = batch.map((item) => item.text)
@@ -158,6 +166,7 @@ async function translateEntries(entries: TextNodeEntry[], targetLang: string, ba
               texts,
               source_lang: 'auto',
               target_lang: targetLang,
+              engine,
             },
             resolve,
           )
@@ -180,24 +189,28 @@ async function translateEntries(entries: TextNodeEntry[], targetLang: string, ba
 /**
  * 执行整页沉浸式翻译（分批次打包请求，原地替换）
  */
-export async function translateFullPage(targetLang: string = 'zh-CN', batchSize: number = 30) {
+export async function translateFullPage(
+  targetLang: string = 'zh-CN',
+  engine: string = 'google',
+  batchSize: number = 30,
+) {
   const entries = collectTextNodes(document.body)
   if (entries.length === 0) {
     console.log('[Transly] 未检测到可翻译的文本节点')
-    startDynamicObserver(targetLang)
+    startDynamicObserver(targetLang, engine)
     return
   }
 
   console.log(`[Transly] 收集到 ${entries.length} 个文本节点，开始批量翻译...`)
-  await translateEntries(entries, targetLang, batchSize)
+  await translateEntries(entries, targetLang, engine, batchSize)
   console.log('[Transly] 首屏整页翻译完成，已开启动态增量监听')
-  startDynamicObserver(targetLang)
+  startDynamicObserver(targetLang, engine)
 }
 
 // 监听来自扩展 Popup 或快捷指令的消息
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'START_PAGE_TRANSLATION') {
-    translateFullPage(message.target_lang || 'zh-CN')
+    translateFullPage(message.target_lang || 'zh-CN', message.engine || 'google')
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }))
     return true

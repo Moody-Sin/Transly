@@ -1,0 +1,43 @@
+{
+  "app": {
+    "title": "Transly",
+    "engine": "Engine",
+    "settings": "Settings",
+    "copyToken": "Extension Token",
+    "tokenCopied": "Token Copied"
+  },
+  "translation": {
+    "autoDetect": "Auto Detect",
+    "inputPlaceholder": "Type or paste text to translate...",
+    "outputPlaceholder": "Translation will appear here...",
+    "btnTranslate": "Translate",
+    "translating": "Translating...",
+    "copy": "Copy",
+    "copied": "Copied",
+    "engineSelect": "Engine"
+  },
+  "languages": {
+    "zh-CN": "Simplified Chinese (zh-CN)",
+    "en": "English (en)",
+    "ja": "Japanese (ja)",
+    "ko": "Korean (ko)",
+    "fr": "French (fr)",
+    "de": "German (de)"
+  },
+  "settings": {
+    "title": "Transly Settings & Credentials",
+    "credentialsTitle": "Native OS Credential Store (Never written in plain text)",
+    "deeplKeyLabel": "DeepL API Key (Free & Pro supported):",
+    "deepseekKeyLabel": "DeepSeek API Key:",
+    "btnSaveKeys": "Save to System Vault",
+    "glossaryTitle": "Add Global Glossary Rule",
+    "glossarySourcePlaceholder": "Source term (e.g. LLM)",
+    "glossaryTargetPlaceholder": "Target translation (e.g. Large Language Model)",
+    "btnAddGlossary": "Add Term",
+    "statusSaving": "Saving...",
+    "statusKeysSaved": "Saved securely to system vault!",
+    "statusSaveFailed": "Save failed, check system permissions",
+    "statusGlossaryAdded": "Glossary term added successfully!",
+    "statusGlossaryFailed": "Failed to add term"
+  }
+}

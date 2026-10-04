@@ -32,6 +32,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           texts: message.texts,
           source_lang: message.source_lang,
           target_lang: message.target_lang,
+          engine: message.engine,
         }),
       })
         .then((res) => {

@@ -3,12 +3,20 @@ const btnTranslate = document.getElementById('btn-translate') as HTMLButtonEleme
 const btnRestore = document.getElementById('btn-restore') as HTMLButtonElement
 const inputToken = document.getElementById('input-token') as HTMLInputElement
 const btnSaveToken = document.getElementById('btn-save-token') as HTMLButtonElement
+const selectEngine = document.getElementById('select-engine') as HTMLSelectElement
 
-// 回显已保存的 Token
-chrome.storage.local.get(['transly_server_token'], (res) => {
+// 回显已保存的配置
+chrome.storage.local.get(['transly_server_token', 'transly_engine'], (res) => {
   if (res.transly_server_token) {
     inputToken.value = res.transly_server_token
   }
+  if (res.transly_engine) {
+    selectEngine.value = res.transly_engine
+  }
+})
+
+selectEngine.addEventListener('change', () => {
+  chrome.storage.local.set({ transly_engine: selectEngine.value })
 })
 
 // 保存 Token 并刷新连接
@@ -45,6 +53,7 @@ btnTranslate.addEventListener('click', async () => {
     chrome.tabs.sendMessage(tab.id, {
       type: 'START_PAGE_TRANSLATION',
       target_lang: 'zh-CN',
+      engine: selectEngine.value,
     })
     window.close()
   }

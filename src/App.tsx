@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save } from 'lucide-react'
+import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe } from 'lucide-react'
 import { commands } from './bindings'
+import { getTranslation, Locale } from './i18n'
 
 export default function App() {
+  const [locale, setLocale] = useState<Locale>('zh-CN')
+  const t = getTranslation(locale)
+
   const [sourceText, setSourceText] = useState('')
   const [translatedText, setTranslatedText] = useState('')
   const [targetLang, setTargetLang] = useState('zh-CN')
@@ -46,7 +50,7 @@ export default function App() {
   }
 
   const handleSaveKeys = async () => {
-    setSaveStatus('保存中...')
+    setSaveStatus(t.settings.statusSaving)
     try {
       if (deeplKey.trim()) {
         await commands.saveApiKey('deepl', deeplKey.trim())
@@ -54,10 +58,10 @@ export default function App() {
       if (deepseekKey.trim()) {
         await commands.saveApiKey('deepseek', deepseekKey.trim())
       }
-      setSaveStatus('密钥已保存至系统安全凭据！')
+      setSaveStatus(t.settings.statusKeysSaved)
       setTimeout(() => setSaveStatus(null), 2500)
     } catch {
-      setSaveStatus('保存失败，请检查系统权限')
+      setSaveStatus(t.settings.statusSaveFailed)
     }
   }
 
@@ -67,10 +71,10 @@ export default function App() {
       await commands.addGlossaryTerm(glossarySource.trim(), glossaryTarget.trim())
       setGlossarySource('')
       setGlossaryTarget('')
-      setSaveStatus('术语已添加并生效！')
+      setSaveStatus(t.settings.statusGlossaryAdded)
       setTimeout(() => setSaveStatus(null), 2000)
     } catch {
-      setSaveStatus('术语添加失败')
+      setSaveStatus(t.settings.statusGlossaryFailed)
     }
   }
 
@@ -111,23 +115,31 @@ export default function App() {
           <span className="font-semibold text-slate-800">Transly</span>
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-500">
+          <button
+            onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}
+            className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
+            title="切换语言 / Switch Language"
+          >
+            <Globe className="h-3.5 w-3.5 text-indigo-500" />
+            <span>{locale === 'zh-CN' ? 'EN' : '中文'}</span>
+          </button>
           {serverToken && (
             <button
               onClick={handleCopyToken}
-              title="复制浏览器插件配对 Token"
+              title={t.app.copyToken}
               className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
             >
               <Key className="h-3.5 w-3.5 text-indigo-500" />
-              <span>{tokenCopied ? '已复制 Token' : '插件配对 Token'}</span>
+              <span>{tokenCopied ? t.app.tokenCopied : t.app.copyToken}</span>
             </button>
           )}
           <button
             onClick={() => setShowSettings(true)}
             className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
-            title="设置与密钥配置"
+            title={t.app.settings}
           >
             <Settings className="h-3.5 w-3.5 text-slate-500" />
-            <span>设置</span>
+            <span>{t.app.settings}</span>
           </button>
         </div>
       </header>
@@ -136,24 +148,24 @@ export default function App() {
       <main className="flex flex-1 flex-col p-4 gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-xs font-medium text-slate-500">自动检测</span>
+            <span className="text-xs font-medium text-slate-500">{t.translation.autoDetect}</span>
             <ArrowRight className="h-4 w-4 text-slate-400" />
             <select
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
               className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
             >
-              <option value="zh-CN">简体中文 (zh-CN)</option>
-              <option value="en">英语 (en)</option>
-              <option value="ja">日语 (ja)</option>
-              <option value="ko">韩语 (ko)</option>
-              <option value="fr">法语 (fr)</option>
-              <option value="de">德语 (de)</option>
+              <option value="zh-CN">{t.languages['zh-CN']}</option>
+              <option value="en">{t.languages.en}</option>
+              <option value="ja">{t.languages.ja}</option>
+              <option value="ko">{t.languages.ko}</option>
+              <option value="fr">{t.languages.fr}</option>
+              <option value="de">{t.languages.de}</option>
             </select>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">翻译引擎:</span>
+            <span className="text-xs text-slate-500">{t.translation.engineSelect}:</span>
             <select
               value={engine}
               onChange={(e) => setEngine(e.target.value)}
@@ -172,7 +184,7 @@ export default function App() {
             <textarea
               value={sourceText}
               onChange={(e) => setSourceText(e.target.value)}
-              placeholder="输入或粘贴需要翻译的文本..."
+              placeholder={t.translation.inputPlaceholder}
               className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
             />
             {errorMsg && (
@@ -184,14 +196,14 @@ export default function App() {
                 disabled={isTranslating || !sourceText.trim()}
                 className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
               >
-                {isTranslating ? '翻译中...' : '翻译'}
+                {isTranslating ? t.translation.translating : t.translation.btnTranslate}
               </button>
             </div>
           </div>
 
           <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div className="flex-1 overflow-auto text-sm text-slate-800">
-              {translatedText || <span className="text-slate-400">译文将显示在这里...</span>}
+              {translatedText || <span className="text-slate-400">{t.translation.outputPlaceholder}</span>}
             </div>
             {translatedText && (
               <div className="mt-2 flex justify-end">
@@ -200,7 +212,7 @@ export default function App() {
                   className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
                 >
                   {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span>{copied ? '已复制' : '复制'}</span>
+                  <span>{copied ? t.translation.copied : t.translation.copy}</span>
                 </button>
               </div>
             )}
@@ -214,7 +226,7 @@ export default function App() {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Settings className="h-4 w-4 text-indigo-600" />
-                <h3 className="font-semibold text-slate-800 text-sm">Transly 设置与凭据管理</h3>
+                <h3 className="font-semibold text-slate-800 text-sm">{t.settings.title}</h3>
               </div>
               <button
                 onClick={() => setShowSettings(false)}
@@ -227,9 +239,9 @@ export default function App() {
             <div className="mt-4 flex flex-col gap-4 text-xs">
               {/* API 密钥管理 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <span className="font-medium text-slate-700">系统原生安全凭据托管 (密钥绝不落盘明文)</span>
+                <span className="font-medium text-slate-700">{t.settings.credentialsTitle}</span>
                 <div>
-                  <label className="text-slate-500 mb-1 block">DeepL API Key (支持 Free 与 Pro):</label>
+                  <label className="text-slate-500 mb-1 block">{t.settings.deeplKeyLabel}</label>
                   <input
                     type="password"
                     value={deeplKey}
@@ -239,7 +251,7 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <label className="text-slate-500 mb-1 block">DeepSeek API Key:</label>
+                  <label className="text-slate-500 mb-1 block">{t.settings.deepseekKeyLabel}</label>
                   <input
                     type="password"
                     value={deepseekKey}
@@ -254,27 +266,27 @@ export default function App() {
                     className="flex items-center gap-1 rounded bg-indigo-600 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-indigo-700"
                   >
                     <Save className="h-3.5 w-3.5" />
-                    <span>保存密钥到系统凭据库</span>
+                    <span>{t.settings.btnSaveKeys}</span>
                   </button>
                 </div>
               </div>
 
               {/* 术语库管理 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <span className="font-medium text-slate-700">添加全局术语库规则</span>
+                <span className="font-medium text-slate-700">{t.settings.glossaryTitle}</span>
                 <div className="grid grid-cols-2 gap-2">
                   <input
                     type="text"
                     value={glossarySource}
                     onChange={(e) => setGlossarySource(e.target.value)}
-                    placeholder="源术语 (如: LLM)"
+                    placeholder={t.settings.glossarySourcePlaceholder}
                     className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                   <input
                     type="text"
                     value={glossaryTarget}
                     onChange={(e) => setGlossaryTarget(e.target.value)}
-                    placeholder="目标译文 (如: 大语言模型)"
+                    placeholder={t.settings.glossaryTargetPlaceholder}
                     className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -284,7 +296,7 @@ export default function App() {
                     disabled={!glossarySource.trim() || !glossaryTarget.trim()}
                     className="rounded bg-slate-800 px-3 py-1.5 font-medium text-white shadow-sm hover:bg-slate-900 disabled:opacity-40"
                   >
-                    添加术语
+                    {t.settings.btnAddGlossary}
                   </button>
                 </div>
               </div>

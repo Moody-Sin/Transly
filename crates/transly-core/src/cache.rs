@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
@@ -52,6 +52,16 @@ impl TranslationCache {
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    pub fn default_shared() -> Arc<Self> {
+        let cache = dirs_cache_path()
+            .and_then(|p| Self::new(p).ok())
+            .or_else(|| Self::in_memory().ok())
+            .unwrap_or_else(|| Self {
+                conn: Mutex::new(Connection::open_in_memory().unwrap()),
+            });
+        Arc::new(cache)
     }
 
     fn generate_key(text: &str, source_lang: &str, target_lang: &str, engine: &str) -> String {
@@ -121,6 +131,23 @@ impl TranslationCache {
 
         Ok(())
     }
+}
+
+fn dirs_cache_path() -> Option<std::path::PathBuf> {
+    // 优先读取用户应用数据目录
+    #[cfg(target_os = "windows")]
+    let base = std::env::var_os("APPDATA")?;
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))?;
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let base = std::env::var_os("XDG_DATA_HOME").or_else(|| {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+    })?;
+
+    let dir = std::path::PathBuf::from(base).join("Transly");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("cache.db"))
 }
 
 #[cfg(test)]

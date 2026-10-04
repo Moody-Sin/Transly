@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### 新增
+- 串联 SQLite 持久化缓存至桌面端 IPC 命令与本地 HTTP 服务，支持自动查存与批量异步回写。
 - 引入 `GoogleWebEngine` 免费网页翻译实现，接入核心翻译抽象层。
 - 本地扩展通信 HTTP 服务新增 Bearer Token 鉴权中间件与 `/translate` 批量接口。
 - 浏览器插件后台通信脚本接入 Token 自动携带机制与批量翻译转发。

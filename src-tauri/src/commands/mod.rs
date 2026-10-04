@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use transly_core::{
-    detect::detect_language, engine::GoogleWebEngine, TranslateEngine, TranslationRequest,
+    detect::detect_language, engine::GoogleWebEngine, TranslateEngine, TranslationCache,
+    TranslationRequest,
 };
 
 // 预初始化全局引擎实例
@@ -13,17 +14,30 @@ pub async fn translate(
     text: String,
     source_lang: Option<String>,
     target_lang: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<String, String> {
     let engine = get_engine();
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
+    let engine_id = engine.id();
+
+    // 1. 优先查缓存
+    if let Ok(Some(cached_text)) = cache.get(&text, &sl, &target_lang, engine_id) {
+        return Ok(cached_text);
+    }
+
+    // 2. 缓存未命中，调用引擎翻译
     let req = TranslationRequest {
-        text,
-        source_lang: sl,
-        target_lang,
+        text: text.clone(),
+        source_lang: sl.clone(),
+        target_lang: target_lang.clone(),
     };
 
     match engine.translate(&req).await {
-        Ok(res) => Ok(res.text),
+        Ok(res) => {
+            // 3. 异步写入缓存
+            let _ = cache.set(&text, &res.text, &sl, &target_lang, engine_id);
+            Ok(res.text)
+        }
         Err(e) => Err(e.to_string()),
     }
 }

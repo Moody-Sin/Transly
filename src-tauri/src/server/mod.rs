@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use transly_core::{GoogleWebEngine, TranslateEngine, TranslationRequest};
+use transly_core::{GoogleWebEngine, TranslateEngine, TranslationCache, TranslationRequest};
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -34,12 +34,14 @@ pub struct TranslateBatchResponse {
 pub struct ServerState {
     pub token: Arc<String>,
     pub engine: Arc<dyn TranslateEngine>,
+    pub cache: Arc<TranslationCache>,
 }
 
-pub fn create_router(token: String) -> Router {
+pub fn create_router(token: String, cache: Arc<TranslationCache>) -> Router {
     let state = ServerState {
         token: Arc::new(token),
         engine: Arc::new(GoogleWebEngine::new()),
+        cache,
     };
 
     let protected = Router::new()
@@ -92,30 +94,55 @@ async fn translate_batch_handler(
 ) -> Result<Json<TranslateBatchResponse>, StatusCode> {
     let target = payload.target_lang;
     let source = payload.source_lang.unwrap_or_else(|| "auto".to_string());
+    let engine_id = state.engine.id();
 
-    let requests: Vec<TranslationRequest> = payload
-        .texts
-        .into_iter()
-        .map(|text| TranslationRequest {
-            text,
-            source_lang: source.clone(),
-            target_lang: target.clone(),
-        })
-        .collect();
+    let mut translations = Vec::with_capacity(payload.texts.len());
+    let mut missing_indices = Vec::new();
+    let mut missing_requests = Vec::new();
 
-    match state.engine.translate_batch(&requests).await {
-        Ok(results) => {
-            let translations = results.into_iter().map(|r| r.text).collect();
-            Ok(Json(TranslateBatchResponse { translations }))
+    // 1. 优先查缓存
+    for (idx, text) in payload.texts.iter().enumerate() {
+        if let Ok(Some(cached_text)) = state.cache.get(text, &source, &target, engine_id) {
+            translations.push(cached_text);
+        } else {
+            translations.push(String::new()); // 占位
+            missing_indices.push(idx);
+            missing_requests.push(TranslationRequest {
+                text: text.clone(),
+                source_lang: source.clone(),
+                target_lang: target.clone(),
+            });
         }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+
+    // 2. 对未命中缓存的项发起批量引擎翻译并写回缓存
+    if !missing_requests.is_empty() {
+        match state.engine.translate_batch(&missing_requests).await {
+            Ok(results) => {
+                for (req_idx, res) in results.into_iter().enumerate() {
+                    let original_idx = missing_indices[req_idx];
+                    let original_text = &payload.texts[original_idx];
+                    let _ = state
+                        .cache
+                        .set(original_text, &res.text, &source, &target, engine_id);
+                    translations[original_idx] = res.text;
+                }
+            }
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    }
+
+    Ok(Json(TranslateBatchResponse { translations }))
 }
 
-pub async fn start_server(port: u16, token: String) -> anyhow::Result<()> {
+pub async fn start_server(
+    port: u16,
+    token: String,
+    cache: Arc<TranslationCache>,
+) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, create_router(token)).await?;
+    axum::serve(listener, create_router(token, cache)).await?;
     Ok(())
 }
 
@@ -128,7 +155,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let app = create_router("test-token".to_string());
+        let cache = TranslationCache::in_memory().unwrap();
+        let app = create_router("test-token".to_string(), Arc::new(cache));
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
@@ -140,7 +168,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_translate_unauthorized() {
-        let app = create_router("valid-token".to_string());
+        let cache = TranslationCache::in_memory().unwrap();
+        let app = create_router("valid-token".to_string(), Arc::new(cache));
         let req = Request::builder()
             .method("POST")
             .uri("/translate")
@@ -175,9 +204,11 @@ mod tests {
             }
         }
 
+        let cache = Arc::new(TranslationCache::in_memory().unwrap());
         let state = ServerState {
             token: Arc::new("valid-token".to_string()),
             engine: Arc::new(MockEngine),
+            cache: cache.clone(),
         };
 
         let app = Router::new()
@@ -204,5 +235,9 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(resp.translations, vec!["[zh-CN] hello"]);
+
+        // 验证翻译结果已自动写入缓存
+        let cached = cache.get("hello", "auto", "zh-CN", "mock").unwrap();
+        assert_eq!(cached, Some("[zh-CN] hello".to_string()));
     }
 }

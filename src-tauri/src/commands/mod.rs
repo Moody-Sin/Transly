@@ -1,13 +1,7 @@
 use std::sync::Arc;
 use transly_core::{
-    detect::detect_language, engine::GoogleWebEngine, TranslateEngine, TranslationCache,
-    TranslationRequest,
+    detect::detect_language, TranslateEngine, TranslationCache, TranslationRequest,
 };
-
-// 预初始化全局引擎实例
-fn get_engine() -> Arc<dyn TranslateEngine> {
-    Arc::new(GoogleWebEngine::new())
-}
 
 #[tauri::command]
 #[specta::specta]
@@ -16,8 +10,8 @@ pub async fn translate(
     source_lang: Option<String>,
     target_lang: String,
     cache: tauri::State<'_, Arc<TranslationCache>>,
+    engine: tauri::State<'_, Arc<dyn TranslateEngine>>,
 ) -> Result<String, String> {
-    let engine = get_engine();
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
     let engine_id = engine.id();
 

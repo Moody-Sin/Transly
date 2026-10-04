@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v3
         with:
           version: 9
@@ -38,8 +39,16 @@ jobs:
         with:
           node-version: 20
           cache: 'pnpm'
-      - name: 安装依赖
+      - name: Rust 系统依赖（用于生成 bindings）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: 安装前端依赖
         run: pnpm install
+      - name: 校验 Specta 类型绑定同步
+        run: |
+          pnpm run generate:bindings
+          git diff --exit-code src/bindings.ts
       - name: 桌面端构建校验
         run: pnpm run build
       - name: 浏览器插件构建校验

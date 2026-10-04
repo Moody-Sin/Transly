@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Languages, ArrowRight, Copy, Check } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Languages, ArrowRight, Copy, Check, Key } from 'lucide-react'
 import { commands } from './bindings'
 
 export default function App() {
@@ -9,6 +9,24 @@ export default function App() {
   const [isTranslating, setIsTranslating] = useState(false)
   const [copied, setCopied] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [serverToken, setServerToken] = useState<string>('')
+  const [tokenCopied, setTokenCopied] = useState(false)
+
+  useEffect(() => {
+    // 获取本地服务器 Token 供插件端授权配对
+    commands.getServerToken().then((res) => {
+      if (res.status === 'ok') {
+        setServerToken(res.data)
+      }
+    }).catch(() => {})
+  }, [])
+
+  const handleCopyToken = () => {
+    if (!serverToken) return
+    navigator.clipboard.writeText(serverToken)
+    setTokenCopied(true)
+    setTimeout(() => setTokenCopied(false), 2000)
+  }
 
   const handleTranslate = async () => {
     if (!sourceText.trim()) return
@@ -46,7 +64,17 @@ export default function App() {
           <Languages className="h-5 w-5 text-indigo-600" />
           <span className="font-semibold text-slate-800">Transly</span>
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
+        <div className="flex items-center gap-3 text-xs text-slate-500">
+          {serverToken && (
+            <button
+              onClick={handleCopyToken}
+              title="复制浏览器插件配对 Token"
+              className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
+            >
+              <Key className="h-3.5 w-3.5 text-indigo-500" />
+              <span>{tokenCopied ? '已复制 Token' : '插件配对 Token'}</span>
+            </button>
+          )}
           <span>引擎: 默认</span>
         </div>
       </header>

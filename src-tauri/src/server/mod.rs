@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use transly_core::{GoogleWebEngine, TranslateEngine, TranslationCache, TranslationRequest};
+use transly_core::{TranslateEngine, TranslationCache, TranslationRequest};
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -37,10 +37,14 @@ pub struct ServerState {
     pub cache: Arc<TranslationCache>,
 }
 
-pub fn create_router(token: String, cache: Arc<TranslationCache>) -> Router {
+pub fn create_router(
+    token: String,
+    cache: Arc<TranslationCache>,
+    engine: Arc<dyn TranslateEngine>,
+) -> Router {
     let state = ServerState {
         token: Arc::new(token),
-        engine: Arc::new(GoogleWebEngine::new()),
+        engine,
         cache,
     };
 
@@ -139,10 +143,11 @@ pub async fn start_server(
     port: u16,
     token: String,
     cache: Arc<TranslationCache>,
+    engine: Arc<dyn TranslateEngine>,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, create_router(token, cache)).await?;
+    axum::serve(listener, create_router(token, cache, engine)).await?;
     Ok(())
 }
 
@@ -152,11 +157,13 @@ mod tests {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use tower::util::ServiceExt;
+    use transly_core::GoogleWebEngine;
 
     #[tokio::test]
     async fn test_health_check() {
         let cache = TranslationCache::in_memory().unwrap();
-        let app = create_router("test-token".to_string(), Arc::new(cache));
+        let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+        let app = create_router("test-token".to_string(), Arc::new(cache), engine);
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
@@ -169,7 +176,8 @@ mod tests {
     #[tokio::test]
     async fn test_translate_unauthorized() {
         let cache = TranslationCache::in_memory().unwrap();
-        let app = create_router("valid-token".to_string(), Arc::new(cache));
+        let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
+        let app = create_router("valid-token".to_string(), Arc::new(cache), engine);
         let req = Request::builder()
             .method("POST")
             .uri("/translate")

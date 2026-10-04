@@ -49,6 +49,29 @@
     .btn-secondary:hover {
       background: #cbd5e1;
     }
+    .token-box {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed #cbd5e1;
+    }
+    .token-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      font-size: 11px;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      outline: none;
+      margin-bottom: 6px;
+      background: #ffffff;
+    }
+    .token-input:focus {
+      border-color: #4f46e5;
+    }
+    .btn-sm {
+      padding: 4px 0;
+      font-size: 11px;
+    }
   </style>
 </head>
 <body>
@@ -58,6 +81,11 @@
   </div>
   <button id="btn-translate" class="btn btn-primary">翻译此网页 (仅译文)</button>
   <button id="btn-restore" class="btn btn-secondary">还原原文</button>
+
+  <div class="token-box">
+    <input type="password" id="input-token" class="token-input" placeholder="粘贴桌面端配对 Token" />
+    <button id="btn-save-token" class="btn btn-secondary btn-sm">保存配对 Token</button>
+  </div>
 
   <script src="popup.js"></script>
 </body>

@@ -3,12 +3,16 @@
 
 use specta_typescript::Typescript;
 use src_tauri::{commands, secrets, server};
+use std::sync::Arc;
 use tauri_specta::{collect_commands, Builder};
-use transly_core::TranslationCache;
+use transly_core::{GoogleWebEngine, TranslateEngine, TranslationCache};
 
 fn main() {
     // 初始化持久化翻译缓存
     let cache = TranslationCache::default_shared();
+
+    // 初始化全局共享翻译引擎（保持 HTTP Client 连接池长连接）
+    let engine: Arc<dyn TranslateEngine> = Arc::new(GoogleWebEngine::new());
 
     // 获取或生成用于本地扩展通信的 Bearer Token
     let token = secrets::get_or_create_server_token()
@@ -17,8 +21,10 @@ fn main() {
     // 异步启动本地插件通信服务
     let token_clone = token.clone();
     let server_cache = cache.clone();
+    let server_engine = engine.clone();
     tokio::spawn(async move {
-        if let Err(e) = server::start_server(39281, token_clone, server_cache).await {
+        if let Err(e) = server::start_server(39281, token_clone, server_cache, server_engine).await
+        {
             eprintln!("本地 HTTP 服务启动失败: {e}");
         }
     });
@@ -39,6 +45,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(cache)
+        .manage(engine)
         .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

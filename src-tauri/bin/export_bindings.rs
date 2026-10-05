@@ -7,6 +7,7 @@ fn main() {
         commands::translate,
         commands::get_engine_capabilities,
         commands::set_float_sticky,
+        commands::take_pending_float_request,
         commands::detect_lang,
         commands::get_server_token,
         commands::rotate_server_token,

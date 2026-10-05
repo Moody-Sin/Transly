@@ -271,16 +271,75 @@ pub async fn ocr_image(
     }
 }
 
+/// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示
+#[derive(Clone, serde::Serialize)]
+pub struct FloatRequest {
+    pub text: String,
+    /// "selection" = 全局快捷键划词；"clipboard" = 系统剪贴板监听
+    pub source: &'static str,
+    /// 宿主单调递增；同一 ID 只翻译一次
+    pub request_id: u64,
+}
+
+/// 暂存最近一次浮窗请求。
+///
+/// 浮窗 `visible: false` 时 Tauri 仍创建 webview，但页面 JS 尚未加载完成；
+/// 此时 `emit` 的事件无人接收且不会重放。因此宿主先暂存，浮窗就绪后主动拉取，
+/// 从根上消除 emit 时序竞态。
+#[derive(Default)]
+pub struct PendingFloatRequest(pub std::sync::Mutex<Option<FloatRequest>>);
+
+/// 浮窗粘滞标志。必须用独立新类型：Tauri 按 TypeId 存 state，
+/// 若与 `clipboard_monitor_enabled` 同为 `Arc<AtomicBool>` 会 panic（重复 manage）
+#[derive(Debug, Default)]
+pub struct FloatSticky(pub std::sync::atomic::AtomicBool);
+
 /// 设置浮窗粘滞：翻译中/错误态时为 true，浮窗不失焦自动隐藏，
 /// 保证错误提示与重试按钮来得及被用户看到并点击
 #[tauri::command]
 #[specta::specta]
 pub fn set_float_sticky(
     enabled: bool,
-    sticky: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    sticky: tauri::State<'_, Arc<FloatSticky>>,
 ) -> Result<(), String> {
-    sticky.store(enabled, std::sync::atomic::Ordering::SeqCst);
+    sticky.0.store(enabled, std::sync::atomic::Ordering::SeqCst);
     Ok(())
+}
+
+/// 浮窗拉取待处理请求。`has_request: false` 表示无待处理请求。
+/// 用扁平字段而非 `Option<FloatRequest>`：specta 不支持嵌套 Option 作为 IPC 返回类型。
+#[tauri::command]
+#[specta::specta]
+pub fn take_pending_float_request(
+    pending: tauri::State<'_, Arc<PendingFloatRequest>>,
+) -> Result<PendingFloatResponse, String> {
+    let mut slot = pending
+        .0
+        .lock()
+        .map_err(|e| format!("读取待处理浮窗请求失败: {e}"))?;
+    Ok(match slot.take() {
+        Some(req) => PendingFloatResponse {
+            has_request: true,
+            text: req.text,
+            source: req.source.to_string(),
+            request_id: req.request_id as u32,
+        },
+        None => PendingFloatResponse {
+            has_request: false,
+            text: String::new(),
+            source: String::new(),
+            request_id: 0,
+        },
+    })
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct PendingFloatResponse {
+    pub has_request: bool,
+    pub text: String,
+    pub source: String,
+    /// u32 而非 u64：specta 禁止导出 BigInt 类型以避免 JS 精度丢失
+    pub request_id: u32,
 }
 
 #[tauri::command]

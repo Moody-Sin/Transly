@@ -11,6 +11,11 @@ export const commands = {
 	 *  保证错误提示与重试按钮来得及被用户看到并点击
 	 */
 	setFloatSticky: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_float_sticky", { enabled })),
+	/**
+	 *  浮窗拉取待处理请求。`has_request: false` 表示无待处理请求。
+	 *  用扁平字段而非 `Option<FloatRequest>`：specta 不支持嵌套 Option 作为 IPC 返回类型。
+	 */
+	takePendingFloatRequest: () => typedError<PendingFloatResponse, string>(__TAURI_INVOKE("take_pending_float_request")),
 	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
 	rotateServerToken: () => typedError<string, string>(__TAURI_INVOKE("rotate_server_token")),
@@ -39,6 +44,14 @@ export type EngineCapabilitiesDto = {
 };
 
 export type ErrorKind = "input" | "config" | "auth" | "network" | "engine" | "timeout" | "cancelled" | "internal";
+
+export type PendingFloatResponse = {
+	has_request: boolean,
+	text: string,
+	source: string,
+	/**  u32 而非 u64：specta 禁止导出 BigInt 类型以避免 JS 精度丢失 */
+	request_id: number,
+};
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */
 export type TranslateErrorDto = {

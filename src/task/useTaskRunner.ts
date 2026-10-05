@@ -137,16 +137,29 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     setSnapshot(EMPTY)
   }, [clearDebounce])
 
-  // 订阅划词 / 剪贴板事件：按 request_id 去重，同一段文本只翻译一次
+  // 订阅划词 / 剪贴板事件：按 request_id 去重，同一段文本只翻译一次。
+  // 浮窗首次显示前页面 JS 尚未就绪，emit 的事件会永久丢失；
+  // 因此宿主会暂存最近一次请求，浮窗就绪后主动拉取一次兜底。
   useEffect(() => {
     let unlisten: (() => void) | undefined
-    listen<FloatRequest>('float-translate', (event) => {
-      const payload = event.payload
+    const handle = (payload: FloatRequest | null) => {
       if (!payload?.text?.trim()) return
       if (seenFloatIdsRef.current.has(payload.request_id)) return
       seenFloatIdsRef.current.add(payload.request_id)
       run(payload.text, { source: payload.source })
-    }).then((fn) => { unlisten = fn }).catch(() => {})
+    }
+    listen<FloatRequest>('float-translate', (event) => handle(event.payload))
+      .then((fn) => { unlisten = fn })
+      .catch(() => {})
+    // 兜底：拉取宿主暂存的请求（浮窗首次就绪前的 emit 会丢失）
+    commands.takePendingFloatRequest().then((res) => {
+      if (res.status !== 'ok' || !res.data.has_request) return
+      handle({
+        text: res.data.text,
+        source: res.data.source as FloatRequest['source'],
+        request_id: res.data.request_id,
+      })
+    }).catch(() => {})
     return () => { if (unlisten) unlisten() }
   }, [run])
 

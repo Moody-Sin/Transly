@@ -18,16 +18,6 @@ use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
 use transly_core::{AppConfig, Glossary, SystemOcrEngine, TranslationCache};
 
-/// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示
-#[derive(Clone, serde::Serialize)]
-pub struct FloatRequest {
-    pub text: String,
-    /// "selection" = 全局快捷键划词；"clipboard" = 系统剪贴板监听
-    pub source: &'static str,
-    /// 宿主单调递增；同一 ID 只翻译一次
-    pub request_id: u64,
-}
-
 fn main() {
     let config = AppConfig::default();
 
@@ -49,7 +39,6 @@ fn main() {
 
     // 初始化全局共享引擎池（长连接复用）
     let pool = Arc::new(EnginePool::new());
-
     // 获取或生成用于本地扩展通信的 Bearer Token（失败则不启动服务，杜绝固定 Token 降级）
     let token = match secrets::get_or_create_server_token() {
         Ok(t) => Some(Arc::new(RwLock::new(t))),
@@ -63,6 +52,7 @@ fn main() {
         commands::translate,
         commands::get_engine_capabilities,
         commands::set_float_sticky,
+        commands::take_pending_float_request,
         commands::detect_lang,
         commands::get_server_token,
         commands::rotate_server_token,
@@ -97,10 +87,10 @@ fn main() {
     let monitor_flag = clipboard_monitor_enabled.clone();
 
     // 划词自触发抑制标志与跨入口请求 ID 计数器
+    // 注意：selection_flag 不可 .manage()，Tauri 按 TypeId 存 state，
+    // 与 clipboard_monitor_enabled 同为 Arc<AtomicBool> 会 panic
     let selection_flag = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
-    // 浮窗粘滞标志：翻译中/错误态时禁止失焦自动隐藏
-    let float_sticky = Arc::new(AtomicBool::new(false));
 
     // 缓存状态协调器（从系统凭据读取初始开关，纳入 generation 版本控制）
     let initial_cache_enabled = secrets::get_secret("cache_enabled")
@@ -127,11 +117,15 @@ fn main() {
         .manage(ocr_engine)
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
-        .manage(selection_flag.clone())
-        .manage(float_sticky.clone())
+        .manage(Arc::new(commands::FloatSticky::default()))
+        .manage(Arc::new(commands::PendingFloatRequest::default()))
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
+            let pending_slot = app
+                .state::<Arc<commands::PendingFloatRequest>>()
+                .inner()
+                .clone();
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
             if let Some(token_val) = server_token {
                 tauri::async_runtime::spawn(async move {
@@ -161,6 +155,7 @@ fn main() {
                             let handle = app_handle.clone();
                             let sel_flag = sel_flag.clone();
                             let counter = counter.clone();
+                            let pending_slot = pending_slot.clone();
                             tauri::async_runtime::spawn(async move {
                                 // 0. 备份旧剪贴板内容
                                 let old_clipboard = handle.clipboard().read_text().ok();
@@ -187,17 +182,22 @@ fn main() {
                                 let text = handle.clipboard().read_text().unwrap_or_default();
                                 if !text.trim().is_empty() {
                                     let rid = counter.fetch_add(1, Ordering::SeqCst);
+                                    let req = commands::FloatRequest {
+                                        text,
+                                        source: "selection",
+                                        request_id: rid,
+                                    };
+                                    // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
+                                    if let Ok(mut slot) = pending_slot.0.lock() {
+                                        *slot = Some(req.clone());
+                                    }
                                     if let Some(float_win) = handle.get_webview_window("float") {
                                         let _ = float_win.show();
                                         let _ = float_win.set_focus();
-                                        let _ = float_win.emit(
-                                            "float-translate",
-                                            FloatRequest {
-                                                text,
-                                                source: "selection",
-                                                request_id: rid,
-                                            },
-                                        );
+                                        // 浮窗首次显示才加载页面；等页面就绪并注册监听后再投递
+                                        tokio::time::sleep(std::time::Duration::from_millis(400))
+                                            .await;
+                                        let _ = float_win.emit("float-translate", req);
                                     }
                                 }
 
@@ -217,6 +217,10 @@ fn main() {
             let flag = monitor_flag.clone();
             let clip_sel_flag = selection_flag.clone();
             let clip_counter = request_counter.clone();
+            let clip_pending = app
+                .state::<Arc<commands::PendingFloatRequest>>()
+                .inner()
+                .clone();
             tauri::async_runtime::spawn(async move {
                 let last_clipboard = std::sync::Mutex::new(String::new());
                 loop {
@@ -236,16 +240,21 @@ fn main() {
                         continue;
                     }
                     let rid = clip_counter.fetch_add(1, Ordering::SeqCst);
+                    let req = commands::FloatRequest {
+                        text: curr.trim().to_string(),
+                        source: "clipboard",
+                        request_id: rid,
+                    };
+                    // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
+                    if let Ok(mut slot) = clip_pending.0.lock() {
+                        *slot = Some(req.clone());
+                    }
                     if let Some(float_win) = clip_handle.get_webview_window("float") {
                         let _ = float_win.show();
-                        let _ = float_win.emit(
-                            "float-translate",
-                            FloatRequest {
-                                text: curr.trim().to_string(),
-                                source: "clipboard",
-                                request_id: rid,
-                            },
-                        );
+                        let _ = float_win.set_focus();
+                        // 浮窗首次显示才加载页面；等页面就绪并注册监听后再投递
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        let _ = float_win.emit("float-translate", req);
                     }
                 }
             });
@@ -290,8 +299,7 @@ fn main() {
 
             Ok(())
         })
-        .on_window_event(move |window, event| {
-            let float_sticky = float_sticky.clone();
+        .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // 点击关闭按钮时隐藏窗口常驻托盘，不中断后台服务
                 api.prevent_close();
@@ -299,7 +307,11 @@ fn main() {
             } else if let WindowEvent::Focused(false) = event {
                 // 悬浮迷你窗在失去焦点时自动隐藏收起；但翻译中/错误态下粘滞，
                 // 否则错误提示与重试按钮来不及点击
-                if window.label() == "float" && !float_sticky.load(Ordering::SeqCst) {
+                let is_sticky = window
+                    .state::<Arc<commands::FloatSticky>>()
+                    .0
+                    .load(Ordering::SeqCst);
+                if window.label() == "float" && !is_sticky {
                     let _ = window.hide();
                 }
             }

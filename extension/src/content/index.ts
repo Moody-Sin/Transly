@@ -128,6 +128,9 @@ let currentEngine = 'google'
 
 // 任务版本号协调机制：杜绝请求跨越“还原原文”或“重新翻译”边界时写回污染
 let currentGeneration = 0
+let currentTaskEntries: TextNodeEntry[] = []
+let currentTaskTotal = 0
+let currentTaskCompleted = 0
 
 /**
  * 启动动态增量监听（针对 SPA 单页或瀑布流懒加载内容，监听 childList 与 characterData）
@@ -182,6 +185,8 @@ export function startDynamicObserver(
           if (document.body.contains(root)) {
             const entries = collectTextNodes(root)
             if (entries.length > 0) {
+              currentTaskEntries.push(...entries)
+              currentTaskTotal += entries.length
               await translateEntries(entries, currentTargetLang, currentEngine, 30, generation)
             }
           }
@@ -223,9 +228,8 @@ async function translateEntries(
   batchSize: number = 30,
   expectedGen: number = currentGeneration,
 ) {
-  const totalNodes = entries.length
-  const totalBatches = Math.ceil(totalNodes / batchSize)
-  let completedNodes = 0
+  const requestTotalNodes = entries.length
+  const totalBatches = Math.ceil(requestTotalNodes / batchSize)
   let failedBatches = 0
 
   for (let i = 0; i < entries.length; i += batchSize) {
@@ -280,7 +284,7 @@ async function translateEntries(
             if (itemRes && itemRes.status === 'success' && itemRes.text) {
               replaceTextNode(entry.node, itemRes.text)
               failedItemsMap.delete(entry.id)
-              completedNodes += 1
+              currentTaskCompleted += 1
             } else {
               // 失败项：保留当前 TextNode 原文不变，记录至 failedItemsMap
               failedItemsMap.set(entry.id, {
@@ -296,7 +300,7 @@ async function translateEntries(
               if (translated && translated !== batch[idx].text) {
                 replaceTextNode(batch[idx].node, translated)
                 failedItemsMap.delete(batch[idx].id)
-                completedNodes += 1
+                currentTaskCompleted += 1
               } else {
                 failedItemsMap.set(batch[idx].id, { ...batch[idx] })
               }
@@ -322,8 +326,8 @@ async function translateEntries(
       chrome.runtime.sendMessage({
         type: 'TRANSLATION_PROGRESS',
         generation: expectedGen,
-        completed: completedNodes,
-        total: totalNodes,
+        completed: currentTaskCompleted,
+        total: currentTaskTotal,
         failedBatches,
         totalBatches,
         failedCount: failedItemsMap.size,
@@ -332,8 +336,8 @@ async function translateEntries(
   }
 
   if (expectedGen === currentGeneration) {
-    const isTotalFailed = completedNodes === 0 && totalNodes > 0
-    const isPartialFailed = failedItemsMap.size > 0 && completedNodes > 0
+    const isTotalFailed = currentTaskCompleted === 0 && currentTaskTotal > 0
+    const isPartialFailed = failedItemsMap.size > 0 && currentTaskCompleted > 0
     chrome.runtime.sendMessage({
       type: isTotalFailed
         ? 'TRANSLATION_FAILED'
@@ -341,8 +345,8 @@ async function translateEntries(
           ? 'TRANSLATION_PARTIAL_FAILED'
           : 'TRANSLATION_FINISHED',
       generation: expectedGen,
-      completed: completedNodes,
-      total: totalNodes,
+      completed: currentTaskCompleted,
+      total: currentTaskTotal,
       failedBatches,
       failedCount: failedItemsMap.size,
     }).catch(() => {})
@@ -360,11 +364,19 @@ async function retryFailedTranslations() {
 }
 
 function cancelTranslation() {
+  // 先冻结当前任务中尚未成功应用的节点，再递增代际丢弃迟到响应
+  for (const entry of currentTaskEntries) {
+    if (!translatedTextSet.has(entry.node) && document.body.contains(entry.node)) {
+      failedItemsMap.set(entry.id, { ...entry, errorKind: 'cancelled' })
+    }
+  }
   currentGeneration += 1
   stopDynamicObserver()
   chrome.runtime.sendMessage({
     type: 'TRANSLATION_CANCELLED',
     generation: currentGeneration,
+    completed: currentTaskCompleted,
+    total: currentTaskTotal,
     failedCount: failedItemsMap.size,
   }).catch(() => {})
 }
@@ -381,11 +393,13 @@ export async function translateFullPage(
   currentGeneration += 1
   const taskGeneration = currentGeneration
   failedItemsMap.clear()
-
-  // 若存在先前动态监听器，先停止
+  currentTaskEntries = collectTextNodes(document.body)
   stopDynamicObserver()
 
-  const entries = collectTextNodes(document.body)
+  const entries = currentTaskEntries
+  currentTaskTotal = entries.length
+  currentTaskCompleted = 0
+
   if (entries.length === 0) {
     console.log('[Transly] 未检测到可翻译的文本节点')
     chrome.runtime.sendMessage({
@@ -441,6 +455,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // 递增任务版本号，彻底废弃所有在途异步批次响应写回
     currentGeneration += 1
     failedItemsMap.clear()
+    currentTaskEntries = []
+    currentTaskTotal = 0
+    currentTaskCompleted = 0
     stopDynamicObserver()
     restoreOriginalText()
     chrome.runtime.sendMessage({

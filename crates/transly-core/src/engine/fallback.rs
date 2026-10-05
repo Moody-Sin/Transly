@@ -140,7 +140,6 @@ mod tests {
         assert!(caps.name.contains("容灾降级"));
     }
 
-
     #[tokio::test]
     async fn test_primary_used_when_successful() {
         let primary = Arc::new(SuccessEngine("primary"));

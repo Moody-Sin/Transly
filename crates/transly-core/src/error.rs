@@ -69,7 +69,6 @@ impl Error {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,4 +94,3 @@ mod tests {
         assert_eq!(err_cancelled.kind(), ErrorKind::Cancelled);
     }
 }
-

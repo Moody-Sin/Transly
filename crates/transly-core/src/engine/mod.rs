@@ -38,7 +38,6 @@ impl TranslationResponse {
     }
 }
 
-
 /// 批量翻译中单项请求契约（保证输入与输出具备稳定映射）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchItemRequest {
@@ -152,4 +151,3 @@ mod tests {
         assert!(json_failed.contains(r#""error_kind":"timeout""#));
     }
 }
-

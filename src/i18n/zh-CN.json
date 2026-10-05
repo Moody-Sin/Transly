@@ -16,7 +16,17 @@
     "copied": "已复制",
     "engineSelect": "翻译引擎",
     "maxBatch": "单批上限 ",
-    "apiKeyRequired": "需配置密钥"
+    "apiKeyRequired": "需配置密钥",
+    "btnOcrPaste": "识别剪贴板图片",
+    "ocrRunning": "正在识图中..."
+  },
+  "ocrError": {
+    "no_image": "剪贴板中未找到图片，请先截图或复制图片",
+    "no_language_pack": "系统未安装 OCR 语言包，请在 Windows 设置中安装",
+    "empty_text": "未能从图片中识别到有效文字",
+    "dimension_exceeded": "图片尺寸过大，无法处理",
+    "unsupported_platform": "当前操作系统暂未支持图片识别",
+    "internal": "图片识别内部异常，请重试"
   },
   "float": {
     "title": "Transly 快捷划词",

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe } from 'lucide-react'
+import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe, Image as ImageIcon } from 'lucide-react'
 import { commands } from './bindings'
 import type { EngineCapabilitiesDto } from './bindings'
 import { getTranslation, Locale } from './i18n'
@@ -32,6 +32,8 @@ export default function App() {
   const [glossaryList, setGlossaryList] = useState<[string, string][]>([])
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
   const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrError, setOcrError] = useState<string | null>(null)
 
   const isFloatWindow = window.location.hash === '#float'
 
@@ -196,6 +198,27 @@ export default function App() {
     navigator.clipboard.writeText(translatedText)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleOcrClipboard = async () => {
+    setOcrLoading(true)
+    setOcrError(null)
+    try {
+      const res = await commands.ocrClipboardImage(targetLang)
+      if (res.status === 'ok') {
+        const text = res.data.trim()
+        setSourceText(text)
+        // debounceMs: 0 立即投递统一任务状态机，秒级出译文
+        runner.run(text, { source: 'clipboard', debounceMs: 0 })
+      } else {
+        const errMap = (t as unknown as { ocrError?: Record<string, string> }).ocrError || {}
+        setOcrError(errMap[res.error.kind] || res.error.message)
+      }
+    } catch (e) {
+      setOcrError(String(e))
+    } finally {
+      setOcrLoading(false)
+    }
   }
 
   // 迷你悬浮小窗模式 (无边框、紧凑置顶卡片)
@@ -376,22 +399,46 @@ export default function App() {
                 )}
               </div>
             )}
-            <div className="mt-2 flex items-center justify-end gap-2">
-              {isTranslating && (
+            {ocrError && (
+              <div className="mt-1 flex items-center justify-between rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">
+                <span>{ocrError}</span>
                 <button
-                  onClick={runner.cancel}
-                  className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  onClick={() => setOcrError(null)}
+                  className="text-slate-400 hover:text-slate-600 ml-2"
+                  title="关闭"
                 >
-                  {t.task.btnCancel}
+                  ✕
                 </button>
-              )}
+              </div>
+            )}
+            <div className="mt-2 flex items-center justify-between gap-2">
               <button
-                onClick={() => runner.run(sourceText, { source: 'input' })}
-                disabled={isTranslating || !sourceText.trim()}
-                className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                type="button"
+                onClick={handleOcrClipboard}
+                disabled={ocrLoading || isTranslating}
+                className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+                title={t.translation.btnOcrPaste}
               >
-                {isTranslating ? t.translation.translating : t.translation.btnTranslate}
+                <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
+                <span>{ocrLoading ? t.translation.ocrRunning : t.translation.btnOcrPaste}</span>
               </button>
+              <div className="flex items-center gap-2">
+                {isTranslating && (
+                  <button
+                    onClick={runner.cancel}
+                    className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  >
+                    {t.task.btnCancel}
+                  </button>
+                )}
+                <button
+                  onClick={() => runner.run(sourceText, { source: 'input' })}
+                  disabled={isTranslating || !sourceText.trim()}
+                  className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {isTranslating ? t.translation.translating : t.translation.btnTranslate}
+                </button>
+              </div>
             </div>
           </div>
 

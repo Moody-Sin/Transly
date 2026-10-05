@@ -37,11 +37,17 @@ impl OcrErrorDto {
     }
 
     pub fn no_language_pack() -> Self {
-        Self::new(OcrErrorKind::NoLanguagePack, "系统未安装对应 OCR 语言包组件")
+        Self::new(
+            OcrErrorKind::NoLanguagePack,
+            "系统未安装对应 OCR 语言包组件",
+        )
     }
 
     pub fn unsupported_platform() -> Self {
-        Self::new(OcrErrorKind::UnsupportedPlatform, "当前操作系统暂未支持平台原生 OCR")
+        Self::new(
+            OcrErrorKind::UnsupportedPlatform,
+            "当前操作系统暂未支持平台原生 OCR",
+        )
     }
 
     pub fn internal(msg: impl Into<String>) -> Self {

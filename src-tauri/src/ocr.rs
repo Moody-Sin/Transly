@@ -21,7 +21,7 @@ pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
 /// 将 RGBA8 像素切片转换为 Windows SoftwareBitmap 所需的 BGRA8 字节序
 pub fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut bgra = rgba.to_vec();
-    for chunk in bgra.chunks_exact_mut(4) {
+    for chunk in bgra.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
     }
     bgra
@@ -107,12 +107,8 @@ pub async fn recognize_clipboard_image(
         let rgba_bytes = if nw != width || nh != height {
             let dyn_img = image::RgbaImage::from_raw(width, height, img.rgba().to_vec())
                 .ok_or_else(|| OcrErrorDto::internal("解析图像像素矩阵失败"))?;
-            let resized = image::imageops::resize(
-                &dyn_img,
-                nw,
-                nh,
-                image::imageops::FilterType::Triangle,
-            );
+            let resized =
+                image::imageops::resize(&dyn_img, nw, nh, image::imageops::FilterType::Triangle);
             resized.into_raw()
         } else {
             img.rgba().to_vec()

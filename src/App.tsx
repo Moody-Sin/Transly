@@ -166,18 +166,7 @@ export default function App() {
 
   // 监听全局快捷键划词/剪贴板翻译事件
   useEffect(() => {
-    let unlistenQuick: (() => void) | undefined
     let unlistenFloat: (() => void) | undefined
-
-    listen<string>('quick-translate', (event) => {
-      const text = event.payload
-      if (text && text.trim()) {
-        setSourceText(text)
-        handleTranslate(text)
-      }
-    }).then((fn) => {
-      unlistenQuick = fn
-    }).catch(() => {})
 
     listen<string>('float-translate', (event) => {
       const text = event.payload
@@ -190,7 +179,6 @@ export default function App() {
     }).catch(() => {})
 
     return () => {
-      if (unlistenQuick) unlistenQuick()
       if (unlistenFloat) unlistenFloat()
     }
   }, [handleTranslate])
@@ -476,6 +464,26 @@ export default function App() {
                   onChange={handleToggleClipboardMonitor}
                   className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
+              </div>
+
+              {/* 缓存数据管理 */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div>
+                  <div className="font-medium text-slate-700">清空翻译缓存</div>
+                  <div className="text-[11px] text-slate-400">立即清除 SQLite 本地持久化翻译记录</div>
+                </div>
+                <button
+                  onClick={async () => {
+                    const res = await commands.clearCache()
+                    if (res.status === 'ok') {
+                      setSaveStatus(`已清理 ${res.data} 条缓存记录`)
+                      setTimeout(() => setSaveStatus(null), 2000)
+                    }
+                  }}
+                  className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
+                >
+                  清空缓存
+                </button>
               </div>
 
               {/* 术语库管理 */}

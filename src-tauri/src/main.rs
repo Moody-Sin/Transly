@@ -57,6 +57,7 @@ fn main() {
         commands::add_glossary_term,
         commands::get_glossary_terms,
         commands::delete_glossary_term,
+        commands::clear_cache,
         commands::ocr_image,
         commands::set_clipboard_monitor,
         commands::get_clipboard_monitor

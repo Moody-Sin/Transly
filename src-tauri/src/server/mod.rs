@@ -43,24 +43,20 @@ pub struct ServerState {
 fn is_allowed_origin(origin_str: &str) -> bool {
     // 1. Chrome 扩展校验：chrome-extension://<32位小写a-p字符扩展ID>
     if let Some(id) = origin_str.strip_prefix("chrome-extension://") {
-        let clean_id = id.trim_end_matches('/');
-        // 校验合法的 Chrome 扩展 ID 格式（标准为 32 位 a-p 字符，或开发环境由用户配置）
-        if !clean_id.is_empty()
-            && clean_id
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        {
+        if id.len() == 32 && id.bytes().all(|c| (b'a'..=b'p').contains(&c)) {
             return true;
         }
     }
 
-    // 2. Firefox 扩展校验：moz-extension://<UUID格式扩展ID>
+    // 2. Firefox 扩展校验：moz-extension://<标准UUID扩展ID>
     if let Some(id) = origin_str.strip_prefix("moz-extension://") {
-        let clean_id = id.trim_end_matches('/');
-        if !clean_id.is_empty()
-            && clean_id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        let bytes = id.as_bytes();
+        if bytes.len() == 36
+            && [8, 13, 18, 23].into_iter().all(|i| bytes[i] == b'-')
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(i, &c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit())
         {
             return true;
         }
@@ -253,10 +249,21 @@ mod tests {
     #[test]
     fn test_is_allowed_origin() {
         // 合法的扩展 Origin 格式
-        assert!(is_allowed_origin("chrome-extension://abcdefghijklmnopqrstuvwxyz123456"));
-        assert!(is_allowed_origin("moz-extension://d4e73b40-7988-4e89-a2e6-81525a74e2d3"));
+        assert!(is_allowed_origin(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+        ));
+        assert!(is_allowed_origin(
+            "moz-extension://d4e73b40-7988-4e89-a2e6-81525a74e2d3"
+        ));
 
-        // 非法伪装前缀与外部网页
+        // 拒绝格式不正确的扩展 ID、伪装前缀与外部网页
+        assert!(!is_allowed_origin("chrome-extension://abcdefg"));
+        assert!(!is_allowed_origin(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnox"
+        ));
+        assert!(!is_allowed_origin(
+            "moz-extension://d4e73b40-7988-4e89-a2e6-81525a74e2d"
+        ));
         assert!(!is_allowed_origin("chrome-extension://"));
         assert!(!is_allowed_origin("https://evil.com"));
         assert!(!is_allowed_origin("http://localhost.evil.com"));
@@ -288,7 +295,10 @@ mod tests {
         let allowed_req = Request::builder()
             .method("OPTIONS")
             .uri("/health")
-            .header(header::ORIGIN, "chrome-extension://abcdefg")
+            .header(
+                header::ORIGIN,
+                "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+            )
             .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
             .body(Body::empty())
             .unwrap();
@@ -298,7 +308,7 @@ mod tests {
                 .headers()
                 .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
                 .map(|v| v.to_str().unwrap()),
-            Some("chrome-extension://abcdefg")
+            Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop")
         );
 
         // 2. 拒绝普通不受信外部网页

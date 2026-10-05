@@ -253,6 +253,17 @@ impl TranslationCache {
         )?;
         Ok(())
     }
+
+    /// 清空所有翻译缓存
+    pub fn clear_all_cache(&self) -> Result<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let deleted = conn.execute("DELETE FROM translation_cache", [])?;
+        Ok(deleted)
+    }
 }
 
 fn dirs_cache_path() -> Option<std::path::PathBuf> {

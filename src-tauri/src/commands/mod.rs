@@ -103,6 +103,15 @@ pub async fn delete_glossary_term(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32, String> {
+    cache
+        .clear_all_cache()
+        .map(|n| n as u32)
+        .map_err(|e| e.to_string())
+}
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 #[tauri::command]

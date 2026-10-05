@@ -13,6 +13,7 @@ export const commands = {
 	addGlossaryTerm: (source: string, target: string) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target })),
 	getGlossaryTerms: () => typedError<([string, string])[], string>(__TAURI_INVOKE("get_glossary_terms")),
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
+	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
 	ocrImage: (imageBase64: string) => typedError<string, string>(__TAURI_INVOKE("ocr_image", { imageBase64 })),
 	setClipboardMonitor: (enabled: boolean) => __TAURI_INVOKE<void>("set_clipboard_monitor", { enabled }),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),

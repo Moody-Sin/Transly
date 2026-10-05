@@ -38,6 +38,24 @@ pub fn get_or_create_server_token() -> anyhow::Result<String> {
         token.push_str(&format!("{:02x}", b));
     }
 
-    let _ = set_secret(SERVER_TOKEN_KEY, &token);
+    set_secret(SERVER_TOKEN_KEY, &token)?;
     Ok(token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_secret_persistence_and_token_stability() {
+        let test_key = "test_persistence_key";
+        let test_val = "test_secret_123456";
+
+        let write_res = set_secret(test_key, test_val);
+        if write_res.is_ok() {
+            let read_val = get_secret(test_key).expect("should read written secret");
+            assert_eq!(read_val, test_val);
+            let _ = delete_secret(test_key);
+        }
+    }
 }

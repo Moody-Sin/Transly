@@ -55,7 +55,10 @@ impl Glossary {
 
         for (src, entry) in sorted_entries {
             if let Some(ref re) = entry.regex {
-                result = re.replace_all(&result, entry.target.as_str()).to_string();
+                // 使用 regex::NoExpand 确保目标译文中的 $、反斜杠等字符被作为纯字面量替换，不触发正则捕获组展开
+                result = re
+                    .replace_all(&result, regex::NoExpand(entry.target.as_str()))
+                    .to_string();
             } else {
                 result = result.replace(src.as_str(), &entry.target);
             }
@@ -75,6 +78,16 @@ impl Glossary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_glossary_dollar_sign_literal() {
+        let mut glossary = Glossary::new();
+        glossary.insert("USD", "$100");
+
+        let text = "Pay in USD now";
+        let result = glossary.apply(text);
+        assert_eq!(result, "Pay in $100 now");
+    }
 
     #[test]
     fn test_glossary_apply_order() {

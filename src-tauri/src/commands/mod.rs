@@ -58,11 +58,7 @@ pub async fn translate(
     match active_engine.translate(&req).await {
         Ok(res) => {
             // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
-            let cache_target_engine = if res.engine.ends_with("(fallback)") {
-                "google_web"
-            } else {
-                engine_id
-            };
+            let cache_target_engine = res.actual_engine();
             if let Err(e) = cache_controller.set_if_current(start_gen, || {
                 cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
             }) {
@@ -288,4 +284,35 @@ pub async fn delete_api_key(
     crate::secrets::delete_secret(&engine).map_err(|e| e.to_string())?;
     pool.invalidate(&engine).await;
     Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct EngineCapabilitiesDto {
+    pub id: String,
+    pub name: String,
+    pub max_batch_size: u32,
+    pub supports_streaming: bool,
+    pub supports_batch: bool,
+    pub requires_api_key: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_engine_capabilities(
+    engine: String,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+) -> Result<EngineCapabilitiesDto, String> {
+    if !transly_core::validate_engine_id(&engine) {
+        return Err(format!("不支持或未知的翻译引擎: {engine}"));
+    }
+    let eng = pool.get_engine(&engine).await;
+    let caps = eng.capabilities();
+    Ok(EngineCapabilitiesDto {
+        id: caps.id,
+        name: caps.name,
+        max_batch_size: caps.max_batch_size as u32,
+        supports_streaming: caps.supports_streaming,
+        supports_batch: caps.supports_batch,
+        requires_api_key: caps.requires_api_key,
+    })
 }

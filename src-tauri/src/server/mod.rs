@@ -45,7 +45,6 @@ pub struct TranslateBatchResponse {
     pub items: Vec<BatchItemResult>,
 }
 
-
 #[derive(Clone)]
 pub struct ServerState {
     pub token: Arc<RwLock<String>>,
@@ -346,7 +345,6 @@ async fn translate_batch_handler(
         items: final_items,
     }))
 }
-
 
 pub async fn start_server(
     port: u16,
@@ -775,5 +773,4 @@ mod tests {
         assert_eq!(resp.items[0].id(), "node-1");
         assert!(resp.items[0].is_success());
     }
-
 }

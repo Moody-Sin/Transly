@@ -5,6 +5,7 @@ use tauri_specta::{collect_commands, Builder};
 fn main() {
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::translate,
+        commands::get_engine_capabilities,
         commands::detect_lang,
         commands::get_server_token,
         commands::rotate_server_token,

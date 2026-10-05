@@ -5,6 +5,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<string, string>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
+	getEngineCapabilities: (engine: string) => typedError<EngineCapabilitiesDto, string>(__TAURI_INVOKE("get_engine_capabilities", { engine })),
 	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
 	rotateServerToken: () => typedError<string, string>(__TAURI_INVOKE("rotate_server_token")),
@@ -20,6 +21,16 @@ export const commands = {
 	ocrImage: (imageBase64: string) => typedError<string, string>(__TAURI_INVOKE("ocr_image", { imageBase64 })),
 	setClipboardMonitor: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_clipboard_monitor", { enabled })),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
+};
+
+/* Types */
+export type EngineCapabilitiesDto = {
+	id: string,
+	name: string,
+	max_batch_size: number,
+	supports_streaming: boolean,
+	supports_batch: boolean,
+	requires_api_key: boolean,
 };
 
 /* Tauri Specta runtime */

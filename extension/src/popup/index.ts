@@ -63,6 +63,42 @@ function checkConnection() {
 // 检查与桌面端 127.0.0.1 服务的连通性
 checkConnection()
 
+// 打开 Popup 时，主动向 Background 查询当前 Tab 的持久化任务进度
+async function restoreProgressState() {
+  // 兼容直接作为 popup 打开或独立页面调试
+  let tabId: number | undefined
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (activeTab?.id && !activeTab.url?.startsWith('chrome-extension://')) {
+    tabId = activeTab.id
+  } else {
+    // 降级查询最近的正常网页标签
+    const allTabs = await chrome.tabs.query({})
+    const webTab = allTabs.find((t) => t.id && t.url && !t.url.startsWith('chrome-extension://'))
+    tabId = webTab?.id
+  }
+
+  if (!tabId) return
+
+  chrome.runtime.sendMessage({ type: 'GET_TASK_PROGRESS', tabId }, (response) => {
+    if (response?.ok && response.state) {
+      const state = response.state
+      if (state.status === 'translating') {
+        progressBox.style.display = 'block'
+        const pct = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0
+        progressBar.style.width = `${pct}%`
+        progressCount.textContent = `${state.completed}/${state.total}`
+        progressText.textContent = state.failedBatches > 0 ? `翻译中 (${state.failedBatches} 批失败)` : '正在翻译...'
+      } else if (state.status === 'finished') {
+        progressBox.style.display = 'block'
+        progressBar.style.width = '100%'
+        progressCount.textContent = `${state.completed}/${state.total}`
+        progressText.textContent = state.failedBatches > 0 ? `已完成 (含 ${state.failedBatches} 批失败)` : '翻译完成 ✓'
+      }
+    }
+  })
+}
+restoreProgressState()
+
 // 监听来自 content script 的翻译进度广播
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'TRANSLATION_STARTED') {

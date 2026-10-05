@@ -1,7 +1,5 @@
 {
   "app": {
-    "title": "Transly",
-    "engine": "Engine",
     "settings": "Settings",
     "copyToken": "Extension Token",
     "tokenCopied": "Token Copied"

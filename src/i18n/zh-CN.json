@@ -1,7 +1,5 @@
 {
   "app": {
-    "title": "Transly",
-    "engine": "引擎",
     "settings": "设置",
     "copyToken": "插件配对 Token",
     "tokenCopied": "已复制 Token"

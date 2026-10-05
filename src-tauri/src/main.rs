@@ -84,11 +84,13 @@ fn main() {
 
     let monitor_flag = clipboard_monitor_enabled.clone();
 
-    // 缓存内存状态（从系统凭据读取一次并在内存维护）
+    // 缓存状态协调器（从系统凭据读取初始开关，纳入 generation 版本控制）
     let initial_cache_enabled = secrets::get_secret("cache_enabled")
         .map(|v| v != "false")
         .unwrap_or(true);
-    let cache_enabled_flag = Arc::new(AtomicBool::new(initial_cache_enabled));
+    let cache_controller = Arc::new(src_tauri::cache_controller::CacheController::new(
+        initial_cache_enabled,
+    ));
 
     // 克隆传递给 setup 内部异步启动
     let server_token = token.clone();
@@ -96,7 +98,7 @@ fn main() {
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
     let server_port = config.local_server_port;
-    let server_cache_flag = cache_enabled_flag.clone();
+    let server_cache_controller = cache_controller.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -106,7 +108,7 @@ fn main() {
         .manage(glossary)
         .manage(ocr_engine)
         .manage(clipboard_monitor_enabled)
-        .manage(cache_enabled_flag)
+        .manage(cache_controller)
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
@@ -119,7 +121,7 @@ fn main() {
                         server_cache,
                         server_pool,
                         server_glossary,
-                        server_cache_flag,
+                        server_cache_controller,
                     )
                     .await
                     {

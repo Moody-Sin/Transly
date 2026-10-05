@@ -14,7 +14,7 @@ pub async fn translate(
     cache: tauri::State<'_, Arc<TranslationCache>>,
     pool: tauri::State<'_, Arc<EnginePool>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
-    cache_enabled_flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
 ) -> Result<String, String> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
@@ -37,8 +37,8 @@ pub async fn translate(
 
     let engine_id = active_engine.id();
 
-    // 检查内存中高效共享的缓存开关，完全消除每次查询系统凭据的同步IO与并发竞争
-    let cache_enabled = cache_enabled_flag.load(std::sync::atomic::Ordering::Relaxed);
+    // 检查缓存状态快照与 generation 版本号
+    let (cache_enabled, start_gen) = cache_controller.snapshot();
 
     // 1. 若开启缓存，优先查缓存
     if cache_enabled {
@@ -57,8 +57,8 @@ pub async fn translate(
 
     match active_engine.translate(&req).await {
         Ok(res) => {
-            // 3. 异步写入缓存（写入前再次原子检查缓存开关，杜绝“请求开始后关闭缓存”的竞争窗口）
-            if cache_enabled_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            // 3. 异步写入缓存（校验 generation 协调版本，杜绝“请求开始后关闭缓存”的竞争窗口）
+            if cache_controller.is_valid_to_write(start_gen) {
                 let cache_target_engine = if res.engine.ends_with("(fallback)") {
                     "google_web"
                 } else {
@@ -130,12 +130,13 @@ pub fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32
 #[specta::specta]
 pub fn set_cache_enabled(
     enabled: bool,
-    flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
     crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
         .map_err(|e| format!("写入系统配置失败: {e}"))?;
-    flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    // 递增 generation 版本号并更新内存开关
+    controller.set_enabled(enabled);
     // 当用户选择关闭持久化翻译缓存时，彻底清除旧磁盘缓存，若清空失败则准确报告错误
     if !enabled {
         cache
@@ -147,8 +148,10 @@ pub fn set_cache_enabled(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_cache_enabled(flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>) -> bool {
-    flag.load(std::sync::atomic::Ordering::Relaxed)
+pub fn get_cache_enabled(
+    controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
+) -> bool {
+    controller.is_enabled()
 }
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};

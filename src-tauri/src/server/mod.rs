@@ -8,7 +8,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -40,7 +39,7 @@ pub struct ServerState {
     pub cache: Arc<TranslationCache>,
     pub glossary: Arc<RwLock<Glossary>>,
     pub concurrency_limit: Arc<tokio::sync::Semaphore>,
-    pub cache_enabled_flag: Arc<AtomicBool>,
+    pub cache_controller: Arc<crate::cache_controller::CacheController>,
 }
 
 fn is_allowed_origin(origin_str: &str) -> bool {
@@ -83,7 +82,7 @@ pub fn create_router(
     cache: Arc<TranslationCache>,
     pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
-    cache_enabled_flag: Arc<AtomicBool>,
+    cache_controller: Arc<crate::cache_controller::CacheController>,
 ) -> Router {
     let state = ServerState {
         token,
@@ -91,7 +90,7 @@ pub fn create_router(
         cache,
         glossary,
         concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)), // 限制本地并发处理至多 10 批
-        cache_enabled_flag,
+        cache_controller,
     };
 
     let protected = Router::new()
@@ -203,8 +202,8 @@ async fn translate_batch_handler(
     };
     let engine_id = active_engine.id();
 
-    // 检查共享内存缓存开关，无需同步调用外部系统凭据库，彻底避免测试/运行并发竞争
-    let cache_enabled = state.cache_enabled_flag.load(Ordering::Relaxed);
+    // 检查缓存状态快照与 generation 版本，杜绝并发关闭清空后的写回竞争
+    let (cache_enabled, start_generation) = state.cache_controller.snapshot();
 
     let mut translations = Vec::with_capacity(payload.texts.len());
     let mut missing_indices = Vec::new();
@@ -248,8 +247,8 @@ async fn translate_batch_handler(
                 for (req_idx, res) in results.into_iter().enumerate() {
                     let original_idx = missing_indices[req_idx];
                     let original_text = &payload.texts[original_idx];
-                    // 写回前再次原子检查缓存开关，杜绝长耗时外部引擎翻译返回后写入已关闭缓存的竞争
-                    if state.cache_enabled_flag.load(Ordering::Relaxed) {
+                    // 写回前通过 generation 版本号与当前开关做原子协调，彻底关闭任何竞态窗口
+                    if state.cache_controller.is_valid_to_write(start_generation) {
                         let actual_engine = if res.engine.ends_with("(fallback)") {
                             "google_web"
                         } else {
@@ -287,13 +286,13 @@ pub async fn start_server(
     cache: Arc<TranslationCache>,
     pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
-    cache_enabled_flag: Arc<AtomicBool>,
+    cache_controller: Arc<crate::cache_controller::CacheController>,
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
         listener,
-        create_router(token, cache, pool, glossary, cache_enabled_flag),
+        create_router(token, cache, pool, glossary, cache_controller),
     )
     .await?;
     Ok(())
@@ -334,9 +333,9 @@ mod tests {
         let cache = TranslationCache::in_memory().unwrap();
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let cache_enabled_flag = Arc::new(AtomicBool::new(true));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
         let token = Arc::new(RwLock::new("test-token".to_string()));
-        let app = create_router(token, Arc::new(cache), pool, glossary, cache_enabled_flag);
+        let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
@@ -351,9 +350,9 @@ mod tests {
         let cache = TranslationCache::in_memory().unwrap();
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let cache_enabled_flag = Arc::new(AtomicBool::new(true));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
         let token = Arc::new(RwLock::new("test-token".to_string()));
-        let app = create_router(token, Arc::new(cache), pool, glossary, cache_enabled_flag);
+        let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
 
         // 1. 允许扩展协议与本地开发
         let allowed_req = Request::builder()
@@ -395,9 +394,9 @@ mod tests {
         let cache = TranslationCache::in_memory().unwrap();
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let cache_enabled_flag = Arc::new(AtomicBool::new(true));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
         let token = Arc::new(RwLock::new("valid-token".to_string()));
-        let app = create_router(token, Arc::new(cache), pool, glossary, cache_enabled_flag);
+        let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
         let req = Request::builder()
             .method("POST")
             .uri("/translate")
@@ -420,7 +419,7 @@ mod tests {
         let mut glossary_instance = Glossary::new();
         glossary_instance.insert("你好", "世界你好");
         let glossary = Arc::new(RwLock::new(glossary_instance));
-        let cache_enabled_flag = Arc::new(AtomicBool::new(true));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
         let token = Arc::new(RwLock::new("valid-token".to_string()));
         let state = ServerState {
             token,
@@ -428,7 +427,7 @@ mod tests {
             cache: cache.clone(),
             glossary,
             concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-            cache_enabled_flag,
+            cache_controller,
         };
 
         let app = Router::new()
@@ -468,8 +467,7 @@ mod tests {
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
 
-        // 直接注入内存级关闭状态，完全隔离全局系统 keyring，彻底消除测试并行竞争
-        let cache_enabled_flag = Arc::new(AtomicBool::new(false));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(false));
 
         let token = Arc::new(RwLock::new("valid-token".to_string()));
         let state = ServerState {
@@ -478,7 +476,7 @@ mod tests {
             cache: cache.clone(),
             glossary,
             concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-            cache_enabled_flag,
+            cache_controller,
         };
 
         let app = Router::new()
@@ -519,7 +517,7 @@ mod tests {
         let cache = Arc::new(TranslationCache::in_memory().unwrap());
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
-        let cache_enabled_flag = Arc::new(AtomicBool::new(true));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
 
         let token = Arc::new(RwLock::new("valid-token".to_string()));
         let state = ServerState {
@@ -528,7 +526,7 @@ mod tests {
             cache,
             glossary,
             concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-            cache_enabled_flag,
+            cache_controller,
         };
 
         let app = Router::new()

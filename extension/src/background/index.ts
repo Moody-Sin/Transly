@@ -14,9 +14,42 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CHECK_DESKTOP_SERVER') {
     fetch(`${LOCAL_SERVER_URL}/health`)
-      .then((res) => res.json())
-      .then((data) => sendResponse({ ok: true, data }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }))
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then((data) => {
+        // 如果服务运行中，进一步检验 Token 配对有效性
+        getServerToken().then((token) => {
+          if (!token) {
+            sendResponse({ ok: true, serverRunning: true, paired: false, data })
+            return
+          }
+          // 发起试探鉴权请求
+          fetch(`${LOCAL_SERVER_URL}/translate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              texts: ['test'],
+              target_lang: 'zh-CN',
+            }),
+          })
+            .then((authRes) => {
+              if (authRes.status === 401) {
+                sendResponse({ ok: true, serverRunning: true, paired: false, tokenExpired: true })
+              } else {
+                sendResponse({ ok: true, serverRunning: true, paired: true, data })
+              }
+            })
+            .catch(() => {
+              sendResponse({ ok: true, serverRunning: true, paired: true, data })
+            })
+        })
+      })
+      .catch((err) => sendResponse({ ok: false, serverRunning: false, error: err.message }))
     return true
   }
 

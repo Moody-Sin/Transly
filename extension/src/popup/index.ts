@@ -33,12 +33,25 @@ btnSaveToken.addEventListener('click', () => {
 
 function checkConnection() {
   chrome.runtime.sendMessage({ type: 'CHECK_DESKTOP_SERVER' }, (response) => {
-    if (response && response.ok) {
-      statusEl.textContent = '● 已连接桌面端'
-      statusEl.style.color = '#10b981'
-    } else {
+    if (!response || !response.serverRunning) {
       statusEl.textContent = '○ 桌面端未运行'
       statusEl.style.color = '#ef4444'
+      btnTranslate.disabled = true
+      return
+    }
+
+    if (response.tokenExpired) {
+      statusEl.textContent = '▲ Token 已失效，请重新配对'
+      statusEl.style.color = '#f59e0b'
+      btnTranslate.disabled = true
+    } else if (!response.paired) {
+      statusEl.textContent = '▲ 未配对 Token'
+      statusEl.style.color = '#f59e0b'
+      btnTranslate.disabled = true
+    } else {
+      statusEl.textContent = '● 已连接且配对有效'
+      statusEl.style.color = '#10b981'
+      btnTranslate.disabled = false
     }
   })
 }

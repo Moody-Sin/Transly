@@ -505,14 +505,14 @@ export default function App() {
               {/* 插件通信 Token 轮换管理 */}
               <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
                 <div>
-                  <div className="font-medium text-slate-700">浏览器插件配对 Token 轮换</div>
-                  <div className="text-[11px] text-slate-400">重新生成并强制让旧插件配对失效，保障本地接口安全</div>
+                  <div className="font-medium text-slate-700">{t.settings.tokenRotateTitle}</div>
+                  <div className="text-[11px] text-slate-400">{t.settings.tokenRotateDesc}</div>
                 </div>
                 <button
                   onClick={handleRotateToken}
                   className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
                 >
-                  重新生成 Token
+                  {t.settings.btnRotateToken}
                 </button>
               </div>
 
@@ -520,8 +520,8 @@ export default function App() {
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="font-medium text-slate-700">持久化翻译缓存</div>
-                    <div className="text-[11px] text-slate-400">关闭后将不再向本地 SQLite 记录任何原文与译文</div>
+                    <div className="font-medium text-slate-700">{t.settings.cachePersistTitle}</div>
+                    <div className="text-[11px] text-slate-400">{t.settings.cachePersistDesc}</div>
                   </div>
                   <input
                     type="checkbox"
@@ -532,8 +532,8 @@ export default function App() {
                 </div>
                 <div className="flex items-center justify-between border-t border-slate-200 pt-2 mt-1">
                   <div>
-                    <div className="font-medium text-slate-700">清空历史缓存</div>
-                    <div className="text-[11px] text-slate-400">立即清除磁盘中的所有历史翻译记录</div>
+                    <div className="font-medium text-slate-700">{t.settings.cacheClearTitle}</div>
+                    <div className="text-[11px] text-slate-400">{t.settings.cacheClearDesc}</div>
                   </div>
                   <button
                     onClick={async () => {
@@ -545,7 +545,7 @@ export default function App() {
                     }}
                     className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
                   >
-                    立即清空
+                    {t.settings.btnClearCache}
                   </button>
                 </div>
               </div>

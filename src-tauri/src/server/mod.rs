@@ -248,7 +248,8 @@ async fn translate_batch_handler(
                 for (req_idx, res) in results.into_iter().enumerate() {
                     let original_idx = missing_indices[req_idx];
                     let original_text = &payload.texts[original_idx];
-                    if cache_enabled {
+                    // 写回前再次原子检查缓存开关，杜绝长耗时外部引擎翻译返回后写入已关闭缓存的竞争
+                    if state.cache_enabled_flag.load(Ordering::Relaxed) {
                         let actual_engine = if res.engine.ends_with("(fallback)") {
                             "google_web"
                         } else {

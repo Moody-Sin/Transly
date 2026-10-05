@@ -57,8 +57,8 @@ pub async fn translate(
 
     match active_engine.translate(&req).await {
         Ok(res) => {
-            // 3. 异步写入缓存（若开启缓存，且不污染降级主引擎）
-            if cache_enabled {
+            // 3. 异步写入缓存（写入前再次原子检查缓存开关，杜绝“请求开始后关闭缓存”的竞争窗口）
+            if cache_enabled_flag.load(std::sync::atomic::Ordering::Relaxed) {
                 let cache_target_engine = if res.engine.ends_with("(fallback)") {
                     "google_web"
                 } else {
@@ -136,9 +136,11 @@ pub fn set_cache_enabled(
     crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
         .map_err(|e| format!("写入系统配置失败: {e}"))?;
     flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
-    // 当用户选择关闭持久化翻译缓存时，彻底清除旧磁盘缓存，践行隐私不留存语义
+    // 当用户选择关闭持久化翻译缓存时，彻底清除旧磁盘缓存，若清空失败则准确报告错误
     if !enabled {
-        let _ = cache.clear_all_cache();
+        cache
+            .clear_all_cache()
+            .map_err(|e| format!("已禁用缓存，但清空历史缓存记录失败: {e}"))?;
     }
     Ok(())
 }

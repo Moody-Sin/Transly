@@ -97,9 +97,9 @@ impl TranslateEngine for GoogleWebEngine {
         super::EngineCapabilities {
             id: self.id().to_string(),
             name: self.name().to_string(),
-            max_batch_size: 50,
+            max_batch_size: 1,
             supports_streaming: false,
-            supports_batch: true,
+            supports_batch: false,
             requires_api_key: false,
             fallback_engine: None,
         }
@@ -201,8 +201,8 @@ mod tests {
         assert_eq!(engine.id(), "google_web");
         assert_eq!(engine.name(), "Google 网页翻译");
         let caps = engine.capabilities();
-        assert_eq!(caps.max_batch_size, 50);
-        assert!(caps.supports_batch);
+        assert_eq!(caps.max_batch_size, 1);
+        assert!(!caps.supports_batch);
         assert!(!caps.requires_api_key);
     }
 

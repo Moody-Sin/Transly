@@ -125,18 +125,9 @@ pub async fn translate(
     match active_engine.translate(&req).await {
         Ok(res) => {
             // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
-            let cache_target_engine = res.actual_engine().to_string();
-            let cache_ref = cache.inner().clone();
-            let t = text.clone();
-            let translated = res.text.clone();
-            let s = sl.clone();
-            let tl = target_lang.clone();
-
-            if let Err(e) = cache_controller.set_if_current(start_gen, move || {
-                tokio::task::spawn_blocking(move || {
-                    cache_ref.set(&t, &translated, &s, &tl, &cache_target_engine)
-                });
-                Ok(())
+            let cache_target_engine = res.actual_engine();
+            if let Err(e) = cache_controller.set_if_current(start_gen, || {
+                cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
             }) {
                 eprintln!("[Cache Write Warning] 桌面端翻译缓存写入失败: {e}");
             }

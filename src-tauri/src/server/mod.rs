@@ -310,29 +310,16 @@ async fn translate_batch_handler(
                     let original_idx = missing_indices[req_idx];
                     let original_item = &unified_items[original_idx];
                     // 写回时通过同一同步门禁 set_if_current 校验版本并执行写入
-                    let actual_engine = res.actual_engine().to_string();
-                    let cache_ref = state.cache.clone();
-                    let src_text = original_item.text.clone();
-                    let trans_text = res.text.clone();
-                    let src_lang = source.clone();
-                    let tgt_lang = target.clone();
-
-                    if let Err(e) =
-                        state
-                            .cache_controller
-                            .set_if_current(start_generation, move || {
-                                tokio::task::spawn_blocking(move || {
-                                    cache_ref.set(
-                                        &src_text,
-                                        &trans_text,
-                                        &src_lang,
-                                        &tgt_lang,
-                                        &actual_engine,
-                                    )
-                                });
-                                Ok(())
-                            })
-                    {
+                    let actual_engine = res.actual_engine();
+                    if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
+                        state.cache.set(
+                            &original_item.text,
+                            &res.text,
+                            &source,
+                            &target,
+                            actual_engine,
+                        )
+                    }) {
                         eprintln!("[Cache Write Warning] 扩展批量翻译缓存写入失败: {e}");
                     }
                     item_results[original_idx] = Some(BatchItemResult::Success {

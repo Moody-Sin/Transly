@@ -367,7 +367,8 @@ export default function App() {
 
           {capabilities && (
             <div className="text-[10px] text-slate-400">
-              {capabilities.name} · {t.translation.maxBatch}{capabilities.max_batch_size}
+              {capabilities.name}
+              {capabilities.supports_batch && ` · ${t.translation.maxBatch}${capabilities.max_batch_size}`}
               {capabilities.requires_api_key && ` · ${t.translation.apiKeyRequired}`}
             </div>
           )}

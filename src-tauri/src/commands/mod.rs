@@ -63,9 +63,11 @@ pub async fn translate(
             } else {
                 engine_id
             };
-            let _ = cache_controller.set_if_current(start_gen, || {
+            if let Err(e) = cache_controller.set_if_current(start_gen, || {
                 cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
-            });
+            }) {
+                eprintln!("[Cache Write Warning] 桌面端翻译缓存写入失败: {e}");
+            }
             let g = glossary.read().await;
             Ok(g.apply(&res.text))
         }

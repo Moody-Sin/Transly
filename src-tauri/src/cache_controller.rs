@@ -32,7 +32,11 @@ impl CacheController {
     }
 
     /// 原子条件写入：在门禁锁内同时验证 generation 版本与开启状态并执行写入，杜绝任何检查与写入间的竞态窗口
-    pub fn set_if_current<F>(&self, start_gen: u64, write_fn: F) -> bool
+    /// 返回值语义：
+    /// - Ok(true): 版本有效且写入成功
+    /// - Ok(false): 请求已跨越关闭/切换边界，安全拒绝写入
+    /// - Err(e): 版本有效，但底层存储写入失败（便于诊断与告警，不静默吞错）
+    pub fn set_if_current<F>(&self, start_gen: u64, write_fn: F) -> Result<bool>
     where
         F: FnOnce() -> Result<()>,
     {
@@ -40,10 +44,9 @@ impl CacheController {
         if self.enabled.load(Ordering::Relaxed)
             && self.generation.load(Ordering::Relaxed) == start_gen
         {
-            let _ = write_fn();
-            true
+            write_fn().map(|_| true)
         } else {
-            false
+            Ok(false)
         }
     }
 

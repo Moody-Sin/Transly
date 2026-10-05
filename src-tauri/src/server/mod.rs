@@ -253,11 +253,13 @@ async fn translate_batch_handler(
                     } else {
                         engine_id
                     };
-                    let _ = state.cache_controller.set_if_current(start_generation, || {
+                    if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
                         state
                             .cache
                             .set(original_text, &res.text, &source, &target, actual_engine)
-                    });
+                    }) {
+                        eprintln!("[Cache Write Warning] 扩展批量翻译缓存写入失败: {e}");
+                    }
                     translations[original_idx] = res.text;
                 }
             }
@@ -627,12 +629,13 @@ mod tests {
         assert!(!controller.is_enabled());
 
         // 3. 模拟请求 1 试图写入缓存 -> 必须被安全阻断拒绝
-        let written = controller.set_if_current(start_gen, || {
+        let write_result = controller.set_if_current(start_gen, || {
             cache.set("concurrent_text", "译文", "en", "zh-CN", "google_web")
         });
-        assert!(
-            !written,
-            "请求跨越关闭清空边界时，set_if_current 必须返回 false 拒绝写入"
+        assert_eq!(
+            write_result.unwrap(),
+            false,
+            "请求跨越关闭清空边界时，set_if_current 必须返回 Ok(false) 拒绝写入"
         );
 
         // 4. 强断言数据库依然保持完全为空
@@ -643,5 +646,26 @@ mod tests {
             read_back, None,
             "数据库中绝对不得残留关闭前发起的在途请求译文"
         );
+    }
+
+    #[test]
+    fn test_set_if_current_error_propagation() {
+        let controller = crate::cache_controller::CacheController::new(true);
+        let (_, start_gen) = controller.snapshot();
+
+        // 当底层写入闭包返回 Err 时，set_if_current 必须完整透传该错误，而不是吞掉
+        let res = controller.set_if_current(start_gen, || {
+            Err(transly_core::Error::Internal(
+                "disk full or sqlite locked".into(),
+            ))
+        });
+
+        assert!(res.is_err(), "底层写入错误必须向上传播");
+        match res {
+            Err(transly_core::Error::Internal(msg)) => {
+                assert!(msg.contains("disk full"));
+            }
+            _ => panic!("预期返回 transly_core::Error::Internal"),
+        }
     }
 }

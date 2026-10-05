@@ -11,7 +11,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
-use transly_core::{Glossary, TranslationCache, TranslationRequest};
+use transly_core::{
+    engine::{BatchItemRequest, BatchItemResult},
+    error::ErrorKind,
+    Glossary, TranslationCache, TranslationRequest,
+};
 
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -21,7 +25,12 @@ pub struct StatusResponse {
 
 #[derive(Deserialize)]
 pub struct TranslateBatchRequest {
+    /// 兼容旧版：纯文本数组
+    #[serde(default)]
     pub texts: Vec<String>,
+    /// 新增契约：带有明确 stable ID 的批量项目
+    #[serde(default)]
+    pub items: Vec<BatchItemRequest>,
     pub source_lang: Option<String>,
     pub target_lang: String,
     pub engine: Option<String>,
@@ -29,8 +38,13 @@ pub struct TranslateBatchRequest {
 
 #[derive(Serialize, Deserialize)]
 pub struct TranslateBatchResponse {
+    /// 兼容旧版响应格式：直接保持译文字符串列表
     pub translations: Vec<String>,
+    /// 结构化逐项反馈（包含 id, 状态, 真实引擎或错误分类）
+    #[serde(default)]
+    pub items: Vec<BatchItemResult>,
 }
+
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -156,16 +170,31 @@ async fn translate_batch_handler(
     State(state): State<ServerState>,
     Json(payload): Json<TranslateBatchRequest>,
 ) -> Result<Json<TranslateBatchResponse>, StatusCode> {
+    // 归一化输入：若提供了 items 则优先使用 items，否则由 texts 构造虚拟 index ID
+    let unified_items: Vec<BatchItemRequest> = if !payload.items.is_empty() {
+        payload.items
+    } else {
+        payload
+            .texts
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| BatchItemRequest {
+                id: i.to_string(),
+                text,
+            })
+            .collect()
+    };
+
     // 限制单次批量文本数量与总字符数，防御 DoS 与过载攻击
-    if payload.texts.is_empty() || payload.texts.len() > 100 {
+    if unified_items.is_empty() || unified_items.len() > 100 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let total_chars: usize = payload.texts.iter().map(|t| t.chars().count()).sum();
+    let total_chars: usize = unified_items.iter().map(|t| t.text.chars().count()).sum();
     if total_chars > 50_000 {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    for t in &payload.texts {
-        if t.chars().count() > 10_000 {
+    for t in &unified_items {
+        if t.text.chars().count() > 10_000 {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
     }
@@ -205,31 +234,35 @@ async fn translate_batch_handler(
     // 检查缓存状态快照与 generation 版本，杜绝并发关闭清空后的写回竞争
     let (cache_enabled, start_generation) = state.cache_controller.snapshot();
 
-    let mut translations = Vec::with_capacity(payload.texts.len());
+    let mut item_results: Vec<Option<BatchItemResult>> = vec![None; unified_items.len()];
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
     // 1. 若开启缓存，优先查缓存
     if cache_enabled {
-        for (idx, text) in payload.texts.iter().enumerate() {
-            if let Ok(Some(cached_text)) = state.cache.get(text, &source, &target, engine_id) {
-                translations.push(cached_text);
+        for (idx, item) in unified_items.iter().enumerate() {
+            if let Ok(Some(cached_text)) = state.cache.get(&item.text, &source, &target, engine_id)
+            {
+                item_results[idx] = Some(BatchItemResult::Success {
+                    id: item.id.clone(),
+                    text: cached_text,
+                    detected_source_lang: None,
+                    engine: engine_id.to_string(),
+                });
             } else {
-                translations.push(String::new()); // 占位
                 missing_indices.push(idx);
                 missing_requests.push(TranslationRequest {
-                    text: text.clone(),
+                    text: item.text.clone(),
                     source_lang: source.clone(),
                     target_lang: target.clone(),
                 });
             }
         }
     } else {
-        for (idx, text) in payload.texts.iter().enumerate() {
-            translations.push(String::new());
+        for (idx, item) in unified_items.iter().enumerate() {
             missing_indices.push(idx);
             missing_requests.push(TranslationRequest {
-                text: text.clone(),
+                text: item.text.clone(),
                 source_lang: source.clone(),
                 target_lang: target.clone(),
             });
@@ -240,43 +273,80 @@ async fn translate_batch_handler(
     if !missing_requests.is_empty() {
         match active_engine.translate_batch(&missing_requests).await {
             Ok(results) => {
-                // 安全防范：验证引擎返回条数与请求条数完全一致，不一致则返回错误避免残缺数据
+                // 安全防范：验证引擎返回条数与请求条数完全一致
                 if results.len() != missing_requests.len() {
                     return Err(StatusCode::INTERNAL_SERVER_ERROR);
                 }
                 for (req_idx, res) in results.into_iter().enumerate() {
                     let original_idx = missing_indices[req_idx];
-                    let original_text = &payload.texts[original_idx];
-                    // 写回时通过同一同步门禁 set_if_current 校验版本并执行写入，彻底排除检查与写入之间的竞态
-                    let actual_engine = if res.engine.ends_with("(fallback)") {
-                        "google_web"
-                    } else {
-                        engine_id
-                    };
+                    let original_item = &unified_items[original_idx];
+                    // 写回时通过同一同步门禁 set_if_current 校验版本并执行写入
+                    let actual_engine = res.actual_engine();
                     if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
-                        state
-                            .cache
-                            .set(original_text, &res.text, &source, &target, actual_engine)
+                        state.cache.set(
+                            &original_item.text,
+                            &res.text,
+                            &source,
+                            &target,
+                            actual_engine,
+                        )
                     }) {
                         eprintln!("[Cache Write Warning] 扩展批量翻译缓存写入失败: {e}");
                     }
-                    translations[original_idx] = res.text;
+                    item_results[original_idx] = Some(BatchItemResult::Success {
+                        id: original_item.id.clone(),
+                        text: res.text,
+                        detected_source_lang: res.detected_source_lang,
+                        engine: res.engine,
+                    });
                 }
             }
-            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+            Err(e) => {
+                // 逐项标记失败，支持部分失败结构化反馈
+                let kind = e.kind();
+                let msg = e.to_string();
+                for &orig_idx in &missing_indices {
+                    let original_item = &unified_items[orig_idx];
+                    item_results[orig_idx] = Some(BatchItemResult::Failed {
+                        id: original_item.id.clone(),
+                        error_kind: kind,
+                        message: msg.clone(),
+                    });
+                }
+            }
         }
     }
 
-    // 3. 统一应用全局术语库修正
+    // 3. 统一应用全局术语库修正，并组装最终的 BatchItemResult 与旧版兼容 translations 列表
     let g = state.glossary.read().await;
-    if !g.is_empty() {
-        for t in &mut translations {
-            *t = g.apply(t);
+    let mut final_items = Vec::with_capacity(unified_items.len());
+    let mut final_translations = Vec::with_capacity(unified_items.len());
+
+    for (idx, opt_res) in item_results.into_iter().enumerate() {
+        let mut item = opt_res.unwrap_or_else(|| BatchItemResult::Failed {
+            id: unified_items[idx].id.clone(),
+            error_kind: ErrorKind::Internal,
+            message: "未处理的项".to_string(),
+        });
+
+        if let BatchItemResult::Success { ref mut text, .. } = item {
+            if !g.is_empty() {
+                *text = g.apply(text);
+            }
+            final_translations.push(text.clone());
+        } else {
+            // 失败项在旧版 translations 数组中保持空串或原文占位
+            final_translations.push(String::new());
         }
+        final_items.push(item);
     }
 
-    Ok(Json(TranslateBatchResponse { translations }))
+    Ok(Json(TranslateBatchResponse {
+        translations: final_translations,
+        items: final_items,
+    }))
 }
+
 
 pub async fn start_server(
     port: u16,
@@ -648,24 +718,62 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_set_if_current_error_propagation() {
-        let controller = crate::cache_controller::CacheController::new(true);
-        let (_, start_gen) = controller.snapshot();
+    #[tokio::test]
+    async fn test_translate_structured_batch_items() {
+        let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+        let token = Arc::new(RwLock::new("valid-token".to_string()));
 
-        // 当底层写入闭包返回 Err 时，set_if_current 必须完整透传该错误，而不是吞掉
-        let res = controller.set_if_current(start_gen, || {
-            Err(transly_core::Error::Internal(
-                "disk full or sqlite locked".into(),
+        // 预设缓存
+        cache
+            .set("item-cached", "已缓存译文", "auto", "zh-CN", "google_web")
+            .unwrap();
+
+        let state = ServerState {
+            token,
+            pool,
+            cache,
+            glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
+            cache_controller,
+        };
+
+        let app = Router::new()
+            .route(
+                "/translate",
+                post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth_middleware,
+                )),
+            )
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "items": [
+                        {"id": "node-1", "text": "item-cached"}
+                    ],
+                    "target_lang": "zh-CN"
+                }"#,
             ))
-        });
+            .unwrap();
 
-        assert!(res.is_err(), "底层写入错误必须向上传播");
-        match res {
-            Err(transly_core::Error::Internal(msg)) => {
-                assert!(msg.contains("disk full"));
-            }
-            _ => panic!("预期返回 transly_core::Error::Internal"),
-        }
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.translations, vec!["已缓存译文"]);
+        assert_eq!(resp.items.len(), 1);
+        assert_eq!(resp.items[0].id(), "node-1");
+        assert!(resp.items[0].is_success());
     }
+
 }

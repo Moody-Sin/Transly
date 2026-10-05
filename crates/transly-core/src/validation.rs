@@ -1,18 +1,49 @@
-/// 验证语言代码是否合法（支持 auto 与常用 BCP-47 / ISO-639 格式）
+/// 验证语言代码是否合法（严格匹配支持的语言白名单）
 pub fn validate_language_code(lang: &str) -> bool {
     let clean = lang.trim();
-    if clean.is_empty() || clean.len() > 16 {
+    if clean.is_empty() || clean.len() > 10 {
         return false;
     }
 
-    match clean.to_lowercase().as_str() {
-        "auto" | "zh" | "zh-cn" | "zh-tw" | "zh-hans" | "zh-hant" | "en" | "en-us" | "en-gb"
-        | "ja" | "ko" | "fr" | "de" | "es" | "ru" | "it" | "pt" | "nl" | "pl" | "ar" => true,
-        other => {
-            // 支持标准的 2~5 位字母数字（如 sv, tr, vi, uk 等）
-            other.len() >= 2 && other.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        }
+    matches!(
+        clean.to_lowercase().as_str(),
+        "auto"
+            | "zh"
+            | "zh-cn"
+            | "zh-tw"
+            | "zh-hans"
+            | "zh-hant"
+            | "en"
+            | "en-us"
+            | "en-gb"
+            | "ja"
+            | "ko"
+            | "fr"
+            | "de"
+            | "es"
+            | "ru"
+            | "it"
+            | "pt"
+            | "nl"
+            | "pl"
+            | "ar"
+            | "sv"
+            | "tr"
+            | "vi"
+            | "uk"
+    )
+}
+
+/// 验证翻译引擎标识是否合法
+pub fn validate_engine_id(engine: &str) -> bool {
+    let clean = engine.trim().to_lowercase();
+    if clean.is_empty() {
+        return true; // 允许默认引擎
     }
+    matches!(
+        clean.as_str(),
+        "google" | "google_web" | "deepl" | "openai" | "deepseek"
+    )
 }
 
 /// 验证翻译请求参数合法性
@@ -39,6 +70,18 @@ pub fn validate_translation_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_engine_id_validation() {
+        assert!(validate_engine_id("google"));
+        assert!(validate_engine_id("deepl"));
+        assert!(validate_engine_id("deepseek"));
+        assert!(validate_engine_id("openai"));
+        assert!(validate_engine_id(""));
+
+        assert!(!validate_engine_id("unknown_engine"));
+        assert!(!validate_engine_id("baidu"));
+    }
 
     #[test]
     fn test_language_code_validation() {

@@ -20,6 +20,12 @@ pub async fn translate(
     transly_core::validate_translation_input(&text, &sl, &target_lang)
         .map_err(|e| e.to_string())?;
 
+    if let Some(ref eng) = engine_name {
+        if !transly_core::validate_engine_id(eng) {
+            return Err(format!("不支持或未知的翻译引擎: {eng}"));
+        }
+    }
+
     // 从全局引擎池中快速复用长连接实例
     let active_engine = if let Some(ref name) = engine_name {
         pool.get_engine(name).await

@@ -17,4 +17,4 @@ pub use engine::{
 pub use error::{Error, Result};
 pub use glossary::Glossary;
 pub use ocr::{OcrEngine, OcrRequest, OcrResponse, SystemOcrEngine};
-pub use validation::{validate_language_code, validate_translation_input};
+pub use validation::{validate_engine_id, validate_language_code, validate_translation_input};

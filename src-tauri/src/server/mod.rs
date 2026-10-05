@@ -38,6 +38,7 @@ pub struct ServerState {
     pub pool: Arc<crate::engine_pool::EnginePool>,
     pub cache: Arc<TranslationCache>,
     pub glossary: Arc<RwLock<Glossary>>,
+    pub concurrency_limit: Arc<tokio::sync::Semaphore>,
 }
 
 fn is_allowed_origin(origin_str: &str) -> bool {
@@ -86,6 +87,7 @@ pub fn create_router(
         pool,
         cache,
         glossary,
+        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)), // 限制本地并发处理至多 10 批
     };
 
     let protected = Router::new()
@@ -173,6 +175,20 @@ async fn translate_batch_handler(
     {
         return Err(StatusCode::BAD_REQUEST);
     }
+
+    // 强校验引擎名称合法性，杜绝未知引擎静默降级掩盖调用错误
+    if let Some(ref eng) = payload.engine {
+        if !transly_core::validate_engine_id(eng) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    // 获取并发令牌，限制全服务最大并发量
+    let _permit = state
+        .concurrency_limit
+        .acquire()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // 支持按请求参数动态选择引擎，未指定则使用默认引擎
     let active_engine = if let Some(ref eng) = payload.engine {
@@ -394,6 +410,7 @@ mod tests {
             pool,
             cache: cache.clone(),
             glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
         };
 
         let app = Router::new()
@@ -441,6 +458,7 @@ mod tests {
             pool,
             cache: cache.clone(),
             glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
         };
 
         let app = Router::new()
@@ -490,6 +508,7 @@ mod tests {
             pool,
             cache,
             glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
         };
 
         let app = Router::new()
@@ -526,7 +545,20 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(payload.to_string()))
             .unwrap();
-        let res2 = app.oneshot(huge_req).await.unwrap();
+        let res2 = app.clone().oneshot(huge_req).await.unwrap();
         assert_eq!(res2.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // 3. 测试未知非法引擎参数拒绝，杜绝静默降级
+        let invalid_engine_req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"texts":["hello"],"target_lang":"zh-CN","engine":"unknown_provider"}"#,
+            ))
+            .unwrap();
+        let res3 = app.oneshot(invalid_engine_req).await.unwrap();
+        assert_eq!(res3.status(), StatusCode::BAD_REQUEST);
     }
 }

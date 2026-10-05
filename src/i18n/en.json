@@ -17,7 +17,6 @@
     "engineSelect": "Engine",
     "maxBatch": "Max batch ",
     "apiKeyRequired": "API key required",
-    "fallbackNotice": "API Key not configured; fell back to Google",
     "btnOcrPaste": "Paste & OCR",
     "ocrRunning": "Scanning image..."
   },

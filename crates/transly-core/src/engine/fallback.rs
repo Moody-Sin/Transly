@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::{TranslateEngine, TranslationRequest, TranslationResponse};
-use crate::Result;
+use crate::{Error, Result};
 
 /// 支持主备容灾降级的翻译引擎包装器
 pub struct FallbackEngine {
@@ -37,16 +37,22 @@ impl TranslateEngine for FallbackEngine {
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
         match self.primary.translate(req).await {
             Ok(res) => Ok(res),
-            Err(primary_err) => match self.fallback.translate(req).await {
-                Ok(mut res) => {
-                    // 保留备用引擎标识或注明来源
-                    if !res.engine.ends_with("(fallback)") {
-                        res.engine = format!("{}(fallback)", res.engine);
-                    }
-                    Ok(res)
+            Err(primary_err) => {
+                // 如果是缺失凭据/未配置 API Key，直接向上报错，禁止静默由备用引擎接管
+                if matches!(primary_err, Error::MissingCredentials(_)) {
+                    return Err(primary_err);
                 }
-                Err(_) => Err(primary_err),
-            },
+                match self.fallback.translate(req).await {
+                    Ok(mut res) => {
+                        // 保留备用引擎标识或注明来源
+                        if !res.engine.ends_with("(fallback)") {
+                            res.engine = format!("{}(fallback)", res.engine);
+                        }
+                        Ok(res)
+                    }
+                    Err(_) => Err(primary_err),
+                }
+            }
         }
     }
 
@@ -56,17 +62,23 @@ impl TranslateEngine for FallbackEngine {
     ) -> Result<Vec<TranslationResponse>> {
         match self.primary.translate_batch(requests).await {
             Ok(results) => Ok(results),
-            Err(primary_err) => match self.fallback.translate_batch(requests).await {
-                Ok(mut results) => {
-                    for r in &mut results {
-                        if !r.engine.ends_with("(fallback)") {
-                            r.engine = format!("{}(fallback)", r.engine);
-                        }
-                    }
-                    Ok(results)
+            Err(primary_err) => {
+                // 如果是缺失凭据/未配置 API Key，直接向上报错，禁止静默由备用引擎接管
+                if matches!(primary_err, Error::MissingCredentials(_)) {
+                    return Err(primary_err);
                 }
-                Err(_) => Err(primary_err),
-            },
+                match self.fallback.translate_batch(requests).await {
+                    Ok(mut results) => {
+                        for r in &mut results {
+                            if !r.engine.ends_with("(fallback)") {
+                                r.engine = format!("{}(fallback)", r.engine);
+                            }
+                        }
+                        Ok(results)
+                    }
+                    Err(_) => Err(primary_err),
+                }
+            }
         }
     }
 }
@@ -141,8 +153,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_primary_used_when_successful() {
-        let primary = Arc::new(SuccessEngine("primary"));
+    async fn test_fallback_does_not_mask_missing_credentials() {
+        struct UnconfiguredEngine;
+        #[async_trait]
+        impl TranslateEngine for UnconfiguredEngine {
+            fn id(&self) -> &str {
+                "unconfigured"
+            }
+            fn name(&self) -> &str {
+                "Unconfigured"
+            }
+            async fn translate(&self, _req: &TranslationRequest) -> Result<TranslationResponse> {
+                Err(Error::MissingCredentials("API Key 不能为空".into()))
+            }
+        }
+
+        let primary = Arc::new(UnconfiguredEngine);
         let fallback = Arc::new(SuccessEngine("backup"));
         let engine = FallbackEngine::new(primary, fallback);
 
@@ -152,8 +178,10 @@ mod tests {
             target_lang: "zh-CN".to_string(),
         };
 
-        let res = engine.translate(&req).await.unwrap();
-        assert_eq!(res.text, "primary:hello");
-        assert_eq!(res.engine, "primary");
+        let err = engine.translate(&req).await.unwrap_err();
+        assert!(
+            matches!(err, Error::MissingCredentials(_)),
+            "未配置密钥时禁止回退到备用引擎"
+        );
     }
 }

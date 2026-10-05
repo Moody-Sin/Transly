@@ -72,7 +72,6 @@ export type TranslateOutcomeDto = {
 	engine: string,
 	cached: boolean,
 	detected_source_lang: string | null,
-	fallback_reason: string | null,
 };
 
 /* Tauri Specta runtime */

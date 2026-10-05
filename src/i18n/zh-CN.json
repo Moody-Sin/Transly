@@ -17,7 +17,6 @@
     "engineSelect": "翻译引擎",
     "maxBatch": "单批上限 ",
     "apiKeyRequired": "需配置密钥",
-    "fallbackNotice": "未配置密钥，已自动回退 Google",
     "btnOcrPaste": "识别剪贴板图片",
     "ocrRunning": "正在识图中..."
   },

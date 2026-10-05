@@ -11,7 +11,6 @@ pub struct TranslateOutcomeDto {
     pub engine: String,
     pub cached: bool,
     pub detected_source_lang: Option<String>,
-    pub fallback_reason: Option<String>,
 }
 
 /// 结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口
@@ -85,18 +84,6 @@ pub async fn translate(
     // 检查缓存状态快照与 generation 版本号
     let (cache_enabled, start_gen) = cache_controller.snapshot();
 
-    // 计算降级原因（如果请求指定了收费引擎但未配置密钥降级回退至 Google 网页翻译）
-    let requested_name = engine_name.as_deref().unwrap_or("google").to_lowercase();
-    let is_requested_paid =
-        requested_name == "deepl" || requested_name == "openai" || requested_name == "deepseek";
-    let is_actual_google = active_engine.id() == "google_web"
-        && !active_engine.capabilities().name.contains("容灾降级");
-    let fallback_reason = if is_requested_paid && is_actual_google {
-        Some("unconfigured_key".to_string())
-    } else {
-        None
-    };
-
     // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
         let is_fallback_capable = active_engine.capabilities().name.contains("容灾降级");
@@ -125,7 +112,6 @@ pub async fn translate(
                 engine: used_engine,
                 cached: true,
                 detected_source_lang: None,
-                fallback_reason,
             });
         }
     }
@@ -152,7 +138,6 @@ pub async fn translate(
                 engine: res.engine,
                 cached: false,
                 detected_source_lang: res.detected_source_lang,
-                fallback_reason,
             })
         }
         Err(e) => Err(TranslateErrorDto::from_error(&e)),

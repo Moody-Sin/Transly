@@ -61,9 +61,14 @@ export function restoreOriginalText(container: Node = document.body) {
 }
 
 interface TextNodeEntry {
+  id: string
   node: Text
   text: string
 }
+
+// 维护失败文本节点映射，供局部重试与状态报告
+const failedItemsMap = new Map<string, TextNodeEntry & { errorKind?: string }>()
+let nodeSequenceId = 0
 
 /**
  * 递归收集容器内所有有效的正文文本节点
@@ -78,7 +83,8 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
     if (parent && shouldTranslateElement(parent) && !translatedTextSet.has(textNode)) {
       const text = textNode.nodeValue?.trim()
       if (text && text.length >= 2 && !/^[\d\s.,/#!$%^&*;:{}=\-_`~()]+$/.test(text)) {
-        return [{ node: textNode, text: textNode.nodeValue || '' }]
+        nodeSequenceId += 1
+        return [{ id: `node_${nodeSequenceId}`, node: textNode, text: textNode.nodeValue || '' }]
       }
     }
     return []
@@ -102,7 +108,9 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 
   let currentNode = walker.nextNode()
   while (currentNode) {
+    nodeSequenceId += 1
     entries.push({
+      id: `node_${nodeSequenceId}`,
       node: currentNode as Text,
       text: currentNode.nodeValue || '',
     })
@@ -111,6 +119,7 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 
   return entries
 }
+
 
 let isObserving = false
 let currentObserver: MutationObserver | null = null
@@ -196,6 +205,17 @@ export function stopDynamicObserver() {
   isObserving = false
 }
 
+interface BatchResponsePayload {
+  translations?: string[]
+  items?: Array<{
+    status: 'success' | 'failed'
+    id: string
+    text?: string
+    error_kind?: string
+    message?: string
+  }>
+}
+
 async function translateEntries(
   entries: TextNodeEntry[],
   targetLang: string,
@@ -209,7 +229,7 @@ async function translateEntries(
   let failedBatches = 0
 
   for (let i = 0; i < entries.length; i += batchSize) {
-    // 发送前检查：如果用户已经点击“还原原文”或发起了新任务，直接阻断
+    // 发送前检查：如果用户已经点击“取消”、“还原原文”或发起了新任务，直接阻断
     if (expectedGen !== currentGeneration) {
       console.log(`[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`)
       chrome.runtime.sendMessage({
@@ -220,14 +240,16 @@ async function translateEntries(
     }
 
     const batch = entries.slice(i, i + batchSize)
+    const items = batch.map((item) => ({ id: item.id, text: item.text }))
     const texts = batch.map((item) => item.text)
 
     try {
-      const response = await new Promise<{ ok: boolean; data?: { translations: string[] }; error?: string }>(
+      const response = await new Promise<{ ok: boolean; data?: BatchResponsePayload; error?: string }>(
         (resolve) => {
           chrome.runtime.sendMessage(
             {
               type: 'TRANSLATE_BATCH',
+              items,
               texts,
               source_lang: 'auto',
               target_lang: targetLang,
@@ -238,7 +260,7 @@ async function translateEntries(
         },
       )
 
-      // 响应后强校验：如果请求在途期间用户触发了还原或新任务，彻底丢弃响应，严禁写入 DOM
+      // 响应后强校验：如果请求在途期间用户触发了取消、还原或新任务，彻底丢弃响应，严禁写入 DOM
       if (expectedGen !== currentGeneration) {
         console.log(`[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`)
         chrome.runtime.sendMessage({
@@ -248,18 +270,50 @@ async function translateEntries(
         return
       }
 
-      if (response && response.ok && response.data?.translations) {
-        response.data.translations.forEach((translated, idx) => {
-          if (translated && batch[idx] && expectedGen === currentGeneration) {
-            replaceTextNode(batch[idx].node, translated)
+      if (response && response.ok && response.data) {
+        const resData = response.data
+        if (resData.items && resData.items.length > 0) {
+          // 优先消费结构化 items 契约：精准映射 ID
+          const itemMap = new Map(resData.items.map((it) => [it.id, it]))
+          for (const entry of batch) {
+            const itemRes = itemMap.get(entry.id)
+            if (itemRes && itemRes.status === 'success' && itemRes.text) {
+              replaceTextNode(entry.node, itemRes.text)
+              failedItemsMap.delete(entry.id)
+              completedNodes += 1
+            } else {
+              // 失败项：保留当前 TextNode 原文不变，记录至 failedItemsMap
+              failedItemsMap.set(entry.id, {
+                ...entry,
+                errorKind: itemRes?.error_kind || 'internal',
+              })
+            }
           }
-        })
-        completedNodes += batch.length
+        } else if (resData.translations) {
+          // 兼容旧版 translations
+          resData.translations.forEach((translated, idx) => {
+            if (batch[idx] && expectedGen === currentGeneration) {
+              if (translated && translated !== batch[idx].text) {
+                replaceTextNode(batch[idx].node, translated)
+                failedItemsMap.delete(batch[idx].id)
+                completedNodes += 1
+              } else {
+                failedItemsMap.set(batch[idx].id, { ...batch[idx] })
+              }
+            }
+          })
+        }
       } else {
         failedBatches += 1
+        for (const entry of batch) {
+          failedItemsMap.set(entry.id, { ...entry, errorKind: 'network' })
+        }
       }
     } catch (err) {
       failedBatches += 1
+      for (const entry of batch) {
+        failedItemsMap.set(entry.id, { ...entry, errorKind: 'network' })
+      }
       console.warn('[Transly] 批量翻译出错:', err)
     }
 
@@ -272,20 +326,29 @@ async function translateEntries(
         total: totalNodes,
         failedBatches,
         totalBatches,
+        failedCount: failedItemsMap.size,
       }).catch(() => {})
     }
   }
 
   if (expectedGen === currentGeneration) {
+    const isTotalFailed = completedNodes === 0 && totalNodes > 0
+    const isPartialFailed = failedItemsMap.size > 0 && completedNodes > 0
     chrome.runtime.sendMessage({
-      type: failedBatches === totalBatches && totalBatches > 0 ? 'TRANSLATION_FAILED' : 'TRANSLATION_FINISHED',
+      type: isTotalFailed
+        ? 'TRANSLATION_FAILED'
+        : isPartialFailed
+          ? 'TRANSLATION_PARTIAL_FAILED'
+          : 'TRANSLATION_FINISHED',
       generation: expectedGen,
       completed: completedNodes,
       total: totalNodes,
       failedBatches,
+      failedCount: failedItemsMap.size,
     }).catch(() => {})
   }
 }
+
 
 /**
  * 执行整页沉浸式翻译（分批次打包请求，原地替换）

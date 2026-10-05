@@ -11,6 +11,8 @@ async-trait = "0.1"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# 仅为让 ErrorKind 导出 TS 字面量联合（前后端共享错误分类契约），不引入额外构建成本
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 tokio = { version = "1.43", features = ["sync", "macros", "rt"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

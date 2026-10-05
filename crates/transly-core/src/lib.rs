@@ -16,7 +16,7 @@ pub use engine::{
     GoogleWebEngine, OpenAIEngine, TranslateEngine, TranslationRequest, TranslationResponse,
 };
 pub use error::{Error, ErrorKind, Result};
-pub use task::{classify_error, TaskError, TaskOutcome, TaskState};
 pub use glossary::Glossary;
 pub use ocr::{OcrEngine, OcrRequest, OcrResponse, SystemOcrEngine};
+pub use task::{classify_error, TaskError, TaskOutcome, TaskState};
 pub use validation::{validate_engine_id, validate_language_code, validate_translation_input};

@@ -1,7 +1,44 @@
 use crate::engine_pool::EnginePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use transly_core::{detect::detect_language, Glossary, TranslationCache, TranslationRequest};
+use transly_core::task::classify_error;
+use transly_core::{
+    detect::detect_language, Error, ErrorKind, Glossary, TranslationCache, TranslationRequest,
+};
+
+/// 翻译成功结果：携带实际执行引擎与缓存命中标记，供 UI 展示与降级识别
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct TranslateOutcomeDto {
+    pub text: String,
+    pub engine: String,
+    pub cached: bool,
+    pub detected_source_lang: Option<String>,
+}
+
+/// 结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct TranslateErrorDto {
+    pub kind: ErrorKind,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl TranslateErrorDto {
+    pub fn from_error(err: &Error) -> Self {
+        let t = classify_error(err);
+        Self {
+            kind: t.kind,
+            message: t.message,
+            retryable: t.retryable,
+        }
+    }
+}
+
+impl From<Error> for TranslateErrorDto {
+    fn from(err: Error) -> Self {
+        Self::from_error(&err)
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -15,16 +52,25 @@ pub async fn translate(
     pool: tauri::State<'_, Arc<EnginePool>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
     cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
-) -> Result<String, String> {
+) -> Result<TranslateOutcomeDto, TranslateErrorDto> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
-    // 统一输入参数防线校验
-    transly_core::validate_translation_input(&text, &sl, &target_lang)
-        .map_err(|e| e.to_string())?;
+    // 统一输入参数防线校验：参数非法属于不可重试的 Input 类
+    transly_core::validate_translation_input(&text, &sl, &target_lang).map_err(|e| {
+        TranslateErrorDto {
+            kind: ErrorKind::Input,
+            message: e.to_string(),
+            retryable: false,
+        }
+    })?;
 
     if let Some(ref eng) = engine_name {
         if !transly_core::validate_engine_id(eng) {
-            return Err(format!("不支持或未知的翻译引擎: {eng}"));
+            return Err(TranslateErrorDto {
+                kind: ErrorKind::Input,
+                message: format!("不支持或未知的翻译引擎: {eng}"),
+                retryable: false,
+            });
         }
     }
 
@@ -44,7 +90,13 @@ pub async fn translate(
     if cache_enabled {
         if let Ok(Some(cached_text)) = cache.get(&text, &sl, &target_lang, engine_id) {
             let g = glossary.read().await;
-            return Ok(g.apply(&cached_text));
+            let applied = g.apply(&cached_text);
+            return Ok(TranslateOutcomeDto {
+                text: applied,
+                engine: engine_id.to_string(),
+                cached: true,
+                detected_source_lang: None,
+            });
         }
     }
 
@@ -65,9 +117,14 @@ pub async fn translate(
                 eprintln!("[Cache Write Warning] 桌面端翻译缓存写入失败: {e}");
             }
             let g = glossary.read().await;
-            Ok(g.apply(&res.text))
+            Ok(TranslateOutcomeDto {
+                text: g.apply(&res.text),
+                engine: res.engine,
+                cached: false,
+                detected_source_lang: res.detected_source_lang,
+            })
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(TranslateErrorDto::from_error(&e)),
     }
 }
 
@@ -315,4 +372,39 @@ pub async fn get_engine_capabilities(
         supports_batch: caps.supports_batch,
         requires_api_key: caps.requires_api_key,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use transly_core::{Error, ErrorKind};
+
+    #[test]
+    fn test_translate_error_dto_serializes_structured_kind() {
+        let dto = TranslateErrorDto::from_error(&Error::Engine {
+            engine: "deepl".into(),
+            message: "rate limit".into(),
+        });
+        let json = serde_json::to_string(&dto).unwrap();
+        // 前端按此 key 分类，禁止退化为裸字符串
+        assert!(json.contains(r#""kind":"engine""#));
+        assert!(json.contains(r#""retryable":true"#));
+        // 不得泄露密钥或 Authorization 头
+        assert!(!json.to_lowercase().contains("authorization"));
+        assert!(!json.to_lowercase().contains("api_key\":\""));
+    }
+
+    #[test]
+    fn test_translate_error_dto_auth_not_retryable() {
+        let dto = TranslateErrorDto::from_error(&Error::MissingCredentials("deepl key".into()));
+        assert_eq!(dto.kind, ErrorKind::Auth);
+        assert!(!dto.retryable, "缺密钥时重试无意义，不得提供重试入口");
+    }
+
+    #[test]
+    fn test_translate_error_dto_input_not_retryable() {
+        let dto = TranslateErrorDto::from_error(&Error::Input("翻译文本过长".into()));
+        assert_eq!(dto.kind, ErrorKind::Input);
+        assert!(!dto.retryable);
+    }
 }

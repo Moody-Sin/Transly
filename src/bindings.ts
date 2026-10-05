@@ -4,7 +4,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<string, string>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
+	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
 	getEngineCapabilities: (engine: string) => typedError<EngineCapabilitiesDto, string>(__TAURI_INVOKE("get_engine_capabilities", { engine })),
 	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
@@ -31,6 +31,23 @@ export type EngineCapabilitiesDto = {
 	supports_streaming: boolean,
 	supports_batch: boolean,
 	requires_api_key: boolean,
+};
+
+export type ErrorKind = "input" | "config" | "auth" | "network" | "engine" | "timeout" | "cancelled" | "internal";
+
+/**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */
+export type TranslateErrorDto = {
+	kind: ErrorKind,
+	message: string,
+	retryable: boolean,
+};
+
+/**  翻译成功结果：携带实际执行引擎与缓存命中标记，供 UI 展示与降级识别 */
+export type TranslateOutcomeDto = {
+	text: string,
+	engine: string,
+	cached: boolean,
+	detected_source_lang: string | null,
 };
 
 /* Tauri Specta runtime */

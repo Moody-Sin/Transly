@@ -43,4 +43,4 @@ Transly 浏览器扩展仅申请最小必要权限：
 ## 5. 联系方式
 
 如果您对本隐私政策有任何疑问、意见或建议，请通过 GitHub 仓库向我们提交反馈：
-- GitHub: [https://github.com/transly/transly](https://github.com/transly/transly)
+- GitHub: [https://github.com/Moody-Sin/Transly](https://github.com/Moody-Sin/Transly)

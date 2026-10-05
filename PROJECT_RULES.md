@@ -6,7 +6,7 @@
 
 目标平台：
 - 桌面端：Windows / macOS / Linux
-- 浏览器插件端：Chromium 内核浏览器（Chrome, Edge 等）/ Firefox，与桌面端同步开发
+- 浏览器插件端：Chromium 内核浏览器（Chrome, Edge 等），已实现并验证；Firefox 尚未实现（代码仅使用 `chrome.*` API，无 `browser_specific_settings`），待实际兼容验证后再声明支持
 - 未来阶段：iOS / Android（移动端，架构预留，暂不实现）
 
 核心原则：
@@ -81,7 +81,7 @@
 - 与 Rust 通信使用 `tauri-specta` 自动生成的 client，禁止手写 IPC 调用
 
 ### 通用与 Git Hooks
-- 提交前通过 `lefthook` 自动校验：`cargo fmt --check` + `cargo clippy` + `tsc --noEmit` + `eslint`
+- 提交前通过 `lefthook` 自动校验：`cargo fmt --check` + `cargo clippy` + `tsc --noEmit` + `eslint` + `pnpm run test:task`
 
 ---
 
@@ -240,7 +240,9 @@ transly/
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy -- -D warnings`
 - [ ] `cargo test`
+- [ ] `transly-core` 行覆盖率 ≥70%（`cargo llvm-cov --package transly-core --fail-under-lines 70`）
 - [ ] 前端 `eslint` + `tsc --noEmit`（包含桌面端与插件端）
+- [ ] 前端任务单测（`pnpm run test:task`）
 - [ ] IPC TS 类型与 Rust 生成结果一致
 - [ ] secret 扫描（gitleaks）
 - [ ] 禁止提交文件检查（大文件、node_modules）

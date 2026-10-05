@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
       - name: Rust 依赖与系统库准备
         run: |
           sudo apt-get update
@@ -27,6 +27,10 @@ jobs:
         run: cargo clippy --release --workspace -- -D warnings
       - name: 测试套件
         run: cargo test --workspace
+      - name: 安装覆盖率工具
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: 核心覆盖率门禁 (transly-core >= 70%)
+        run: cargo llvm-cov --package transly-core --fail-under-lines 70 --summary-only
 
   frontend-checks:
     name: 前端与插件编译检查
@@ -39,7 +43,7 @@ jobs:
           version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
       - name: Rust 系统依赖（用于生成 bindings）
         run: |
@@ -55,6 +59,8 @@ jobs:
         run: pnpm run build
       - name: 前端规范检查
         run: pnpm run lint
+      - name: 前端任务单测
+        run: pnpm run test:task
       - name: 浏览器插件构建校验
         run: pnpm --filter transly-extension run build
 

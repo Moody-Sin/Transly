@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe } from 'lucide-react'
 import { commands } from './bindings'
+import type { EngineCapabilitiesDto } from './bindings'
 import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
@@ -30,6 +31,7 @@ export default function App() {
   const [glossaryTarget, setGlossaryTarget] = useState('')
   const [glossaryList, setGlossaryList] = useState<[string, string][]>([])
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
+  const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
 
   const isFloatWindow = window.location.hash === '#float'
 
@@ -72,6 +74,15 @@ export default function App() {
 
     loadGlossaryList()
   }, [])
+
+  useEffect(() => {
+    // 引擎能力与配置检查：展示批量上限、降级标记与密钥配置状态
+    let cancelled = false
+    commands.getEngineCapabilities(engine).then((res) => {
+      if (!cancelled && res.status === 'ok') setCapabilities(res.data)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [engine])
 
   const handleToggleCacheEnabled = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.checked
@@ -330,6 +341,13 @@ export default function App() {
               <option value="openai">OpenAI (需API Key / 自动降级)</option>
             </select>
           </div>
+
+          {capabilities && (
+            <div className="text-[10px] text-slate-400">
+              {capabilities.name} · {t.translation.maxBatch}{capabilities.max_batch_size}
+              {capabilities.requires_api_key && ` · ${t.translation.apiKeyRequired}`}
+            </div>
+          )}
         </div>
 
         <div className="grid flex-1 grid-cols-2 gap-4">

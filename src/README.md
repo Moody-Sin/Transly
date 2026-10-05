@@ -15,11 +15,10 @@
 
 ## 结构
 
-- **components**: 通用 UI 组件与原子部件。
-- **pages**: 主界面、设置窗口、划词气泡浮窗等视图。
-- **hooks**: 状态与交互钩子。
-- **stores**: 全局客户端状态。
+- **App.tsx**: 主界面与划词浮窗视图（`#float` 路由）、设置中心。
+- **task**: 共享任务状态机、代际隔离、结构化错误回落与 `useTaskRunner` 入口钩子，附 `node:test` 单测。
 - **i18n**: 国际化文案（`zh-CN` / `en`）。
+- **bindings.ts**: tauri-specta 生成的强类型 IPC 绑定，禁止手工编辑。
 
 ## 开发规范
 

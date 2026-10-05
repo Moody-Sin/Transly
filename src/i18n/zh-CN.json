@@ -14,7 +14,9 @@
     "translating": "翻译中...",
     "copy": "复制",
     "copied": "已复制",
-    "engineSelect": "翻译引擎"
+    "engineSelect": "翻译引擎",
+    "maxBatch": "单批上限 ",
+    "apiKeyRequired": "需配置密钥"
   },
   "float": {
     "title": "Transly 快捷划词",

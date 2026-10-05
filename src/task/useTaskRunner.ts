@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { commands } from '../bindings'
 import {
-  canRetry, nextState,
+  canRetryExecution, nextState,
   type TaskError, type TaskState,
 } from './taskState'
 import { applyIfCurrent } from './generation'
@@ -39,6 +39,9 @@ const EMPTY: RunnerSnapshot = {
 
 export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   const [snapshot, setSnapshot] = useState<RunnerSnapshot>(EMPTY)
+  // 供回调读取最新快照而不重建回调（retry 需同步判定当前是否允许重试）
+  const snapshotRef = useRef(snapshot)
+  snapshotRef.current = snapshot
 
   const genRef = useRef(0)
   const lastRunRef = useRef<{ text: string; source: RunnerSnapshot['source'] } | null>(null)
@@ -125,9 +128,9 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
 
   const retry = useCallback(() => {
     const last = lastRunRef.current
-    if (!last) return
-    setSnapshot((s) => (canRetry(s.state, s.error) ? { ...s } : s))
-    void execute(last.text, last.source)
+    // 守卫：仅失败态且错误可重试时才允许重跑，与 UI 的 canRetry 判定一致
+    if (!canRetryExecution(snapshotRef.current.state, snapshotRef.current.error, last !== null)) return
+    void execute(last!.text, last!.source)
   }, [execute])
 
   const reset = useCallback(() => {

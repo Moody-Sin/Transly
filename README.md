@@ -96,7 +96,7 @@ pnpm tauri dev
 
 ### 3. 已知限制与注意事项
 - **复杂富文本编辑器**：为保障页面编辑安全，Transly 默认不对 `contenteditable`、富文本代码编辑器（如 Monaco / CodeMirror）及包含 `.notranslate` 属性的节点进行强行替换。
-- **跨平台原生 OCR**：Windows 平台基于系统 Media OCR，macOS 基于 Vision 框架，Linux 平台优先调用轻量系统级 OCR 兼容接口。
+- **图片 OCR 尚未可用**：`OcrEngine` 抽象与 `ocr_image` 命令管道已就位，但平台原生识别实现尚未交付，调用会返回明确的「未支持」错误而非假成功。截图 OCR 翻译将在后续版本交付。
 - **外部 API 差异**：DeepL、OpenAI 及 DeepSeek 需在设置中配置有效 API Key（安全托管于系统凭据管理器中，绝不上传第三方服务器）。
 
 ## 维护者

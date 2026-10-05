@@ -14,7 +14,9 @@
     "translating": "Translating...",
     "copy": "Copy",
     "copied": "Copied",
-    "engineSelect": "Engine"
+    "engineSelect": "Engine",
+    "maxBatch": "Max batch ",
+    "apiKeyRequired": "API key required"
   },
   "float": {
     "title": "Transly Quick Look",

@@ -13,3 +13,5 @@ pre-commit:
       run: pnpm --filter transly-extension build
     frontend-lint:
       run: pnpm run lint
+    frontend-test:
+      run: pnpm run test:task

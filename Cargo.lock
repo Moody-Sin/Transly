@@ -4250,6 +4250,7 @@ dependencies = [
  "base64 0.22.1",
  "enigo",
  "http-body-util",
+ "image",
  "keyring",
  "rand 0.8.8",
  "serde",
@@ -4265,6 +4266,7 @@ dependencies = [
  "tower",
  "tower-http",
  "transly-core",
+ "windows 0.62.2",
 ]
 
 [[package]]

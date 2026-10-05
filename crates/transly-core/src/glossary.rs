@@ -49,9 +49,9 @@ impl Glossary {
     pub fn apply(&self, text: &str) -> String {
         let mut result = text.to_string();
 
-        // 按照源词长度降序排列，避免短词先替换破坏长复合术语
+        // 确定性稳定排序：按源词长度降序，同长度按字典序升序排，消除非确定性
         let mut sorted_entries: Vec<(&String, &TermEntry)> = self.terms.iter().collect();
-        sorted_entries.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
+        sorted_entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0)));
 
         for (src, entry) in sorted_entries {
             if let Some(ref re) = entry.regex {
@@ -87,6 +87,20 @@ mod tests {
         let text = "Pay in USD now";
         let result = glossary.apply(text);
         assert_eq!(result, "Pay in $100 now");
+    }
+
+    #[test]
+    fn test_glossary_same_length_deterministic() {
+        let mut g1 = Glossary::new();
+        g1.insert("cat", "猫");
+        g1.insert("dog", "狗");
+
+        let mut g2 = Glossary::new();
+        g2.insert("dog", "狗");
+        g2.insert("cat", "猫");
+
+        let text = "a cat and a dog";
+        assert_eq!(g1.apply(text), g2.apply(text));
     }
 
     #[test]

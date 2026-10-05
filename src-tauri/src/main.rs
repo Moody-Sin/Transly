@@ -16,9 +16,11 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
-use transly_core::{Glossary, SystemOcrEngine, TranslationCache};
+use transly_core::{AppConfig, Glossary, SystemOcrEngine, TranslationCache};
 
 fn main() {
+    let config = AppConfig::default();
+
     // 初始化持久化翻译缓存
     let cache = TranslationCache::default_shared();
 
@@ -84,6 +86,7 @@ fn main() {
     let server_cache = cache.clone();
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
+    let server_port = config.local_server_port;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -99,7 +102,7 @@ fn main() {
             if let Some(token_val) = server_token {
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = server::start_server(
-                        39281,
+                        server_port,
                         token_val,
                         server_cache,
                         server_pool,

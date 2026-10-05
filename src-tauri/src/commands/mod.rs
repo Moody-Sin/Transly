@@ -119,12 +119,14 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 pub fn set_clipboard_monitor(
     enabled: bool,
     flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
-) {
-    flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
-    let _ = crate::secrets::set_secret(
+) -> Result<(), String> {
+    crate::secrets::set_secret(
         "clipboard_monitor_enabled",
         if enabled { "true" } else { "false" },
-    );
+    )
+    .map_err(|e| format!("写入系统安全凭据失败: {e}"))?;
+    flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]

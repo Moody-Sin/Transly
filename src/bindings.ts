@@ -15,7 +15,7 @@ export const commands = {
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
 	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
 	ocrImage: (imageBase64: string) => typedError<string, string>(__TAURI_INVOKE("ocr_image", { imageBase64 })),
-	setClipboardMonitor: (enabled: boolean) => __TAURI_INVOKE<void>("set_clipboard_monitor", { enabled }),
+	setClipboardMonitor: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_clipboard_monitor", { enabled })),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
 };
 

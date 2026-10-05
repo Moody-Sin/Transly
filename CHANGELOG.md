@@ -7,6 +7,15 @@
 
 ## [Unreleased]
 
+### 安全
+- **Linux 接入 Secret Service 原生持久化后端 (P1)**：切换 `keyring` Linux feature 为 `sync-secret-service`，在 CI/CD 中安装 `libdbus-1-dev` 与 `gnome-keyring`，实现跨平台凭据（Windows / macOS / Linux）生命周期永久持久化对齐。
+- **收紧生产 CSP 端口白名单 (P2)**：彻底移除生产环境中的 `http://localhost:5173` Vite 连接端口，生产构建仅允许连接本地翻译服务 `http://127.0.0.1:39281`。
+
+### 优化
+- **术语库同长度稳定排序与消除级联 (P2)**：排序规则重构为 `b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0))`，实现跨平台确定性替换，补充 `test_glossary_same_length_deterministic` 单元测试。
+- **剪贴板开关持久化错误传播 (P2)**：将 `set_clipboard_monitor` 调整为 `Result<(), String>`，凭据存储失败时向前端准确反馈并回滚 UI 开关。
+- **接入 AppConfig 配置模型至应用启动 (P2)**：消除未使用的配置抽象，在桌面启动与服务绑定中深度集成 `AppConfig`。
+
 ### 修复
 - **启用 Keyring 平台原生凭据后端 (P0)**：在 `Cargo.toml` 中按操作系统细化配置：Windows (`windows-native`)、macOS (`apple-native`)、Linux (`linux-native`)，解决原本回退至临时内存 Mock 导致的密钥无法跨进程/跨重启持久化严重缺陷；强化 `set_secret` 错误传播与凭据往返单元测试。
 - **防止术语库特殊字符被正则错误展开 (P1)**：在 `Glossary::apply` 中使用 `regex::NoExpand` 包装目标文本，确保含 `$`、反斜杠的译文（如 `USD → $100`）按纯字面量替换，杜绝捕获组语法误伤。

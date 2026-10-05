@@ -18,7 +18,7 @@ jobs:
       - name: Rust 依赖与系统库准备
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring
       - name: 格式校验
         run: cargo fmt --all --check
       - name: Clippy 校验 (Debug)

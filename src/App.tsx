@@ -68,7 +68,12 @@ export default function App() {
   const handleToggleClipboardMonitor = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.checked
     setClipboardMonitor(val)
-    await commands.setClipboardMonitor(val)
+    const res = await commands.setClipboardMonitor(val)
+    if (res.status === 'error') {
+      setClipboardMonitor(!val)
+      setSaveStatus(res.error)
+      setTimeout(() => setSaveStatus(null), 2500)
+    }
   }
 
   const handleCopyToken = () => {

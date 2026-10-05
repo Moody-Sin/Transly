@@ -5,7 +5,7 @@ use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 #[cfg(debug_assertions)]
 use specta_typescript::Typescript;
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -17,6 +17,16 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
 use transly_core::{AppConfig, Glossary, SystemOcrEngine, TranslationCache};
+
+/// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示
+#[derive(Clone, serde::Serialize)]
+pub struct FloatRequest {
+    pub text: String,
+    /// "selection" = 全局快捷键划词；"clipboard" = 系统剪贴板监听
+    pub source: &'static str,
+    /// 宿主单调递增；同一 ID 只翻译一次
+    pub request_id: u64,
+}
 
 fn main() {
     let config = AppConfig::default();
@@ -51,6 +61,7 @@ fn main() {
 
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::translate,
+        commands::get_engine_capabilities,
         commands::detect_lang,
         commands::get_server_token,
         commands::rotate_server_token,
@@ -84,6 +95,12 @@ fn main() {
 
     let monitor_flag = clipboard_monitor_enabled.clone();
 
+    // 划词自触发抑制标志与跨入口请求 ID 计数器
+    let selection_flag = Arc::new(AtomicBool::new(false));
+    let request_counter = Arc::new(AtomicU64::new(0));
+    // 浮窗粘滞标志：翻译中/错误态时禁止失焦自动隐藏
+    let float_sticky = Arc::new(AtomicBool::new(false));
+
     // 缓存状态协调器（从系统凭据读取初始开关，纳入 generation 版本控制）
     let initial_cache_enabled = secrets::get_secret("cache_enabled")
         .map(|v| v != "false")
@@ -109,6 +126,8 @@ fn main() {
         .manage(ocr_engine)
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
+        .manage(selection_flag.clone())
+        .manage(float_sticky.clone())
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
@@ -132,14 +151,21 @@ fn main() {
 
             // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
             let app_handle = app.handle().clone();
+            let sel_flag = selection_flag.clone();
+            let counter = request_counter.clone();
             let _ =
                 app.global_shortcut()
                     .on_shortcut("Alt+Shift+D", move |_app, _shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             let handle = app_handle.clone();
+                            let sel_flag = sel_flag.clone();
+                            let counter = counter.clone();
                             tauri::async_runtime::spawn(async move {
                                 // 0. 备份旧剪贴板内容
                                 let old_clipboard = handle.clipboard().read_text().ok();
+
+                                // 模拟复制期间置抑制标志，防止剪贴板监听对同一次复制自触发翻译
+                                sel_flag.store(true, Ordering::SeqCst);
 
                                 // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
                                 if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
@@ -159,10 +185,18 @@ fn main() {
                                 // 3. 提取剪贴板文本并唤起轻量悬浮窗
                                 let text = handle.clipboard().read_text().unwrap_or_default();
                                 if !text.trim().is_empty() {
+                                    let rid = counter.fetch_add(1, Ordering::SeqCst);
                                     if let Some(float_win) = handle.get_webview_window("float") {
                                         let _ = float_win.show();
                                         let _ = float_win.set_focus();
-                                        let _ = float_win.emit("float-translate", text);
+                                        let _ = float_win.emit(
+                                            "float-translate",
+                                            FloatRequest {
+                                                text,
+                                                source: "selection",
+                                                request_id: rid,
+                                            },
+                                        );
                                     }
                                 }
 
@@ -170,6 +204,9 @@ fn main() {
                                 if let Some(old_clipboard) = old_clipboard {
                                     let _ = handle.clipboard().write_text(old_clipboard);
                                 }
+
+                                // 无论成败均释放抑制标志，避免剪贴板监听被永久抑制
+                                sel_flag.store(false, Ordering::SeqCst);
                             });
                         }
                     });
@@ -177,22 +214,37 @@ fn main() {
             // 启动后台剪贴板变动监听任务
             let clip_handle = app.handle().clone();
             let flag = monitor_flag.clone();
+            let clip_sel_flag = selection_flag.clone();
+            let clip_counter = request_counter.clone();
             tauri::async_runtime::spawn(async move {
-                let mut last_clipboard = String::new();
+                let last_clipboard = std::sync::Mutex::new(String::new());
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    if flag.load(Ordering::Relaxed) {
-                        if let Ok(curr) = clip_handle.clipboard().read_text() {
-                            let trimmed = curr.trim();
-                            if !trimmed.is_empty() && trimmed != last_clipboard {
-                                last_clipboard = trimmed.to_string();
-                                // 检测文本且非纯空
-                                if let Some(float_win) = clip_handle.get_webview_window("float") {
-                                    let _ = float_win.show();
-                                    let _ = float_win.emit("float-translate", trimmed.to_string());
-                                }
-                            }
-                        }
+                    if !flag.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    // 划词模拟复制期间不自触发，防止同一段文本翻译两次、浮窗弹两次
+                    if src_tauri::clipboard_gate::is_selection_in_progress(&clip_sel_flag) {
+                        continue;
+                    }
+                    let Ok(curr) = clip_handle.clipboard().read_text() else {
+                        continue;
+                    };
+                    // 去重 + 最短长度门槛：相同内容或过短内容不重复打扰
+                    if !src_tauri::clipboard_gate::should_emit(&last_clipboard, &curr) {
+                        continue;
+                    }
+                    let rid = clip_counter.fetch_add(1, Ordering::SeqCst);
+                    if let Some(float_win) = clip_handle.get_webview_window("float") {
+                        let _ = float_win.show();
+                        let _ = float_win.emit(
+                            "float-translate",
+                            FloatRequest {
+                                text: curr.trim().to_string(),
+                                source: "clipboard",
+                                request_id: rid,
+                            },
+                        );
                     }
                 }
             });

@@ -192,8 +192,8 @@ async fn translate_batch_handler(
             .collect()
     };
 
-    // 限制单次批量文本数量与总字符数，防御 DoS 与过载攻击
-    if unified_items.is_empty() || unified_items.len() > 100 {
+    // 限制单次批量文本数量与总字符数，防御 DoS 与过载攻击（上限收敛至 50 项，与各引擎能力契约保持一致）
+    if unified_items.is_empty() || unified_items.len() > 50 {
         return Err(StatusCode::BAD_REQUEST);
     }
     let total_chars: usize = unified_items.iter().map(|t| t.text.chars().count()).sum();
@@ -236,7 +236,7 @@ async fn translate_batch_handler(
     } else {
         state.pool.default_engine()
     };
-    let engine_id = active_engine.id();
+    let _engine_id = active_engine.id();
 
     // 检查缓存状态快照与 generation 版本，杜绝并发关闭清空后的写回竞争
     let (cache_enabled, start_generation) = state.cache_controller.snapshot();
@@ -245,28 +245,16 @@ async fn translate_batch_handler(
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
-    // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中降级引擎历史缓存）
+    // 1. 若开启缓存，优先查缓存（先查当前引擎，若具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
-        let is_fallback_capable = active_engine.capabilities().name.contains("容灾降级");
         for (idx, item) in unified_items.iter().enumerate() {
-            let cached_opt = match state.cache.get(&item.text, &source, &target, engine_id) {
-                Ok(Some(cached_text)) => Some((cached_text, engine_id.to_string())),
-                _ => {
-                    let fallback_id = "google_web";
-                    if is_fallback_capable && engine_id != fallback_id {
-                        match state.cache.get(&item.text, &source, &target, fallback_id) {
-                            Ok(Some(cached_text)) => {
-                                Some((cached_text, format!("{fallback_id}(fallback)")))
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                }
-            };
-
-            if let Some((cached_text, used_engine)) = cached_opt {
+            if let Some((cached_text, used_engine)) = transly_core::lookup_cache_with_fallback(
+                state.cache.as_ref(),
+                active_engine.as_ref(),
+                &item.text,
+                &source,
+                &target,
+            ) {
                 item_results[idx] = Some(BatchItemResult::Success {
                     id: item.id.clone(),
                     text: cached_text,

@@ -79,32 +79,20 @@ pub async fn translate(
         pool.default_engine()
     };
 
-    let engine_id = active_engine.id();
+    let _engine_id = active_engine.id();
 
     // 检查缓存状态快照与 generation 版本号
     let (cache_enabled, start_gen) = cache_controller.snapshot();
 
-    // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中降级引擎历史缓存）
+    // 1. 若开启缓存，优先查缓存（先查当前引擎，若具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
-        let is_fallback_capable = active_engine.capabilities().name.contains("容灾降级");
-        let cached_opt = match cache.get(&text, &sl, &target_lang, engine_id) {
-            Ok(Some(cached_text)) => Some((cached_text, engine_id.to_string())),
-            _ => {
-                let fallback_id = "google_web";
-                if is_fallback_capable && engine_id != fallback_id {
-                    match cache.get(&text, &sl, &target_lang, fallback_id) {
-                        Ok(Some(cached_text)) => {
-                            Some((cached_text, format!("{fallback_id}(fallback)")))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some((cached_text, used_engine)) = cached_opt {
+        if let Some((cached_text, used_engine)) = transly_core::lookup_cache_with_fallback(
+            cache.inner(),
+            active_engine.as_ref(),
+            &text,
+            &sl,
+            &target_lang,
+        ) {
             let g = glossary.read().await;
             let applied = g.apply(&cached_text);
             return Ok(TranslateOutcomeDto {

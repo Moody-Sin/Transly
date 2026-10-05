@@ -6,24 +6,34 @@ const btnRestore = document.getElementById('btn-restore') as HTMLButtonElement
 const inputToken = document.getElementById('input-token') as HTMLInputElement
 const btnSaveToken = document.getElementById('btn-save-token') as HTMLButtonElement
 const selectEngine = document.getElementById('select-engine') as HTMLSelectElement
+const selectLang = document.getElementById('select-lang') as HTMLSelectElement
 const progressBox = document.getElementById('progress-box') as HTMLElement
 const progressText = document.getElementById('progress-text') as HTMLElement
 const progressCount = document.getElementById('progress-count') as HTMLElement
 const progressBar = document.getElementById('progress-bar') as HTMLElement
 
 // 回显已保存的配置
-chrome.storage.local.get(['transly_server_token', 'transly_engine'], (res) => {
+chrome.storage.local.get(['transly_server_token', 'transly_engine', 'transly_target_lang'], (res) => {
   if (res.transly_server_token) {
     inputToken.value = res.transly_server_token
   }
   if (res.transly_engine) {
     selectEngine.value = res.transly_engine
   }
+  if (res.transly_target_lang && selectLang) {
+    selectLang.value = res.transly_target_lang
+  }
 })
 
 selectEngine.addEventListener('change', () => {
   chrome.storage.local.set({ transly_engine: selectEngine.value })
 })
+
+if (selectLang) {
+  selectLang.addEventListener('change', () => {
+    chrome.storage.local.set({ transly_target_lang: selectLang.value })
+  })
+}
 
 // 保存 Token 并刷新连接
 btnSaveToken.addEventListener('click', () => {
@@ -187,9 +197,10 @@ btnTranslate.addEventListener('click', async () => {
     progressBox.style.display = 'block'
     progressText.textContent = '分析页面...'
     progressBar.style.width = '10%'
+    const targetLang = selectLang ? selectLang.value : 'zh-CN'
     chrome.tabs.sendMessage(tab.id, {
       type: 'START_PAGE_TRANSLATION',
-      target_lang: 'zh-CN',
+      target_lang: targetLang,
       engine: selectEngine.value,
     })
   }

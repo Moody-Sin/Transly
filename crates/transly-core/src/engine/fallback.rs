@@ -29,8 +29,9 @@ impl TranslateEngine for FallbackEngine {
 
     fn capabilities(&self) -> super::EngineCapabilities {
         let mut caps = self.primary.capabilities();
-        // 标定具备降级容灾能力
+        // 标定具备降级容灾能力与明确的备用引擎标识
         caps.name = format!("{}(容灾降级)", caps.name);
+        caps.fallback_engine = Some(self.fallback.id().to_string());
         caps
     }
 

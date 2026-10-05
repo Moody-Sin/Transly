@@ -10,8 +10,9 @@ pub mod validation;
 pub use cache::TranslationCache;
 pub use config::AppConfig;
 pub use engine::{
-    BatchItemRequest, BatchItemResult, DeepLEngine, EngineCapabilities, FallbackEngine,
-    GoogleWebEngine, OpenAIEngine, TranslateEngine, TranslationRequest, TranslationResponse,
+    lookup_cache_with_fallback, BatchItemRequest, BatchItemResult, DeepLEngine, EngineCapabilities,
+    FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine, TranslationRequest,
+    TranslationResponse,
 };
 pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;

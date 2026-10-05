@@ -97,6 +97,7 @@ impl TranslateEngine for OpenAIEngine {
             supports_streaming: true,
             supports_batch: true,
             requires_api_key: true,
+            fallback_engine: None,
         }
     }
 

@@ -91,6 +91,8 @@ pub struct EngineCapabilities {
     pub supports_streaming: bool,
     pub supports_batch: bool,
     pub requires_api_key: bool,
+    #[serde(default)]
+    pub fallback_engine: Option<String>,
 }
 
 #[async_trait]
@@ -106,6 +108,7 @@ pub trait TranslateEngine: Send + Sync {
             supports_streaming: false,
             supports_batch: true,
             requires_api_key: false,
+            fallback_engine: None,
         }
     }
 
@@ -121,6 +124,30 @@ pub trait TranslateEngine: Send + Sync {
         }
         Ok(results)
     }
+}
+
+/// 统一的带 Fallback 降级感知的缓存查询纯函数（杜绝在 IPC 与 HTTP Server 两处重复造轮子与字符串嗅探）
+pub fn lookup_cache_with_fallback(
+    cache: &crate::TranslationCache,
+    engine: &dyn TranslateEngine,
+    text: &str,
+    source_lang: &str,
+    target_lang: &str,
+) -> Option<(String, String)> {
+    let engine_id = engine.id();
+    if let Ok(Some(cached_text)) = cache.get(text, source_lang, target_lang, engine_id) {
+        return Some((cached_text, engine_id.to_string()));
+    }
+
+    if let Some(ref fallback_id) = engine.capabilities().fallback_engine {
+        if fallback_id != engine_id {
+            if let Ok(Some(cached_text)) = cache.get(text, source_lang, target_lang, fallback_id) {
+                return Some((cached_text, format!("{fallback_id}(fallback)")));
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

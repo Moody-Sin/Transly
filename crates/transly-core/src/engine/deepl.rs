@@ -104,6 +104,7 @@ impl TranslateEngine for DeepLEngine {
             supports_streaming: false,
             supports_batch: true,
             requires_api_key: true,
+            fallback_engine: None,
         }
     }
 
@@ -182,43 +183,46 @@ impl TranslateEngine for DeepLEngine {
 
         let target_lang = Self::normalize_target_lang(first_target);
         let source_lang = Self::normalize_source_lang(first_source);
-        let texts: Vec<&str> = requests.iter().map(|r| r.text.as_str()).collect();
+        let chunks: Vec<&[TranslationRequest]> = requests.chunks(50).collect();
+        let mut all_responses = Vec::with_capacity(requests.len());
 
-        let body = DeepLApiRequest {
-            text: &texts,
-            target_lang,
-            source_lang,
-        };
+        for chunk in chunks {
+            let texts: Vec<&str> = chunk.iter().map(|r| r.text.as_str()).collect();
 
-        let resp = self
-            .client
-            .post(self.endpoint())
-            .header("Authorization", format!("DeepL-Auth-Key {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+            let body = DeepLApiRequest {
+                text: &texts,
+                target_lang,
+                source_lang,
+            };
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err_body = resp.text().await.unwrap_or_default();
-            return Err(Error::Engine {
-                engine: self.id().to_string(),
-                message: format!("DeepL API 批量错误 ({status}): {err_body}"),
-            });
+            let resp = self
+                .client
+                .post(self.endpoint())
+                .header("Authorization", format!("DeepL-Auth-Key {}", self.api_key))
+                .json(&body)
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let err_body = resp.text().await.unwrap_or_default();
+                return Err(Error::Engine {
+                    engine: self.id().to_string(),
+                    message: format!("DeepL API 批量错误 ({status}): {err_body}"),
+                });
+            }
+
+            let data: DeepLApiResponse = resp.json().await?;
+            for t in data.translations {
+                all_responses.push(TranslationResponse {
+                    text: t.text,
+                    detected_source_lang: t.detected_source_language,
+                    engine: self.id().to_string(),
+                });
+            }
         }
 
-        let data: DeepLApiResponse = resp.json().await?;
-        let responses = data
-            .translations
-            .into_iter()
-            .map(|t| TranslationResponse {
-                text: t.text,
-                detected_source_lang: t.detected_source_language,
-                engine: self.id().to_string(),
-            })
-            .collect();
-
-        Ok(responses)
+        Ok(all_responses)
     }
 }
 

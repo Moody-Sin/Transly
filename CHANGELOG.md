@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### 修复
+- **代码格式化与缓存关闭路径自动化测试补齐**：执行 `cargo fmt --all` 消除格式漂移；为本地 HTTP 批量服务补充 `test_translate_cache_disabled_path` 测试，强断言在 `cache_enabled == false` 下绝对不向本地 SQLite 写入新条目。
 - **扩展批量翻译严格遵循缓存隐私开关 (P1)**：在本地 HTTP 服务的 `translate_batch_handler` 中集成 `cache_enabled` 共享判定，关闭持久化翻译缓存后彻底停止查询与写入 SQLite 磁盘库，确保桌面端与浏览器扩展两路隐私策略完全一致。
 
 ### 安全

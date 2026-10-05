@@ -222,10 +222,13 @@ async fn translate_batch_handler(
                         } else {
                             engine_id
                         };
-                        let _ =
-                            state
-                                .cache
-                                .set(original_text, &res.text, &source, &target, actual_engine);
+                        let _ = state.cache.set(
+                            original_text,
+                            &res.text,
+                            &source,
+                            &target,
+                            actual_engine,
+                        );
                     }
                     translations[original_idx] = res.text;
                 }
@@ -409,5 +412,57 @@ mod tests {
         // 验证翻译结果已自动写入缓存（缓存存的是引擎原始译文）
         let cached = cache.get("hello", "auto", "zh-CN", "google_web").unwrap();
         assert!(cached.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_translate_cache_disabled_path() {
+        // 1. 设置缓存关闭
+        let _ = crate::secrets::set_secret("cache_enabled", "false");
+
+        let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+
+        let state = ServerState {
+            token: Arc::new("valid-token".to_string()),
+            pool,
+            cache: cache.clone(),
+            glossary,
+        };
+
+        let app = Router::new()
+            .route(
+                "/translate",
+                post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth_middleware,
+                )),
+            )
+            .with_state(state);
+
+        // 预设即使缓存里已有旧词条
+        cache
+            .set("privacy_test", "旧译文", "auto", "zh-CN", "google_web")
+            .unwrap();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"texts":["fresh_text"],"target_lang":"zh-CN"}"#,
+            ))
+            .unwrap();
+
+        // 验证在关闭缓存时，不会写入新条目
+        let _ = app.oneshot(req).await;
+        let fresh_cached = cache
+            .get("fresh_text", "auto", "zh-CN", "google_web")
+            .unwrap();
+        assert_eq!(fresh_cached, None, "关闭缓存时绝对不可向 SQLite 写入新条目");
+
+        // 恢复默认设置
+        let _ = crate::secrets::set_secret("cache_enabled", "true");
     }
 }

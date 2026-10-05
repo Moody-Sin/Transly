@@ -49,6 +49,16 @@ Transly 是一款基于 Rust 与 Tauri 2 构建的跨平台桌面翻译软件，
 
 ## 安装
 
+### 预编译安装包
+
+从 [Releases](https://github.com/transly/transly/releases) 页面下载对应操作系统的安装包：
+- **Windows**: `Transly_0.1.0_x64-setup.exe` 或 `.msi`
+- **macOS**: `Transly_0.1.0_aarch64.dmg`
+- **Linux**: `Transly_0.1.0_amd64.deb` 或 `.AppImage`
+- **浏览器扩展**: 下载 `transly-extension-v0.1.0.zip` 并解压。
+
+### 源码开发构建
+
 需要满足以下开发环境要求：
 - [Node.js](https://nodejs.org/) (>= 18) 与 [pnpm](https://pnpm.io/)
 - [Rust](https://www.rust-lang.org/) (edition 2021+)
@@ -64,17 +74,30 @@ pnpm install
 
 ## 用法
 
-启动桌面端开发模式：
+### 1. 桌面端使用
+启动桌面端开发模式或安装包：
 
 ```sh
 pnpm tauri dev
 ```
 
-启动浏览器插件开发模式：
+- **快捷悬浮翻译**：选中文本按下 `Alt+Shift+D`，自动唤起轻量悬浮窗并即时翻译。
+- **剪贴板监听**：在主界面开启“剪贴板监听”，复制文本即可自动翻译。
+- **独立术语库**：在“术语库”选项卡添加自定义词条（如 `Agent -> 智能体`），全局强制优先精确匹配。
+- **缓存与隐私**：可在设置中开启或关闭“持久化翻译缓存”。关闭时系统将自动清空磁盘翻译历史，且不影响术语库。
 
-```sh
-pnpm --filter extension dev
-```
+### 2. 浏览器插件使用与配对
+1. 打开 Chrome / Edge 扩展管理页面（`chrome://extensions`），开启“开发者模式”。
+2. 点击“加载已解压的扩展程序”，选择 `extension/dist`（或解压后的插件包目录）。
+3. 在 Transly 桌面端设置中复制内部配对 Token。
+4. 打开浏览器插件 Popup，粘贴 Token 并点击“保存配对 Token”，连接状态将变为“● 已连接且配对有效”。
+5. 点击“翻译此网页 (仅译文)”，即可享受原地无缝 DOM 替换翻译；点击“还原原文”瞬间恢复。
+6. **Token 轮换**：若在桌面端点击“重新生成扩展配对 Token”，旧 Token 将即时失效（401 拦截），在扩展重新粘贴新 Token 即可恢复。
+
+### 3. 已知限制与注意事项
+- **复杂富文本编辑器**：为保障页面编辑安全，Transly 默认不对 `contenteditable`、富文本代码编辑器（如 Monaco / CodeMirror）及包含 `.notranslate` 属性的节点进行强行替换。
+- **跨平台原生 OCR**：Windows 平台基于系统 Media OCR，macOS 基于 Vision 框架，Linux 平台优先调用轻量系统级 OCR 兼容接口。
+- **外部 API 差异**：DeepL、OpenAI 及 DeepSeek 需在设置中配置有效 API Key（安全托管于系统凭据管理器中，绝不上传第三方服务器）。
 
 ## 维护者
 

@@ -8,17 +8,24 @@
 ## [Unreleased]
 
 ### 修复
+- **缓存写入错误全链路透传与可观测性 (P2)**：重构 `CacheController::set_if_current` 返回值为 `Result<bool>`，区分“版本有效写入成功”、“请求跨越关闭清空边界拒绝写入”以及“底层存储/SQLite写入异常”三种状态；桌面端与扩展服务捕获异常并输出带上下文的诊断日志，杜绝错误静默丢失。
+
+## [0.1.0] - 2025-05-18
+
+### 新增
+- **Transly 桌面端与沉浸式扩展首次正式发布**：基于 Rust + Tauri 2 构建的轻量极速桌面翻译客户端，以及基于 Manifest V3 的原地 DOM 替换网页沉浸式翻译扩展。
+- **本地回环安全通信协议**：桌面端自动生成 256 位强随机 Bearer Token 并在 `127.0.0.1:39281` 监听，配合严格 CORS 白名单，保障扩展与桌面端安全联动。
+- **Token 动态轮换与即时撤销**：桌面端支持一键轮换 Token 并自动持久化至系统安全凭据管理器，旧 Token 立即 401 失效阻断。
+- **持久化本地 SQLite 缓存**：支持毫秒级重复请求极速命中；提供缓存隐私开关，关闭时自动清空历史缓存并保障在途与后续请求零写入。
+- **独立全局术语库**：用户自定义术语库与缓存解耦，支持同长度稳定优先级排序与正则字面量安全替换，清空缓存时 100% 完整保留。
+- **系统原生轻量 OCR 与悬浮翻译**：集成平台原生 OCR 引擎与 Alt+Shift+D 划词/复制触发轻量无边框悬浮窗。
+
+### 修复
 - **同步门禁锁消除缓存判断与写入竞态 (P1)**：在 `CacheController` 中引入 `sync_gate` 互斥门禁，提供原子 `set_if_current` 与 `disable_and_clear` 保证判断与写入位于同一原子临界区，并在 `server/mod.rs` 补充并发关闭与写回阻断强断言回归测试，彻底关闭清空与写入交错漏洞。
 - **清空缓存错误严格冒泡与事务保护 (P2)**：`set_cache_enabled` 在关闭缓存清空历史失败时，强制向前端暴露错误，杜绝静默失败与假成功。
 - **防范并发翻译关闭缓存后的写回竞争 (P1)**：在写入缓存的临界点再次读取原子开关 `cache_enabled_flag`，彻底消除长耗时外部引擎翻译返回后重新将数据写回已关闭缓存的竞争窗口。
 - **完善扩展连接与 Token 鉴权状态反馈 (P2)**：扩展 Popup 增加深度鉴权校验，准确细分“桌面端未运行”、“未配对 Token”、“Token 已失效，请重新配对”以及“已连接且配对有效”四种明确状态，杜绝无效 Token 误显示已连接。
-- **强化清空缓存错误处理与 i18n 完整国际化 (P2/P3)**：`set_cache_enabled` 在清空历史缓存失败时向前端准确反馈并支持重试；补全 Token 轮换与缓存管理文案的英文国际化字典。
-
-### 安全
-- **本地服务 Token 动态轮换与即时撤销 (P2)**：实现 `rotate_server_token` 命令与内存 `RwLock<String>` 动态更新，前端设置中心提供“重新生成 Token”操作；旧 Token 立即返回 401 Unauthorized 失效，生成后新 Token 持久化进原生系统凭据库，彻底消除长期静态 Token 暴露风险。
-- **验证缓存清空绝对保留术语库独立性 (P2)**：增加单元测试 `test_clear_all_cache_retains_glossary`，强断言证明清空全部翻译历史时，用户自定义术语库 100% 完整保留不受任何影响。
-
-### 修复
+- **强化清空缓存错误处理与 i18n 完整国际化 (P2/P3)**：`set_cache_enabled` 在清空历史缓存失败时向前端准确反馈并重试；补全 Token 轮换与缓存管理文案的英文国际化字典。
 - **隔离全局缓存开关并发竞争并消灭排队内存堆积 (P1)**：在内存状态中维护原子布尔 `cache_enabled_flag`，彻底消除运行时与并行测试中频繁同步读写外部系统凭据库的竞争冲突；并发控制采用 `try_acquire()` 拒绝超额请求（返回 429 Too Many Requests），防止排队堆积与内存膨胀。
 - **关闭缓存时同步清空历史磁盘数据 (P2)**：用户在设置中关闭“持久化翻译缓存”时，自动触发清空已有 `translation_cache` 磁盘表（保留术语库），切实保障用户隐私不留存。
 - **本地服务全局并发受控限制 (P1)**：在本地 HTTP 服务状态中集成 `tokio::sync::Semaphore`，将同时处理的批量翻译任务严格限制在至多 10 批，防范网页动态 DOM 频繁变更造成的并发过载。
@@ -26,23 +33,12 @@
 - **收紧语言代码校验白名单 (P2)**：将语言代码规则收敛为标准受支持白名单枚举校验，阻断潜在非法格式注入。
 - **强化语言参数白名单与批量请求防线 (P1)**：在 `transly-core` 建立 `validation` 模块统一语言代码（BCP-47 规范）与字符合法性校验；本地 HTTP 服务增加 2MB 请求体上限、单次批量 50,000 总字符防线，全面拦截长语言代码注入与 DoS。
 - **限制 API Key 凭据存储目标引擎枚举 (P2)**：在 `save_api_key` 与 `delete_api_key` 中严格限制目标仅允许受支持的 `deepl`、`openai`、`deepseek`，杜绝写入任意键名。
-- **代码格式化与缓存关闭路径自动化测试补齐**：执行 `cargo fmt --all` 消除格式漂移；为本地 HTTP 批量服务补充 `test_translate_cache_disabled_path` 测试，强断言在 `cache_enabled == false` 下绝对不向本地 SQLite 写入新条目。
 - **扩展批量翻译严格遵循缓存隐私开关 (P1)**：在本地 HTTP 服务的 `translate_batch_handler` 中集成 `cache_enabled` 共享判定，关闭持久化翻译缓存后彻底停止查询与写入 SQLite 磁盘库，确保桌面端与浏览器扩展两路隐私策略完全一致。
 
 ### 安全
+- **系统原生凭据跨平台托管 (P0)**：API 密钥与内部鉴权 Token 全面接入操作系统原生安全存储（Windows Credential Manager / macOS Keychain / Linux Secret Service），严禁明文落盘。
 - **Linux Secret Service 启用加密传输 (P1)**：为 Linux `keyring` 配置 `features = ["sync-secret-service", "crypto-rust"]`，确保 Linux 桌面凭据通信符合安全加密规范。
-- **凭据持久化单测强断言 (P2)**：在 `secrets.rs` 增加强制写入、读取与 Token 连续性双向强断言单测，杜绝异常被静默跳过。
-- **提供关闭持久化翻译缓存开关 (P2)**：在 IPC 与前端设置中心提供“持久化翻译缓存”开关，关闭后彻底停止写入 SQLite 磁盘库，充分保障用户隐私数据不落盘。
-- **修剪 AppConfig 配置模型 (P2)**：移除未接入的虚假抽象字段，将 `local_server_port` 与 `cache_enabled` 真实打通至运行链路。
-
-### 安全
-- **Linux 接入 Secret Service 原生持久化后端 (P1)**：切换 `keyring` Linux feature 为 `sync-secret-service`，在 CI/CD 中安装 `libdbus-1-dev` 与 `gnome-keyring`，实现跨平台凭据（Windows / macOS / Linux）生命周期永久持久化对齐。
-- **收紧生产 CSP 端口白名单 (P2)**：彻底移除生产环境中的 `http://localhost:5173` Vite 连接端口，生产构建仅允许连接本地翻译服务 `http://127.0.0.1:39281`。
-
-### 优化
-- **术语库同长度稳定排序与消除级联 (P2)**：排序规则重构为 `b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0))`，实现跨平台确定性替换，补充 `test_glossary_same_length_deterministic` 单元测试。
-- **剪贴板开关持久化错误传播 (P2)**：将 `set_clipboard_monitor` 调整为 `Result<(), String>`，凭据存储失败时向前端准确反馈并回滚 UI 开关。
-- **接入 AppConfig 配置模型至应用启动 (P2)**：消除未使用的配置抽象，在桌面启动与服务绑定中深度集成 `AppConfig`。
+- **收紧生产 CSP 与 CORS 白名单 (P2)**：移除开发端口连接源，限制 CORS 仅允许标准扩展 Origin，拦截外部恶意网页嗅探与请求伪造。
 
 ### 修复
 - **启用 Keyring 平台原生凭据后端 (P0)**：在 `Cargo.toml` 中按操作系统细化配置：Windows (`windows-native`)、macOS (`apple-native`)、Linux (`linux-native`)，解决原本回退至临时内存 Mock 导致的密钥无法跨进程/跨重启持久化严重缺陷；强化 `set_secret` 错误传播与凭据往返单元测试。

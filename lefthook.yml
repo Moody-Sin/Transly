@@ -4,7 +4,7 @@ pre-commit:
     rust-fmt:
       run: cargo fmt --all --check
     rust-clippy:
-      run: cargo clippy --workspace -- -D warnings
+      run: cargo clippy --workspace --all-targets -- -D warnings
     rust-test:
       run: cargo test --workspace
     type-check-desktop:

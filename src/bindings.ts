@@ -28,7 +28,6 @@ export const commands = {
 	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
 	setCacheEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_cache_enabled", { enabled })),
 	getCacheEnabled: () => __TAURI_INVOKE<boolean>("get_cache_enabled"),
-	ocrImage: (imageBase64: string) => typedError<string, string>(__TAURI_INVOKE("ocr_image", { imageBase64 })),
 	ocrClipboardImage: (targetLang: string) => typedError<string, OcrErrorDto>(__TAURI_INVOKE("ocr_clipboard_image", { targetLang })),
 	setClipboardMonitor: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_clipboard_monitor", { enabled })),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
@@ -51,7 +50,7 @@ export type OcrErrorDto = {
 	message: string,
 };
 
-export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "dimension_exceeded" | "unsupported_platform" | "internal";
+export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "unsupported_platform" | "internal";
 
 export type PendingFloatResponse = {
 	has_request: boolean,

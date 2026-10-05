@@ -1,43 +1,7 @@
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use transly_core::{OcrErrorDto, OcrErrorKind};
-
-/// 构建去重候选识别语言列表
-pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
-    let primary = if target_lang.trim() == "zh-CN" {
-        "en-US"
-    } else {
-        "system"
-    };
-
-    let mut list = Vec::with_capacity(2);
-    for cand in [primary, "system", "en-US"] {
-        if !list.contains(&cand) {
-            list.push(cand);
-        }
-    }
-    list
-}
-
-/// 将 RGBA8 像素切片转换为 Windows SoftwareBitmap 所需的 BGRA8 字节序
-pub fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
-    let mut bgra = rgba.to_vec();
-    for chunk in bgra.as_chunks_mut::<4>().0 {
-        chunk.swap(0, 2);
-    }
-    bgra
-}
-
-/// 等比下采样计算：保证宽高均不大于 max_dim
-pub fn clamp_dimensions(w: u32, h: u32, max_dim: u32) -> (u32, u32) {
-    let max_side = w.max(h);
-    if max_side <= max_dim || max_side == 0 {
-        return (w, h);
-    }
-    let scale = max_dim as f64 / max_side as f64;
-    let nw = ((w as f64 * scale).round() as u32).max(1);
-    let nh = ((h as f64 * scale).round() as u32).max(1);
-    (nw, nh)
-}
+use transly_core::{
+    build_candidate_languages, clamp_dimensions, rgba_to_bgra, OcrErrorDto, OcrErrorKind,
+};
 
 #[cfg(not(target_os = "windows"))]
 pub async fn recognize_clipboard_image(
@@ -48,25 +12,38 @@ pub async fn recognize_clipboard_image(
 }
 
 #[cfg(target_os = "windows")]
-struct ComGuard;
+struct ComGuard {
+    should_uninitialize: bool,
+}
 
 #[cfg(target_os = "windows")]
 impl ComGuard {
-    fn new() -> Self {
-        unsafe {
-            let _ = windows::Win32::System::WinRT::RoInitialize(
+    fn new() -> Result<Self, OcrErrorDto> {
+        let hr = unsafe {
+            windows::Win32::System::WinRT::RoInitialize(
                 windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
-            );
+            )
+        };
+
+        if hr.is_ok() {
+            Ok(Self {
+                should_uninitialize: true,
+            })
+        } else {
+            Err(OcrErrorDto::internal(format!(
+                "WinRT Apartment (MTA) 初始化失败或线程模式冲突: HRESULT {hr:?}"
+            )))
         }
-        Self
     }
 }
 
 #[cfg(target_os = "windows")]
 impl Drop for ComGuard {
     fn drop(&mut self) {
-        unsafe {
-            windows::Win32::System::WinRT::RoUninitialize();
+        if self.should_uninitialize {
+            unsafe {
+                windows::Win32::System::WinRT::RoUninitialize();
+            }
         }
     }
 }
@@ -80,7 +57,7 @@ pub async fn recognize_clipboard_image(
     let target_lang = target_lang.to_string();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let _guard = ComGuard::new();
+        let _guard = ComGuard::new()?;
 
         // 1. 在后台线程读取剪贴板图片（避免平台死锁）
         let img = match app_handle.clipboard().read_image() {
@@ -183,40 +160,4 @@ pub async fn recognize_clipboard_image(
     })
     .await
     .map_err(|e| OcrErrorDto::internal(format!("异步任务调度异常: {e}")))?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_candidate_languages_zh_cn() {
-        let candidates = build_candidate_languages("zh-CN");
-        assert_eq!(candidates, vec!["en-US", "system"]);
-    }
-
-    #[test]
-    fn test_build_candidate_languages_non_zh() {
-        let candidates = build_candidate_languages("en");
-        assert_eq!(candidates, vec!["system", "en-US"]);
-    }
-
-    #[test]
-    fn test_rgba_to_bgra_swizzle() {
-        let rgba = vec![10, 20, 30, 255, 40, 50, 60, 200];
-        let bgra = rgba_to_bgra(&rgba);
-        assert_eq!(bgra, vec![30, 20, 10, 255, 60, 50, 40, 200]);
-    }
-
-    #[test]
-    fn test_clamp_dimensions_under_limit() {
-        assert_eq!(clamp_dimensions(800, 600, 2600), (800, 600));
-    }
-
-    #[test]
-    fn test_clamp_dimensions_exceeding_limit() {
-        let (nw, nh) = clamp_dimensions(5200, 2600, 2600);
-        assert_eq!(nw, 2600);
-        assert_eq!(nh, 1300);
-    }
 }

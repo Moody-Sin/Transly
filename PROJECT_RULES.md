@@ -238,8 +238,8 @@ transly/
 ## CI 检查清单（必须全部通过）
 
 - [ ] `cargo fmt --check`
-- [ ] `cargo clippy -- -D warnings`
-- [ ] `cargo test`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` (Linux + Windows 矩阵)
+- [ ] `cargo test` (Linux + Windows 矩阵)
 - [ ] `transly-core` 行覆盖率 ≥70%（`cargo llvm-cov --package transly-core --fail-under-lines 70`）
 - [ ] 前端 `eslint` + `tsc --noEmit`（包含桌面端与插件端）
 - [ ] 前端任务单测（`pnpm run test:task`）

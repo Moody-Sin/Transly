@@ -700,9 +700,8 @@ mod tests {
         let write_result = controller.set_if_current(start_gen, || {
             cache.set("concurrent_text", "译文", "en", "zh-CN", "google_web")
         });
-        assert_eq!(
-            write_result.unwrap(),
-            false,
+        assert!(
+            !write_result.unwrap(),
             "请求跨越关闭清空边界时，set_if_current 必须返回 Ok(false) 拒绝写入"
         );
 

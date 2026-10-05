@@ -24,7 +24,6 @@
     "no_image": "No image in clipboard. Copy or take a screenshot first.",
     "no_language_pack": "System OCR language pack not installed.",
     "empty_text": "No readable text detected in image.",
-    "dimension_exceeded": "Image dimensions exceed system limit.",
     "unsupported_platform": "OCR is not supported on this operating system.",
     "internal": "OCR processing failed, please retry."
   },

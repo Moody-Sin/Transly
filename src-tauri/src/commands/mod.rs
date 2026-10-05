@@ -211,8 +211,6 @@ pub fn get_cache_enabled(
     controller.is_enabled()
 }
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-
 #[tauri::command]
 #[specta::specta]
 pub fn set_clipboard_monitor(
@@ -243,41 +241,6 @@ pub async fn ocr_clipboard_image(
     app: tauri::AppHandle,
 ) -> Result<String, transly_core::OcrErrorDto> {
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn ocr_image(
-    image_base64: String,
-    ocr: tauri::State<'_, Arc<transly_core::SystemOcrEngine>>,
-) -> Result<String, String> {
-    use transly_core::{OcrEngine, OcrRequest};
-    let clean = image_base64.trim();
-    // 限制 Base64 图像大小不超过 10MB
-    if clean.len() > 10 * 1024 * 1024 {
-        return Err("图像数据超出最大限制 (10MB)".to_string());
-    }
-    // 兼容可能传入的 data:image/...;base64, 前缀
-    let raw_b64 = if let Some(idx) = clean.find(',') {
-        &clean[idx + 1..]
-    } else {
-        clean
-    };
-
-    let bytes = match STANDARD.decode(raw_b64.as_bytes()) {
-        Ok(b) => b,
-        Err(_) => return Err("Base64 图像解析失败".to_string()),
-    };
-
-    let req = OcrRequest {
-        image_bytes: bytes,
-        lang: Some("auto".to_string()),
-    };
-
-    match ocr.recognize(&req).await {
-        Ok(res) => Ok(res.text),
-        Err(e) => Err(e.to_string()),
-    }
 }
 
 /// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示

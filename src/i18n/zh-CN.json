@@ -24,7 +24,6 @@
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",
     "no_language_pack": "系统未安装 OCR 语言包，请在 Windows 设置中安装",
     "empty_text": "未能从图片中识别到有效文字",
-    "dimension_exceeded": "图片尺寸过大，无法处理",
     "unsupported_platform": "当前操作系统暂未支持图片识别",
     "internal": "图片识别内部异常，请重试"
   },

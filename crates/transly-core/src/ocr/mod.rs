@@ -1,7 +1,4 @@
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-
-use crate::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -9,7 +6,6 @@ pub enum OcrErrorKind {
     NoImage,
     NoLanguagePack,
     EmptyText,
-    DimensionExceeded,
     UnsupportedPlatform,
     Internal,
 }
@@ -55,68 +51,42 @@ impl OcrErrorDto {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OcrRequest {
-    /// 图像二进制数据（支持 PNG, JPEG, BMP）
-    pub image_bytes: Vec<u8>,
-    /// 期望识别的目标语言或区域（默认 "auto"）
-    pub lang: Option<String>,
-}
+/// 构建去重候选识别语言列表（优先对齐源语言预期，避免中文界面绑定）
+pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
+    let primary = if target_lang.trim() == "zh-CN" {
+        "en-US"
+    } else {
+        "system"
+    };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OcrTextLine {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OcrResponse {
-    pub text: String,
-    pub lines: Vec<OcrTextLine>,
-    pub engine: String,
-}
-
-#[async_trait]
-pub trait OcrEngine: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn name(&self) -> &'static str;
-
-    async fn recognize(&self, req: &OcrRequest) -> Result<OcrResponse>;
-}
-
-/// 默认系统轻量 OCR 适配器（占位/原生入口）
-pub struct SystemOcrEngine;
-
-impl SystemOcrEngine {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for SystemOcrEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl OcrEngine for SystemOcrEngine {
-    fn id(&self) -> &'static str {
-        "system_ocr"
-    }
-
-    fn name(&self) -> &'static str {
-        "系统原生 OCR"
-    }
-
-    async fn recognize(&self, req: &OcrRequest) -> Result<OcrResponse> {
-        if req.image_bytes.is_empty() {
-            return Err(crate::Error::Internal("图像数据为空".to_string()));
+    let mut list = Vec::with_capacity(2);
+    for cand in [primary, "system", "en-US"] {
+        if !list.contains(&cand) {
+            list.push(cand);
         }
-        // 当前版本未挂载原生 OCR 动态库时返回明确未支持错误，绝不伪装空成功
-        Err(crate::Error::UnsupportedLanguage(
-            "当前平台原生 OCR 引擎驱动尚未就绪或不可用".to_string(),
-        ))
     }
+    list
+}
+
+/// 将 RGBA8 像素切片转换为 Windows SoftwareBitmap 所需的 BGRA8 字节序
+pub fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut bgra = rgba.to_vec();
+    for chunk in bgra.as_chunks_mut::<4>().0 {
+        chunk.swap(0, 2);
+    }
+    bgra
+}
+
+/// 等比下采样计算：保证宽高均不大于 max_dim（防卫 Windows OCR 上限抛错）
+pub fn clamp_dimensions(w: u32, h: u32, max_dim: u32) -> (u32, u32) {
+    let max_side = w.max(h);
+    if max_side <= max_dim || max_side == 0 {
+        return (w, h);
+    }
+    let scale = max_dim as f64 / max_side as f64;
+    let nw = ((w as f64 * scale).round() as u32).max(1);
+    let nh = ((h as f64 * scale).round() as u32).max(1);
+    (nw, nh)
 }
 
 #[cfg(test)]
@@ -146,17 +116,34 @@ mod tests {
         assert_eq!(unsupp_err.kind, OcrErrorKind::UnsupportedPlatform);
     }
 
-    #[tokio::test]
-    async fn test_system_ocr_engine_info() {
-        let engine = SystemOcrEngine::new();
-        assert_eq!(engine.id(), "system_ocr");
-        assert_eq!(engine.name(), "系统原生 OCR");
+    #[test]
+    fn test_build_candidate_languages_zh_cn() {
+        let candidates = build_candidate_languages("zh-CN");
+        assert_eq!(candidates, vec!["en-US", "system"]);
+    }
 
-        let req = OcrRequest {
-            image_bytes: vec![1, 2, 3],
-            lang: Some("zh-CN".to_string()),
-        };
-        let res = engine.recognize(&req).await;
-        assert!(res.is_err());
+    #[test]
+    fn test_build_candidate_languages_non_zh() {
+        let candidates = build_candidate_languages("en");
+        assert_eq!(candidates, vec!["system", "en-US"]);
+    }
+
+    #[test]
+    fn test_rgba_to_bgra_swizzle() {
+        let rgba = vec![10, 20, 30, 255, 40, 50, 60, 200];
+        let bgra = rgba_to_bgra(&rgba);
+        assert_eq!(bgra, vec![30, 20, 10, 255, 60, 50, 40, 200]);
+    }
+
+    #[test]
+    fn test_clamp_dimensions_under_limit() {
+        assert_eq!(clamp_dimensions(800, 600, 2600), (800, 600));
+    }
+
+    #[test]
+    fn test_clamp_dimensions_exceeding_limit() {
+        let (nw, nh) = clamp_dimensions(5200, 2600, 2600);
+        assert_eq!(nw, 2600);
+        assert_eq!(nh, 1300);
     }
 }

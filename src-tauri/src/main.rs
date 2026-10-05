@@ -16,7 +16,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
-use transly_core::{AppConfig, Glossary, SystemOcrEngine, TranslationCache};
+use transly_core::{AppConfig, Glossary, TranslationCache};
 
 fn main() {
     let config = AppConfig::default();
@@ -65,7 +65,6 @@ fn main() {
         commands::clear_cache,
         commands::set_cache_enabled,
         commands::get_cache_enabled,
-        commands::ocr_image,
         commands::ocr_clipboard_image,
         commands::set_clipboard_monitor,
         commands::get_clipboard_monitor
@@ -81,9 +80,6 @@ fn main() {
         .map(|v| v == "true")
         .unwrap_or(false);
     let clipboard_monitor_enabled = Arc::new(AtomicBool::new(initial_monitor));
-
-    // 初始化系统原生轻量 OCR 引擎
-    let ocr_engine = Arc::new(SystemOcrEngine::new());
 
     let monitor_flag = clipboard_monitor_enabled.clone();
 
@@ -115,7 +111,6 @@ fn main() {
         .manage(cache)
         .manage(pool)
         .manage(glossary)
-        .manage(ocr_engine)
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
         .manage(Arc::new(commands::FloatSticky::default()))

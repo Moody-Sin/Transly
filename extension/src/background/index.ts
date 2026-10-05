@@ -10,6 +10,32 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log('[Transly Extension] 插件已安装并就绪')
 })
 
+// 监听翻译进度事件更新浏览器扩展徽标 Badge
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'TRANSLATION_STARTED') {
+    chrome.action.setBadgeText({ text: '0%' })
+    chrome.action.setBadgeBackgroundColor({ color: '#4f46e5' })
+  } else if (message.type === 'TRANSLATION_PROGRESS') {
+    const pct = message.total > 0 ? Math.round((message.completed / message.total) * 100) : 0
+    chrome.action.setBadgeText({ text: `${pct}%` })
+    chrome.action.setBadgeBackgroundColor({ color: message.failedBatches > 0 ? '#f59e0b' : '#4f46e5' })
+  } else if (message.type === 'TRANSLATION_FINISHED') {
+    chrome.action.setBadgeText({ text: message.failedBatches > 0 ? 'WARN' : 'DONE' })
+    chrome.action.setBadgeBackgroundColor({ color: message.failedBatches > 0 ? '#f59e0b' : '#10b981' })
+    setTimeout(() => {
+      chrome.action.setBadgeText({ text: '' })
+    }, 3000)
+  } else if (message.type === 'TRANSLATION_CANCELLED' || message.type === 'TRANSLATION_RESTORED') {
+    chrome.action.setBadgeText({ text: '' })
+  } else if (message.type === 'TRANSLATION_FAILED') {
+    chrome.action.setBadgeText({ text: 'ERR' })
+    chrome.action.setBadgeBackgroundColor({ color: '#ef4444' })
+    setTimeout(() => {
+      chrome.action.setBadgeText({ text: '' })
+    }, 4000)
+  }
+})
+
 // 后台转发请求至本地 127.0.0.1 桌面端翻译服务
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CHECK_DESKTOP_SERVER') {

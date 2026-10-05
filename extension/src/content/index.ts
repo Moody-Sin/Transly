@@ -203,10 +203,19 @@ async function translateEntries(
   batchSize: number = 30,
   expectedGen: number = currentGeneration,
 ) {
+  const totalNodes = entries.length
+  const totalBatches = Math.ceil(totalNodes / batchSize)
+  let completedNodes = 0
+  let failedBatches = 0
+
   for (let i = 0; i < entries.length; i += batchSize) {
     // 发送前检查：如果用户已经点击“还原原文”或发起了新任务，直接阻断
     if (expectedGen !== currentGeneration) {
       console.log(`[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`)
+      chrome.runtime.sendMessage({
+        type: 'TRANSLATION_CANCELLED',
+        generation: expectedGen,
+      }).catch(() => {})
       return
     }
 
@@ -232,6 +241,10 @@ async function translateEntries(
       // 响应后强校验：如果请求在途期间用户触发了还原或新任务，彻底丢弃响应，严禁写入 DOM
       if (expectedGen !== currentGeneration) {
         console.log(`[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`)
+        chrome.runtime.sendMessage({
+          type: 'TRANSLATION_CANCELLED',
+          generation: expectedGen,
+        }).catch(() => {})
         return
       }
 
@@ -241,10 +254,36 @@ async function translateEntries(
             replaceTextNode(batch[idx].node, translated)
           }
         })
+        completedNodes += batch.length
+      } else {
+        failedBatches += 1
       }
     } catch (err) {
+      failedBatches += 1
       console.warn('[Transly] 批量翻译出错:', err)
     }
+
+    // 广播进度给 Popup 与扩展徽标
+    if (expectedGen === currentGeneration) {
+      chrome.runtime.sendMessage({
+        type: 'TRANSLATION_PROGRESS',
+        generation: expectedGen,
+        completed: completedNodes,
+        total: totalNodes,
+        failedBatches,
+        totalBatches,
+      }).catch(() => {})
+    }
+  }
+
+  if (expectedGen === currentGeneration) {
+    chrome.runtime.sendMessage({
+      type: failedBatches === totalBatches && totalBatches > 0 ? 'TRANSLATION_FAILED' : 'TRANSLATION_FINISHED',
+      generation: expectedGen,
+      completed: completedNodes,
+      total: totalNodes,
+      failedBatches,
+    }).catch(() => {})
   }
 }
 
@@ -266,9 +305,22 @@ export async function translateFullPage(
   const entries = collectTextNodes(document.body)
   if (entries.length === 0) {
     console.log('[Transly] 未检测到可翻译的文本节点')
+    chrome.runtime.sendMessage({
+      type: 'TRANSLATION_FINISHED',
+      generation: taskGeneration,
+      completed: 0,
+      total: 0,
+      failedBatches: 0,
+    }).catch(() => {})
     startDynamicObserver(targetLang, engine, taskGeneration)
     return
   }
+
+  chrome.runtime.sendMessage({
+    type: 'TRANSLATION_STARTED',
+    generation: taskGeneration,
+    total: entries.length,
+  }).catch(() => {})
 
   console.log(`[Transly] 收集到 ${entries.length} 个文本节点，任务版本=${taskGeneration}，开始批量翻译...`)
   await translateEntries(entries, targetLang, engine, batchSize, taskGeneration)
@@ -294,6 +346,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     currentGeneration += 1
     stopDynamicObserver()
     restoreOriginalText()
+    chrome.runtime.sendMessage({
+      type: 'TRANSLATION_RESTORED',
+      generation: currentGeneration,
+    }).catch(() => {})
     sendResponse({ ok: true })
     return true
   }

@@ -336,7 +336,12 @@ export default function App() {
           <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm focus-within:border-indigo-500">
             <textarea
               value={sourceText}
-              onChange={(e) => setSourceText(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value
+                setSourceText(v)
+                // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
+                runner.run(v, { source: 'input', debounceMs: 500 })
+              }}
               placeholder={t.translation.inputPlaceholder}
               className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
             />

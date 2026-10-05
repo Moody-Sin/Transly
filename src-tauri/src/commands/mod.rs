@@ -79,8 +79,6 @@ pub async fn translate(
         pool.default_engine()
     };
 
-    let _engine_id = active_engine.id();
-
     // 检查缓存状态快照与 generation 版本号
     let (cache_enabled, start_gen) = cache_controller.snapshot();
 

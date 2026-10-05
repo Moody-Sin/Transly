@@ -236,7 +236,6 @@ async fn translate_batch_handler(
     } else {
         state.pool.default_engine()
     };
-    let _engine_id = active_engine.id();
 
     // 检查缓存状态快照与 generation 版本，杜绝并发关闭清空后的写回竞争
     let (cache_enabled, start_generation) = state.cache_controller.snapshot();

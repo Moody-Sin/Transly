@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Transly 沉浸式网页翻译",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "极简保真整页网页翻译（仅译文模式），由 Transly 桌面端强力驱动。",
   "permissions": ["activeTab", "storage"],
   "host_permissions": ["http://127.0.0.1:39281/*"],

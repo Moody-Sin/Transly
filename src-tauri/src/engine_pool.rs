@@ -3,11 +3,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::{DeepLEngine, FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine};
 
+pub type SecretGetter = Arc<dyn Fn(&str) -> anyhow::Result<String> + Send + Sync>;
+
 /// 引擎连接池与单例缓存管理器
 #[derive(Clone)]
 pub struct EnginePool {
     default_engine: Arc<dyn TranslateEngine>,
     cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
+    secret_getter: Option<SecretGetter>,
 }
 
 impl EnginePool {
@@ -16,6 +19,16 @@ impl EnginePool {
         Self {
             default_engine: google,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            secret_getter: None,
+        }
+    }
+
+    pub fn with_secret_getter(getter: SecretGetter) -> Self {
+        let google = Arc::new(GoogleWebEngine::new());
+        Self {
+            default_engine: google,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            secret_getter: Some(getter),
         }
     }
 
@@ -55,23 +68,34 @@ impl EnginePool {
     async fn create_engine_blocking(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
         let id = engine_id.to_string();
         let fallback = self.default_engine.clone();
+        let custom_getter = self.secret_getter.clone();
 
-        tokio::task::spawn_blocking(move || match id.as_str() {
-            "deepl" => {
-                let key = crate::secrets::get_secret("deepl").unwrap_or_default();
-                let deepl = Arc::new(DeepLEngine::new(key));
-                Arc::new(FallbackEngine::new(deepl, fallback)) as Arc<dyn TranslateEngine>
-            }
-            "openai" | "deepseek" => {
-                let key = crate::secrets::get_secret(&id).unwrap_or_default();
-                let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
-                    Arc::new(OpenAIEngine::deepseek(key))
+        tokio::task::spawn_blocking(move || {
+            let get_key = |key_name: &str| -> String {
+                if let Some(ref getter) = custom_getter {
+                    getter(key_name).unwrap_or_default()
                 } else {
-                    Arc::new(OpenAIEngine::new(key, None, None))
-                };
-                Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
+                    crate::secrets::get_secret(key_name).unwrap_or_default()
+                }
+            };
+
+            match id.as_str() {
+                "deepl" => {
+                    let key = get_key("deepl");
+                    let deepl = Arc::new(DeepLEngine::new(key));
+                    Arc::new(FallbackEngine::new(deepl, fallback)) as Arc<dyn TranslateEngine>
+                }
+                "openai" | "deepseek" => {
+                    let key = get_key(&id);
+                    let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
+                        Arc::new(OpenAIEngine::deepseek(key))
+                    } else {
+                        Arc::new(OpenAIEngine::new(key, None, None))
+                    };
+                    Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
+                }
+                _ => fallback,
             }
-            _ => fallback,
         })
         .await
         .unwrap_or(self.default_engine.clone())

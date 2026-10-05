@@ -18,6 +18,34 @@ impl GoogleWebEngine {
                 .unwrap_or_default(),
         }
     }
+    pub fn parse_gtx_response(json: &Value, engine_id: &str) -> Result<TranslationResponse> {
+        // Google GTX 响应结构示例: [[["译文1", "原文1", ...], ["译文2", "原文2", ...]], ...]
+        let mut translated_full = String::new();
+        if let Some(sentences) = json.get(0).and_then(|v| v.as_array()) {
+            for s in sentences {
+                if let Some(part) = s.get(0).and_then(|v| v.as_str()) {
+                    translated_full.push_str(part);
+                }
+            }
+        }
+
+        if translated_full.is_empty() {
+            return Err(Error::Engine {
+                engine: engine_id.to_string(),
+                message: "解析响应文本为空".to_string(),
+            });
+        }
+
+        // 检测到的源语言通常位于 json.get(2)
+        let detected = json.get(2).and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        Ok(TranslationResponse {
+            text: translated_full,
+            detected_source_lang: detected,
+            engine: engine_id.to_string(),
+        })
+    }
+
     async fn translate_single_chunk(
         &self,
         text: &str,
@@ -45,32 +73,7 @@ impl GoogleWebEngine {
         }
 
         let json: Value = resp.json().await?;
-
-        // Google GTX 响应结构示例: [[["译文1", "原文1", ...], ["译文2", "原文2", ...]], ...]
-        let mut translated_full = String::new();
-        if let Some(sentences) = json.get(0).and_then(|v| v.as_array()) {
-            for s in sentences {
-                if let Some(part) = s.get(0).and_then(|v| v.as_str()) {
-                    translated_full.push_str(part);
-                }
-            }
-        }
-
-        if translated_full.is_empty() {
-            return Err(Error::Engine {
-                engine: self.id().to_string(),
-                message: "解析响应文本为空".to_string(),
-            });
-        }
-
-        // 检测到的源语言通常位于 json.get(2)
-        let detected = json.get(2).and_then(|v| v.as_str()).map(|s| s.to_string());
-
-        Ok(TranslationResponse {
-            text: translated_full,
-            detected_source_lang: detected,
-            engine: self.id().to_string(),
-        })
+        Self::parse_gtx_response(&json, self.id())
     }
 }
 
@@ -191,5 +194,33 @@ mod tests {
         let engine = GoogleWebEngine::new();
         let res = engine.translate_batch(&[]).await.unwrap();
         assert!(res.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gtx_response_success() {
+        let sample: Value = serde_json::json!([
+            [
+                ["你好", "hello", null, null, 1],
+                ["，世界", " world", null, null, 1]
+            ],
+            null,
+            "en"
+        ]);
+
+        let res = GoogleWebEngine::parse_gtx_response(&sample, "google_web").unwrap();
+        assert_eq!(res.text, "你好，世界");
+        assert_eq!(res.detected_source_lang, Some("en".to_string()));
+        assert_eq!(res.engine, "google_web");
+    }
+
+    #[test]
+    fn test_parse_gtx_response_empty_or_malformed() {
+        let empty_sentences: Value = serde_json::json!([[], null, "en"]);
+        let err = GoogleWebEngine::parse_gtx_response(&empty_sentences, "google_web").unwrap_err();
+        assert!(err.to_string().contains("解析响应文本为空"));
+
+        let null_root: Value = serde_json::json!(null);
+        let err2 = GoogleWebEngine::parse_gtx_response(&null_root, "google_web").unwrap_err();
+        assert!(err2.to_string().contains("解析响应文本为空"));
     }
 }

@@ -1,5 +1,7 @@
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use transly_core::{build_candidate_languages, clamp_dimensions, rgba_to_bgra, OcrErrorDto};
+use transly_core::{
+    build_candidate_languages, clamp_dimensions, rgba_to_bgra_in_place, OcrErrorDto,
+};
 
 #[cfg(not(target_os = "windows"))]
 pub async fn recognize_clipboard_image(
@@ -75,7 +77,7 @@ pub async fn recognize_clipboard_image(
         let max_dim = windows::Media::Ocr::OcrEngine::MaxImageDimension().unwrap_or(2600);
         let (nw, nh) = clamp_dimensions(width, height, max_dim);
 
-        let rgba_bytes = if nw != width || nh != height {
+        let mut bgra_bytes = if nw != width || nh != height {
             let dyn_img = image::RgbaImage::from_raw(width, height, img.rgba().to_vec())
                 .ok_or_else(|| OcrErrorDto::internal("解析图像像素矩阵失败"))?;
             let resized =
@@ -85,8 +87,8 @@ pub async fn recognize_clipboard_image(
             img.rgba().to_vec()
         };
 
-        // 3. RGBA 转 BGRA8 并装载进入 SoftwareBitmap
-        let bgra_bytes = rgba_to_bgra(&rgba_bytes);
+        // 3. 原地将 RGBA 转换为 BGRA8 字节序，消除第二道内存全量拷贝
+        rgba_to_bgra_in_place(&mut bgra_bytes);
 
         use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
         use windows::Storage::Streams::DataWriter;

@@ -17,7 +17,8 @@ pub use engine::{
 pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;
 pub use ocr::{
-    build_candidate_languages, clamp_dimensions, rgba_to_bgra, OcrErrorDto, OcrErrorKind,
+    build_candidate_languages, clamp_dimensions, rgba_to_bgra, rgba_to_bgra_in_place, OcrErrorDto,
+    OcrErrorKind,
 };
 pub use task::{classify_error, TaskError, TaskState};
 pub use validation::{validate_engine_id, validate_language_code, validate_translation_input};

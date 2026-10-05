@@ -366,6 +366,12 @@ async function retryFailedTranslations() {
   stopDynamicObserver()
   currentGeneration += 1
   const retryGeneration = currentGeneration
+
+  // 重置重试批次的计数基准，杜绝 completed 累加超过 total
+  currentTaskTotal = entries.length
+  currentTaskCompleted = 0
+  failedItemsMap.clear()
+
   await translateEntries(entries, currentTargetLang, currentEngine, 30, retryGeneration)
   if (retryGeneration === currentGeneration) {
     startDynamicObserver(currentTargetLang, currentEngine, retryGeneration)

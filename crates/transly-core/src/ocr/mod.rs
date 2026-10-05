@@ -71,10 +71,15 @@ pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
 /// 将 RGBA8 像素切片转换为 Windows SoftwareBitmap 所需的 BGRA8 字节序
 pub fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut bgra = rgba.to_vec();
-    for chunk in bgra.as_chunks_mut::<4>().0 {
+    rgba_to_bgra_in_place(&mut bgra);
+    bgra
+}
+
+/// 原地将 RGBA8 像素切片转换为 BGRA8 字节序，避免额外全量堆分配与内存放大
+pub fn rgba_to_bgra_in_place(buf: &mut [u8]) {
+    for chunk in buf.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
     }
-    bgra
 }
 
 /// 等比下采样计算：保证宽高均不大于 max_dim（防卫 Windows OCR 上限抛错）

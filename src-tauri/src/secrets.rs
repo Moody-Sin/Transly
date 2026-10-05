@@ -59,6 +59,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        target_os = "linux",
+        ignore = "Linux CI 环境无可用系统 Secret Service 凭据守护进程"
+    )]
     fn test_secret_persistence_and_token_stability() {
         let test_key = "test_persistence_key_v2";
         let test_val = "test_secret_654321";

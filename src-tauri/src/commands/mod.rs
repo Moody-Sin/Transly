@@ -84,13 +84,26 @@ pub async fn translate(
 
     // 1. 若开启缓存，优先查缓存（先查当前引擎，若具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
-        if let Some((cached_text, used_engine)) = transly_core::lookup_cache_with_fallback(
-            cache.inner(),
-            active_engine.as_ref(),
-            &text,
-            &sl,
-            &target_lang,
-        ) {
+        let cached_res = {
+            let cache_ref = cache.inner().clone();
+            let engine_clone = active_engine.clone();
+            let t = text.clone();
+            let s = sl.clone();
+            let tl = target_lang.clone();
+            tokio::task::spawn_blocking(move || {
+                transly_core::lookup_cache_with_fallback(
+                    &cache_ref,
+                    engine_clone.as_ref(),
+                    &t,
+                    &s,
+                    &tl,
+                )
+            })
+            .await
+            .unwrap_or(None)
+        };
+
+        if let Some((cached_text, used_engine)) = cached_res {
             let g = glossary.read().await;
             let applied = g.apply(&cached_text);
             return Ok(TranslateOutcomeDto {

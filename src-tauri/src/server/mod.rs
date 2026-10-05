@@ -788,9 +788,16 @@ mod tests {
     #[tokio::test]
     async fn test_fallback_cache_hit_on_secondary() {
         let cache = Arc::new(TranslationCache::in_memory().unwrap());
-        // 使用配置了实际密钥的 EnginePool 模拟真实 DeepL 引擎具备容灾降级
-        let _ = crate::secrets::set_secret("deepl", "test-deepl-key");
-        let pool = Arc::new(crate::engine_pool::EnginePool::new());
+        // 使用注入了模拟密钥的 EnginePool，严禁读写开发者的真实 keyring
+        let pool = Arc::new(crate::engine_pool::EnginePool::with_secret_getter(
+            Arc::new(|key: &str| {
+                if key == "deepl" {
+                    Ok("mock-deepl-key".to_string())
+                } else {
+                    Ok(String::new())
+                }
+            }),
+        ));
         let glossary = Arc::new(RwLock::new(Glossary::new()));
         let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
         let token = Arc::new(RwLock::new("valid-token".to_string()));
@@ -841,7 +848,5 @@ mod tests {
         let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(resp.translations, vec!["降级译文"]);
         assert_eq!(resp.items[0].engine(), Some("google_web(fallback)"));
-
-        let _ = crate::secrets::delete_secret("deepl");
     }
 }

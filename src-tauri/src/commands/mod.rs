@@ -30,13 +30,20 @@ pub async fn translate(
 
     let engine_id = active_engine.id();
 
-    // 1. 优先查缓存
-    if let Ok(Some(cached_text)) = cache.get(&text, &sl, &target_lang, engine_id) {
-        let g = glossary.read().await;
-        return Ok(g.apply(&cached_text));
+    // 检查缓存是否启用 (用户可通过配置禁用缓存)
+    let cache_enabled = crate::secrets::get_secret("cache_enabled")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+
+    // 1. 若开启缓存，优先查缓存
+    if cache_enabled {
+        if let Ok(Some(cached_text)) = cache.get(&text, &sl, &target_lang, engine_id) {
+            let g = glossary.read().await;
+            return Ok(g.apply(&cached_text));
+        }
     }
 
-    // 2. 缓存未命中，调用引擎翻译
+    // 2. 缓存未命中或未开启，调用引擎翻译
     let req = TranslationRequest {
         text: text.clone(),
         source_lang: sl.clone(),
@@ -45,13 +52,15 @@ pub async fn translate(
 
     match active_engine.translate(&req).await {
         Ok(res) => {
-            // 3. 异步写入缓存（若为 fallback 降级结果，只使用实际响应引擎或不污染主引擎）
-            let cache_target_engine = if res.engine.ends_with("(fallback)") {
-                "google_web"
-            } else {
-                engine_id
-            };
-            let _ = cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine);
+            // 3. 异步写入缓存（若开启缓存，且不污染降级主引擎）
+            if cache_enabled {
+                let cache_target_engine = if res.engine.ends_with("(fallback)") {
+                    "google_web"
+                } else {
+                    engine_id
+                };
+                let _ = cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine);
+            }
             let g = glossary.read().await;
             Ok(g.apply(&res.text))
         }
@@ -110,6 +119,21 @@ pub fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32
         .clear_all_cache()
         .map(|n| n as u32)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_cache_enabled(enabled: bool) -> Result<(), String> {
+    crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| format!("写入系统配置失败: {e}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_cache_enabled() -> bool {
+    crate::secrets::get_secret("cache_enabled")
+        .map(|v| v != "false")
+        .unwrap_or(true)
 }
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};

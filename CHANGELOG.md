@@ -8,6 +8,12 @@
 ## [Unreleased]
 
 ### 安全
+- **Linux Secret Service 启用加密传输 (P1)**：为 Linux `keyring` 配置 `features = ["sync-secret-service", "crypto-rust"]`，确保 Linux 桌面凭据通信符合安全加密规范。
+- **凭据持久化单测强断言 (P2)**：在 `secrets.rs` 增加强制写入、读取与 Token 连续性双向强断言单测，杜绝异常被静默跳过。
+- **提供关闭持久化翻译缓存开关 (P2)**：在 IPC 与前端设置中心提供“持久化翻译缓存”开关，关闭后彻底停止写入 SQLite 磁盘库，充分保障用户隐私数据不落盘。
+- **修剪 AppConfig 配置模型 (P2)**：移除未接入的虚假抽象字段，将 `local_server_port` 与 `cache_enabled` 真实打通至运行链路。
+
+### 安全
 - **Linux 接入 Secret Service 原生持久化后端 (P1)**：切换 `keyring` Linux feature 为 `sync-secret-service`，在 CI/CD 中安装 `libdbus-1-dev` 与 `gnome-keyring`，实现跨平台凭据（Windows / macOS / Linux）生命周期永久持久化对齐。
 - **收紧生产 CSP 端口白名单 (P2)**：彻底移除生产环境中的 `http://localhost:5173` Vite 连接端口，生产构建仅允许连接本地翻译服务 `http://127.0.0.1:39281`。
 

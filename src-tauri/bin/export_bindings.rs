@@ -14,6 +14,8 @@ fn main() {
         commands::get_glossary_terms,
         commands::delete_glossary_term,
         commands::clear_cache,
+        commands::set_cache_enabled,
+        commands::get_cache_enabled,
         commands::ocr_image,
         commands::set_clipboard_monitor,
         commands::get_clipboard_monitor

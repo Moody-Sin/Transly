@@ -48,14 +48,19 @@ mod tests {
 
     #[test]
     fn test_secret_persistence_and_token_stability() {
-        let test_key = "test_persistence_key";
-        let test_val = "test_secret_123456";
+        let test_key = "test_persistence_key_v2";
+        let test_val = "test_secret_654321";
 
-        let write_res = set_secret(test_key, test_val);
-        if write_res.is_ok() {
-            let read_val = get_secret(test_key).expect("should read written secret");
-            assert_eq!(read_val, test_val);
-            let _ = delete_secret(test_key);
-        }
+        // 强断言测试：写入必须成功并正确读回，不可静默吞掉异常
+        set_secret(test_key, test_val).expect("set_secret 必须成功持久化至系统安全凭据管理器");
+        let read_val = get_secret(test_key).expect("get_secret 必须成功读取已保存的凭据");
+        assert_eq!(read_val, test_val);
+
+        // 验证 Token 连续读取的稳定一致性
+        let token1 = get_or_create_server_token().expect("首次获取 token 必须成功");
+        let token2 = get_or_create_server_token().expect("二次获取 token 必须成功");
+        assert_eq!(token1, token2, "Token 连续读取必须完全一致稳定");
+
+        let _ = delete_secret(test_key);
     }
 }

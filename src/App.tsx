@@ -27,6 +27,7 @@ export default function App() {
   const [deepseekKey, setDeepseekKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
   const [clipboardMonitor, setClipboardMonitor] = useState(false)
+  const [cacheEnabled, setCacheEnabled] = useState(true)
   const [glossarySource, setGlossarySource] = useState('')
   const [glossaryTarget, setGlossaryTarget] = useState('')
   const [glossaryList, setGlossaryList] = useState<[string, string][]>([])
@@ -62,8 +63,23 @@ export default function App() {
       setClipboardMonitor(enabled)
     }).catch(() => {})
 
+    commands.getCacheEnabled().then((enabled) => {
+      setCacheEnabled(enabled)
+    }).catch(() => {})
+
     loadGlossaryList()
   }, [])
+
+  const handleToggleCacheEnabled = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.checked
+    setCacheEnabled(val)
+    const res = await commands.setCacheEnabled(val)
+    if (res.status === 'error') {
+      setCacheEnabled(!val)
+      setSaveStatus(res.error)
+      setTimeout(() => setSaveStatus(null), 2500)
+    }
+  }
 
   const handleToggleClipboardMonitor = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.checked
@@ -472,23 +488,37 @@ export default function App() {
               </div>
 
               {/* 缓存数据管理 */}
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <div>
-                  <div className="font-medium text-slate-700">清空翻译缓存</div>
-                  <div className="text-[11px] text-slate-400">立即清除 SQLite 本地持久化翻译记录</div>
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-slate-700">持久化翻译缓存</div>
+                    <div className="text-[11px] text-slate-400">关闭后将不再向本地 SQLite 记录任何原文与译文</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={cacheEnabled}
+                    onChange={handleToggleCacheEnabled}
+                    className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
                 </div>
-                <button
-                  onClick={async () => {
-                    const res = await commands.clearCache()
-                    if (res.status === 'ok') {
-                      setSaveStatus(`已清理 ${res.data} 条缓存记录`)
-                      setTimeout(() => setSaveStatus(null), 2000)
-                    }
-                  }}
-                  className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
-                >
-                  清空缓存
-                </button>
+                <div className="flex items-center justify-between border-t border-slate-200 pt-2 mt-1">
+                  <div>
+                    <div className="font-medium text-slate-700">清空历史缓存</div>
+                    <div className="text-[11px] text-slate-400">立即清除磁盘中的所有历史翻译记录</div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const res = await commands.clearCache()
+                      if (res.status === 'ok') {
+                        setSaveStatus(`已清理 ${res.data} 条缓存记录`)
+                        setTimeout(() => setSaveStatus(null), 2000)
+                      }
+                    }}
+                    className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
+                  >
+                    立即清空
+                  </button>
+                </div>
               </div>
 
               {/* 术语库管理 */}

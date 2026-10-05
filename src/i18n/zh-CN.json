@@ -22,6 +22,22 @@
     "placeholder": "划词或复制内容后自动展现译文",
     "autoHideNotice": "失焦自动收起"
   },
+  "task": {
+    "btnCancel": "取消",
+    "btnRetry": "重试",
+    "cancelled": "已取消",
+    "retryBlocked": "该错误重试无效，请检查设置"
+  },
+  "error": {
+    "input": "输入无效，请检查文本与语言选择",
+    "config": "配置异常，请检查网络或引擎设置",
+    "auth": "尚未配置 API 密钥，请在设置中填写",
+    "network": "网络连接失败，请检查网络后重试",
+    "engine": "翻译引擎出错，可重试或切换引擎",
+    "timeout": "请求超时，可重试",
+    "cancelled": "操作已取消",
+    "internal": "内部错误，请重试"
+  },
   "languages": {
     "zh-CN": "简体中文 (zh-CN)",
     "en": "英语 (en)",

@@ -149,5 +149,12 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   // 组件卸载时作废全部在途代际
   useEffect(() => () => { genRef.current += 1 }, [])
 
+  // 翻译中/错误态/已取消时粘滞浮窗（不失焦隐藏），终态恢复自动收起
+  const needsSticky = snapshot.state === 'running' || snapshot.state === 'queued'
+    || snapshot.state === 'cancelled' || snapshot.error !== null
+  useEffect(() => {
+    commands.setFloatSticky(needsSticky).catch(() => {})
+  }, [needsSticky])
+
   return { snapshot, run, cancel, retry, reset }
 }

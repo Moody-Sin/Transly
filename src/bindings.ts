@@ -6,6 +6,11 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
 	getEngineCapabilities: (engine: string) => typedError<EngineCapabilitiesDto, string>(__TAURI_INVOKE("get_engine_capabilities", { engine })),
+	/**
+	 *  设置浮窗粘滞：翻译中/错误态时为 true，浮窗不失焦自动隐藏，
+	 *  保证错误提示与重试按钮来得及被用户看到并点击
+	 */
+	setFloatSticky: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_float_sticky", { enabled })),
 	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
 	rotateServerToken: () => typedError<string, string>(__TAURI_INVOKE("rotate_server_token")),

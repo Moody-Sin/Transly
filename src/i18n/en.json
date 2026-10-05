@@ -22,6 +22,22 @@
     "placeholder": "Select or copy text to translate automatically",
     "autoHideNotice": "Auto-hides on blur"
   },
+  "task": {
+    "btnCancel": "Cancel",
+    "btnRetry": "Retry",
+    "cancelled": "Cancelled",
+    "retryBlocked": "Retrying won't help; check your settings"
+  },
+  "error": {
+    "input": "Invalid input; check the text and language selection",
+    "config": "Configuration problem; check network or engine settings",
+    "auth": "API key not configured; add it in Settings",
+    "network": "Network failed; check your connection and retry",
+    "engine": "Engine error; retry or switch engines",
+    "timeout": "Request timed out; you can retry",
+    "cancelled": "Operation cancelled",
+    "internal": "Internal error; please retry"
+  },
   "languages": {
     "zh-CN": "Simplified Chinese (zh-CN)",
     "en": "English (en)",

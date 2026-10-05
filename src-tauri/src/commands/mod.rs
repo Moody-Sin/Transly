@@ -271,6 +271,18 @@ pub async fn ocr_image(
     }
 }
 
+/// 设置浮窗粘滞：翻译中/错误态时为 true，浮窗不失焦自动隐藏，
+/// 保证错误提示与重试按钮来得及被用户看到并点击
+#[tauri::command]
+#[specta::specta]
+pub fn set_float_sticky(
+    enabled: bool,
+    sticky: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<(), String> {
+    sticky.store(enabled, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn detect_lang(text: String) -> String {

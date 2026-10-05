@@ -1,20 +1,18 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe } from 'lucide-react'
-import { listen } from '@tauri-apps/api/event'
 import { commands } from './bindings'
 import { getTranslation, Locale } from './i18n'
+import { useTaskRunner } from './task/useTaskRunner'
+import { canRetry } from './task/taskState'
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>('zh-CN')
   const t = getTranslation(locale)
 
   const [sourceText, setSourceText] = useState('')
-  const [translatedText, setTranslatedText] = useState('')
   const [targetLang, setTargetLang] = useState('zh-CN')
   const [engine, setEngine] = useState('google')
-  const [isTranslating, setIsTranslating] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [serverToken, setServerToken] = useState<string>('')
   const [tokenCopied, setTokenCopied] = useState(false)
 
@@ -34,6 +32,11 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
 
   const isFloatWindow = window.location.hash === '#float'
+
+  // 四类入口（输入框 / 划词 / 剪贴板 / 浮窗）共用同一任务状态机
+  const runner = useTaskRunner(engine, targetLang)
+  const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
+  const isTranslating = state === 'running' || state === 'queued'
 
   const loadGlossaryList = () => {
     commands.getGlossaryTerms().then((res) => {
@@ -177,48 +180,6 @@ export default function App() {
     }
   }
 
-  const handleTranslate = useCallback(async (customText?: string) => {
-    const textToTranslate = customText !== undefined ? customText : sourceText
-    if (!textToTranslate.trim()) return
-    setIsTranslating(true)
-    setErrorMsg(null)
-    try {
-      // 使用 tauri-specta 强类型命令安全调用，传递所选引擎
-      const res = await commands.translate(textToTranslate, 'auto', targetLang, engine)
-      if (res.status === 'ok') {
-        setTranslatedText(res.data)
-      } else {
-        setErrorMsg(res.error)
-        setTranslatedText('')
-      }
-    } catch (err: unknown) {
-      console.error('Tauri IPC 调用失败:', err)
-      setErrorMsg(err instanceof Error ? err.message : String(err))
-      setTranslatedText('')
-    } finally {
-      setIsTranslating(false)
-    }
-  }, [sourceText, targetLang, engine])
-
-  // 监听全局快捷键划词/剪贴板翻译事件
-  useEffect(() => {
-    let unlistenFloat: (() => void) | undefined
-
-    listen<string>('float-translate', (event) => {
-      const text = event.payload
-      if (text && text.trim()) {
-        setSourceText(text)
-        handleTranslate(text)
-      }
-    }).then((fn) => {
-      unlistenFloat = fn
-    }).catch(() => {})
-
-    return () => {
-      if (unlistenFloat) unlistenFloat()
-    }
-  }, [handleTranslate])
-
   const handleCopy = () => {
     if (!translatedText) return
     navigator.clipboard.writeText(translatedText)
@@ -236,6 +197,14 @@ export default function App() {
             <span className="text-xs font-semibold text-slate-800">{t.float.title}</span>
           </div>
           <div className="flex items-center gap-2">
+            {isTranslating && (
+              <button
+                onClick={runner.cancel}
+                className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-200"
+              >
+                {t.task.btnCancel}
+              </button>
+            )}
             <select
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
@@ -251,6 +220,18 @@ export default function App() {
         <div className="my-2 flex-1 overflow-auto rounded-lg bg-slate-50/70 p-2 text-xs leading-relaxed text-slate-800 border border-slate-100">
           {isTranslating ? (
             <span className="text-slate-400 animate-pulse">{t.float.translating}</span>
+          ) : error ? (
+            <div className="flex flex-col gap-1">
+              <span className="text-rose-500">{t.error[error.kind]}</span>
+              {canRetry(state, error) && (
+                <button
+                  onClick={runner.retry}
+                  className="self-start rounded bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
+                >
+                  {t.task.btnRetry}
+                </button>
+              )}
+            </div>
           ) : (
             translatedText || <span className="text-slate-400">{t.float.placeholder}</span>
           )}
@@ -258,7 +239,11 @@ export default function App() {
 
         <div className="flex items-center justify-between pt-1">
           <span className="text-[10px] text-slate-400 truncate max-w-[200px]">
-            {sourceText ? `“${sourceText.slice(0, 30)}...”` : t.float.autoHideNotice}
+            {state === 'cancelled'
+              ? t.task.cancelled
+              : runner.snapshot.sourceText
+                ? `“${runner.snapshot.sourceText.slice(0, 30)}...”`
+                : t.float.autoHideNotice}
           </span>
           {translatedText && (
             <button
@@ -355,12 +340,30 @@ export default function App() {
               placeholder={t.translation.inputPlaceholder}
               className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
             />
-            {errorMsg && (
-              <div className="text-xs text-rose-500 mt-1">{errorMsg}</div>
+            {error && (
+              <div className="mt-1 flex items-start gap-2 text-xs">
+                <span className="text-rose-500">{t.error[error.kind]}</span>
+                {canRetry(state, error) && (
+                  <button
+                    onClick={runner.retry}
+                    className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 font-medium text-rose-600 hover:bg-rose-100"
+                  >
+                    {t.task.btnRetry}
+                  </button>
+                )}
+              </div>
             )}
-            <div className="mt-2 flex justify-end">
+            <div className="mt-2 flex items-center justify-end gap-2">
+              {isTranslating && (
+                <button
+                  onClick={runner.cancel}
+                  className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                >
+                  {t.task.btnCancel}
+                </button>
+              )}
               <button
-                onClick={() => handleTranslate()}
+                onClick={() => runner.run(sourceText, { source: 'input' })}
                 disabled={isTranslating || !sourceText.trim()}
                 className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
               >
@@ -373,17 +376,22 @@ export default function App() {
             <div className="flex-1 overflow-auto text-sm text-slate-800">
               {translatedText || <span className="text-slate-400">{t.translation.outputPlaceholder}</span>}
             </div>
-            {translatedText && (
-              <div className="mt-2 flex justify-end">
-                <button
-                  onClick={handleCopy}
-                  className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                >
-                  {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span>{copied ? t.translation.copied : t.translation.copy}</span>
-                </button>
-              </div>
-            )}
+            <div className="mt-2 flex items-center justify-between">
+              {usedEngine && (
+                <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
+              )}
+              {translatedText && (
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                    <span>{copied ? t.translation.copied : t.translation.copy}</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </main>

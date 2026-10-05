@@ -6,6 +6,7 @@ fn main() {
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::translate,
         commands::get_engine_capabilities,
+        commands::set_float_sticky,
         commands::detect_lang,
         commands::get_server_token,
         commands::rotate_server_token,

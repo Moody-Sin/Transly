@@ -62,6 +62,7 @@ fn main() {
     let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::translate,
         commands::get_engine_capabilities,
+        commands::set_float_sticky,
         commands::detect_lang,
         commands::get_server_token,
         commands::rotate_server_token,
@@ -289,14 +290,16 @@ fn main() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(move |window, event| {
+            let float_sticky = float_sticky.clone();
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // 点击关闭按钮时隐藏窗口常驻托盘，不中断后台服务
                 api.prevent_close();
                 let _ = window.hide();
             } else if let WindowEvent::Focused(false) = event {
-                // 悬浮迷你窗在失去焦点时自动隐藏收起
-                if window.label() == "float" {
+                // 悬浮迷你窗在失去焦点时自动隐藏收起；但翻译中/错误态下粘滞，
+                // 否则错误提示与重试按钮来不及点击
+                if window.label() == "float" && !float_sticky.load(Ordering::SeqCst) {
                     let _ = window.hide();
                 }
             }

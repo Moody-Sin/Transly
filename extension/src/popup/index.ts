@@ -1,5 +1,7 @@
 const statusEl = document.getElementById('conn-status') as HTMLElement
 const btnTranslate = document.getElementById('btn-translate') as HTMLButtonElement
+const btnCancel = document.getElementById('btn-cancel') as HTMLButtonElement
+const btnRetry = document.getElementById('btn-retry') as HTMLButtonElement
 const btnRestore = document.getElementById('btn-restore') as HTMLButtonElement
 const inputToken = document.getElementById('input-token') as HTMLInputElement
 const btnSaveToken = document.getElementById('btn-save-token') as HTMLButtonElement
@@ -63,7 +65,35 @@ function checkConnection() {
 // 检查与桌面端 127.0.0.1 服务的连通性
 checkConnection()
 
-// 打开 Popup 时，主动向 Background 查询当前 Tab 的持久化任务进度
+function renderProgressState(state: {
+  status: string
+  completed: number
+  total: number
+  failedBatches: number
+  failedCount?: number
+}) {
+  progressBox.style.display = 'block'
+  const failedCount = state.failedCount || 0
+  const pct = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0
+  progressBar.style.width = `${pct}%`
+  progressCount.textContent = `${state.completed}/${state.total}`
+  btnCancel.style.display = state.status === 'translating' ? 'block' : 'none'
+  btnRetry.style.display = failedCount > 0 && state.status !== 'translating' ? 'block' : 'none'
+
+  if (state.status === 'cancelled') {
+    progressText.textContent = `已取消${failedCount > 0 ? `，${failedCount} 项可重试` : ''}`
+  } else if (state.status === 'partially_failed') {
+    progressText.textContent = `部分完成，${failedCount} 项失败`
+  } else if (state.status === 'finished') {
+    progressText.textContent = '翻译完成 ✓'
+  } else if (state.status === 'failed') {
+    progressText.textContent = `翻译失败，${failedCount || state.failedBatches} 项可重试`
+  } else {
+    progressText.textContent = '正在翻译...'
+  }
+}
+
+
 async function restoreProgressState() {
   // 兼容直接作为 popup 打开或独立页面调试
   let tabId: number | undefined
@@ -81,60 +111,72 @@ async function restoreProgressState() {
 
   chrome.runtime.sendMessage({ type: 'GET_TASK_PROGRESS', tabId }, (response) => {
     if (response?.ok && response.state) {
-      const state = response.state
-      if (state.status === 'translating') {
-        progressBox.style.display = 'block'
-        const pct = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0
-        progressBar.style.width = `${pct}%`
-        progressCount.textContent = `${state.completed}/${state.total}`
-        progressText.textContent = state.failedBatches > 0 ? `翻译中 (${state.failedBatches} 批失败)` : '正在翻译...'
-      } else if (state.status === 'finished') {
-        progressBox.style.display = 'block'
-        progressBar.style.width = '100%'
-        progressCount.textContent = `${state.completed}/${state.total}`
-        progressText.textContent = state.failedBatches > 0 ? `已完成 (含 ${state.failedBatches} 批失败)` : '翻译完成 ✓'
-      }
+      renderProgressState(response.state)
     }
   })
 }
 restoreProgressState()
 
+async function sendToActiveTab(message: object) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (tab?.id) chrome.tabs.sendMessage(tab.id, message)
+}
+
+btnCancel.addEventListener('click', () => {
+  sendToActiveTab({ type: 'CANCEL_PAGE_TRANSLATION' })
+})
+
+btnRetry.addEventListener('click', () => {
+  btnRetry.style.display = 'none'
+  sendToActiveTab({ type: 'RETRY_FAILED_TRANSLATION' })
+})
+
 // 监听来自 content script 的翻译进度广播
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'TRANSLATION_STARTED') {
-    progressBox.style.display = 'block'
-    progressText.textContent = '正在翻译...'
-    progressCount.textContent = `0/${message.total}`
-    progressBar.style.width = '0%'
+    renderProgressState({ status: 'translating', completed: 0, total: message.total, failedBatches: 0 })
   } else if (message.type === 'TRANSLATION_PROGRESS') {
-    progressBox.style.display = 'block'
-    const pct = message.total > 0 ? Math.round((message.completed / message.total) * 100) : 0
-    progressBar.style.width = `${pct}%`
-    progressCount.textContent = `${message.completed}/${message.total}`
-    if (message.failedBatches > 0) {
-      progressText.textContent = `翻译中 (${message.failedBatches} 批失败)`
-    } else {
-      progressText.textContent = '正在翻译...'
+    renderProgressState({
+      status: 'translating',
+      completed: message.completed,
+      total: message.total,
+      failedBatches: message.failedBatches,
+      failedCount: message.failedCount,
+    })
+  } else if (message.type === 'TRANSLATION_FINISHED' || message.type === 'TRANSLATION_PARTIAL_FAILED') {
+    renderProgressState({
+      status: message.type === 'TRANSLATION_PARTIAL_FAILED' ? 'partially_failed' : 'finished',
+      completed: message.completed,
+      total: message.total,
+      failedBatches: message.failedBatches,
+      failedCount: message.failedCount,
+    })
+    if (message.type === 'TRANSLATION_FINISHED') {
+      setTimeout(() => {
+        progressBox.style.display = 'none'
+      }, 2500)
     }
-  } else if (message.type === 'TRANSLATION_FINISHED') {
-    progressBox.style.display = 'block'
-    progressBar.style.width = '100%'
-    if (message.failedBatches > 0) {
-      progressText.textContent = `已完成 (含 ${message.failedBatches} 批失败)`
-    } else {
-      progressText.textContent = '翻译完成 ✓'
-    }
-    progressCount.textContent = `${message.completed}/${message.total}`
-    setTimeout(() => {
-      progressBox.style.display = 'none'
-    }, 2500)
+  } else if (message.type === 'TRANSLATION_FAILED') {
+    renderProgressState({
+      status: 'failed',
+      completed: message.completed || 0,
+      total: message.total || 0,
+      failedBatches: message.failedBatches || 1,
+      failedCount: message.failedCount,
+    })
   } else if (message.type === 'TRANSLATION_CANCELLED' || message.type === 'TRANSLATION_RESTORED') {
-    progressBox.style.display = 'block'
-    progressText.textContent = '已还原 / 取消'
-    progressBar.style.width = '0%'
-    setTimeout(() => {
-      progressBox.style.display = 'none'
-    }, 1500)
+    renderProgressState({
+      status: message.type === 'TRANSLATION_CANCELLED' ? 'cancelled' : 'restored',
+      completed: message.completed || 0,
+      total: message.total || 0,
+      failedBatches: message.failedBatches || 0,
+      failedCount: message.failedCount,
+    })
+    if (message.type === 'TRANSLATION_RESTORED') {
+      setTimeout(() => {
+        progressBox.style.display = 'none'
+      }, 1500)
+    }
   }
 })
 

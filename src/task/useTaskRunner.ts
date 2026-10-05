@@ -6,6 +6,7 @@ import {
   type TaskError, type TaskState,
 } from './taskState'
 import { applyIfCurrent } from './generation'
+import { toFailureOutcome } from './outcome'
 
 export { applyIfCurrent }
 
@@ -62,7 +63,10 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     lastRunRef.current = { text, source }
     setSnapshot((s) => ({ ...s, state: nextState(s.state, 'submit'), error: null }))
 
+    // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
+    // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
     const res = await commands.translate(text, 'auto', langRef.current, engineRef.current)
+      .catch(toFailureOutcome)
     // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
     if (applyIfCurrent(gen, genRef.current, true) !== true) return
 
@@ -149,12 +153,17 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   // 组件卸载时作废全部在途代际
   useEffect(() => () => { genRef.current += 1 }, [])
 
-  // 翻译中/错误态/已取消时粘滞浮窗（不失焦隐藏），终态恢复自动收起
-  const needsSticky = snapshot.state === 'running' || snapshot.state === 'queued'
+  // 翻译中/错误态/已取消时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
+  // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
+  const isFloatWindow = typeof window !== 'undefined' && window.location.hash === '#float'
+  const needsSticky = isFloatWindow && (
+    snapshot.state === 'running' || snapshot.state === 'queued'
     || snapshot.state === 'cancelled' || snapshot.error !== null
+  )
   useEffect(() => {
+    if (!isFloatWindow) return
     commands.setFloatSticky(needsSticky).catch(() => {})
-  }, [needsSticky])
+  }, [needsSticky, isFloatWindow])
 
   return { snapshot, run, cancel, retry, reset }
 }

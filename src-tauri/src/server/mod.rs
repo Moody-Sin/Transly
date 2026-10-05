@@ -334,8 +334,8 @@ async fn translate_batch_handler(
             }
             final_translations.push(text.clone());
         } else {
-            // 失败项在旧版 translations 数组中保持空串或原文占位
-            final_translations.push(String::new());
+            // 失败项在旧版 translations 数组中保留原文，避免旧客户端把失败结果替换为空文本
+            final_translations.push(unified_items[idx].text.clone());
         }
         final_items.push(item);
     }

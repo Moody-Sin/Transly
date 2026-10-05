@@ -89,6 +89,17 @@ impl TranslateEngine for OpenAIEngine {
         "LLM 智能翻译"
     }
 
+    fn capabilities(&self) -> super::EngineCapabilities {
+        super::EngineCapabilities {
+            id: self.id().to_string(),
+            name: self.name().to_string(),
+            max_batch_size: 20,
+            supports_streaming: true,
+            supports_batch: true,
+            requires_api_key: true,
+        }
+    }
+
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
         if self.api_key.trim().is_empty() {
             return Err(Error::MissingCredentials("API Key 不能为空".into()));

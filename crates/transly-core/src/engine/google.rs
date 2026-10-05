@@ -90,6 +90,17 @@ impl TranslateEngine for GoogleWebEngine {
         "Google 网页翻译"
     }
 
+    fn capabilities(&self) -> super::EngineCapabilities {
+        super::EngineCapabilities {
+            id: self.id().to_string(),
+            name: self.name().to_string(),
+            max_batch_size: 50,
+            supports_streaming: false,
+            supports_batch: true,
+            requires_api_key: false,
+        }
+    }
+
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
         // 如果文本超过 1000 字符，按段落和固定长度双重切片，彻底防止超长单行溢出
         if req.text.chars().count() > 1000 {

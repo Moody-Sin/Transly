@@ -27,6 +27,13 @@ impl TranslateEngine for FallbackEngine {
         self.primary.name()
     }
 
+    fn capabilities(&self) -> super::EngineCapabilities {
+        let mut caps = self.primary.capabilities();
+        // 标定具备降级容灾能力
+        caps.name = format!("{}(容灾降级)", caps.name);
+        caps
+    }
+
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
         match self.primary.translate(req).await {
             Ok(res) => Ok(res),
@@ -119,7 +126,20 @@ mod tests {
         let res = engine.translate(&req).await.unwrap();
         assert_eq!(res.text, "backup:hello");
         assert_eq!(res.engine, "backup(fallback)");
+        assert!(res.is_fallback());
+        assert_eq!(res.actual_engine(), "backup");
     }
+
+    #[test]
+    fn test_fallback_capabilities() {
+        let primary = Arc::new(SuccessEngine("primary"));
+        let fallback = Arc::new(SuccessEngine("backup"));
+        let engine = FallbackEngine::new(primary, fallback);
+        let caps = engine.capabilities();
+        assert_eq!(caps.id, "primary");
+        assert!(caps.name.contains("容灾降级"));
+    }
+
 
     #[tokio::test]
     async fn test_primary_used_when_successful() {

@@ -26,6 +26,19 @@ pub struct TranslationResponse {
     pub engine: String,
 }
 
+impl TranslationResponse {
+    pub fn actual_engine(&self) -> &str {
+        self.engine
+            .strip_suffix("(fallback)")
+            .unwrap_or(&self.engine)
+    }
+
+    pub fn is_fallback(&self) -> bool {
+        self.engine.ends_with("(fallback)")
+    }
+}
+
+
 /// 批量翻译中单项请求契约（保证输入与输出具备稳定映射）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchItemRequest {

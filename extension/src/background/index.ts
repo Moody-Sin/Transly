@@ -26,10 +26,6 @@ const tabProgressMap = new Map<number, TaskProgressState>()
 chrome.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab?.id
 
-  if (message.type === 'GET_TASK_PROGRESS') {
-    return false
-  }
-
   if (message.type === 'TRANSLATION_STARTED') {
     chrome.action.setBadgeText({ text: '0%' })
     chrome.action.setBadgeBackgroundColor({ color: '#4f46e5' })

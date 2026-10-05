@@ -17,6 +17,7 @@ export interface RunnerSnapshot {
   error: TaskError | null
   source: 'input' | 'selection' | 'clipboard' | null
   sourceText: string
+  fallbackReason: string | null
 }
 
 export interface TaskRunner {
@@ -34,7 +35,7 @@ interface FloatRequest {
 }
 
 const EMPTY: RunnerSnapshot = {
-  state: 'idle', text: '', engine: null, error: null, source: null, sourceText: '',
+  state: 'idle', text: '', engine: null, error: null, source: null, sourceText: '', fallbackReason: null,
 }
 
 export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
@@ -81,6 +82,7 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
         error: null,
         source,
         sourceText: text,
+        fallbackReason: res.data.fallback_reason,
       })
     } else {
       setSnapshot({
@@ -90,6 +92,7 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
         error: { kind: res.error.kind, message: res.error.message, retryable: res.error.retryable },
         source,
         sourceText: text,
+        fallbackReason: null,
       })
     }
   }, [])

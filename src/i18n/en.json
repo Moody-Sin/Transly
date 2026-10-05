@@ -17,6 +17,7 @@
     "engineSelect": "Engine",
     "maxBatch": "Max batch ",
     "apiKeyRequired": "API key required",
+    "fallbackNotice": "API Key not configured; fell back to Google",
     "btnOcrPaste": "Paste & OCR",
     "ocrRunning": "Scanning image..."
   },
@@ -36,8 +37,7 @@
   "task": {
     "btnCancel": "Cancel",
     "btnRetry": "Retry",
-    "cancelled": "Cancelled",
-    "retryBlocked": "Retrying won't help; check your settings"
+    "cancelled": "Cancelled"
   },
   "error": {
     "input": "Invalid input; check the text and language selection",

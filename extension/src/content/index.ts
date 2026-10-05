@@ -27,8 +27,13 @@ export function shouldTranslateElement(element: Element): boolean {
   if (element.hasAttribute('data-no-translate')) return false
   if (element.classList.contains('notranslate')) return false
 
-  // 沿祖先链深度检查是否有屏蔽标签或属性，防止嵌套在屏蔽区域内的文本节点被误翻
-  if (element.closest('[data-no-translate], .notranslate, pre, code, textarea, input, script, style')) {
+  // 沿祖先链深度检查是否有屏蔽标签或属性，防止嵌套在屏蔽区域内的文本节点被误翻；
+  // 遵循通用安全约定，默认跳过 contenteditable 区域以及 Monaco/CodeMirror 专用编辑器容器
+  if (
+    element.closest(
+      '[data-no-translate], .notranslate, pre, code, textarea, input, script, style, [contenteditable]:not([contenteditable="false"]), .monaco-editor, .cm-editor',
+    )
+  ) {
     return false
   }
 

@@ -6,7 +6,7 @@
 
 目标平台：
 - 桌面端：Windows / macOS / Linux
-- 浏览器插件端：Chromium 内核浏览器（Chrome, Edge 等），已实现并验证；Firefox 尚未实现（代码仅使用 `chrome.*` API，无 `browser_specific_settings`），待实际兼容验证后再声明支持
+- 浏览器插件端：Chromium 内核浏览器（Chrome, Edge 等），基于原生 TypeScript + Vite 构建
 - 未来阶段：iOS / Android（移动端，架构预留，暂不实现）
 
 核心原则：
@@ -48,7 +48,7 @@
 ┌───────────────▼─────────────────────────┐
 │  transly-core（核心逻辑，无 Tauri 依赖）  │
 │  - 翻译与 OCR 引擎抽象与实现              │
-│  - 缓存 / 语言检测 / 术语库               │
+│  - 缓存 / 术语库               │
 │  - 可被桌面端、CLI、WASM 复用             │
 └─────────────────────────────────────────┘
 ```
@@ -94,9 +94,8 @@ transly/
 │       ├── src/
 │       │   ├── lib.rs
 │       │   ├── engine/        # 翻译引擎抽象与实现 (DeepL, OpenAI, Google...)
-│       │   ├── ocr/           # OCR 引擎抽象 (系统原生 / 云端 API)
+│       │   ├── ocr/           # OCR 辅助运算与 DTO
 │       │   ├── cache.rs       # SQLite 缓存管理
-│       │   ├── detect.rs      # 语言检测
 │       │   ├── glossary.rs    # 术语库
 │       │   ├── config.rs      # 配置模型
 │       │   └── error.rs
@@ -121,12 +120,11 @@ transly/
 │   ├── i18n/                  # zh-CN.json / en.json
 │   └── bindings.ts            # tauri-specta 自动生成的类型与 API
 │
-├── extension/                 # 浏览器插件 (WXT / Vite + CRXJS, React + TS)
+├── extension/                 # 浏览器插件 (Vite + 原生 TypeScript)
 │   ├── src/
 │   │   ├── background/        # 后台通信（负责与桌面端 127.0.0.1 HTTP 通信）
-│   │   ├── content/           # 页面划词/气泡浮窗/DOM 注入
-│   │   ├── popup/             # 插件工具栏弹窗 UI
-│   │   └── options/           # 插件设置页（连接状态、快捷键等）
+│   │   ├── content/           # 页面 DOM 原地提取与替换
+│   │   └── popup/             # 插件工具栏弹窗 UI
 │   ├── manifest.json
 │   └── package.json
 │

@@ -17,6 +17,7 @@
     "engineSelect": "翻译引擎",
     "maxBatch": "单批上限 ",
     "apiKeyRequired": "需配置密钥",
+    "fallbackNotice": "未配置密钥，已自动回退 Google",
     "btnOcrPaste": "识别剪贴板图片",
     "ocrRunning": "正在识图中..."
   },
@@ -36,8 +37,7 @@
   "task": {
     "btnCancel": "取消",
     "btnRetry": "重试",
-    "cancelled": "已取消",
-    "retryBlocked": "该错误重试无效，请检查设置"
+    "cancelled": "已取消"
   },
   "error": {
     "input": "输入无效，请检查文本与语言选择",

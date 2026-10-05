@@ -363,6 +363,11 @@ export default function App() {
               <option value="deepseek">DeepSeek LLM (需API Key / 自动降级)</option>
               <option value="openai">OpenAI (需API Key / 自动降级)</option>
             </select>
+            {runner.snapshot.fallbackReason === 'unconfigured_key' && (
+              <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                {t.translation.fallbackNotice}
+              </span>
+            )}
           </div>
 
           {capabilities && (

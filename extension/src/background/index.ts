@@ -136,17 +136,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             sendResponse({ ok: true, serverRunning: true, paired: false, data })
             return
           }
-          // 发起试探鉴权请求
-          fetch(`${LOCAL_SERVER_URL}/translate`, {
-            method: 'POST',
+          // 发起无副作用的 Token 鉴权探针请求
+          fetch(`${LOCAL_SERVER_URL}/verify_token`, {
+            method: 'GET',
             headers: {
-              'Content-Type': 'application/json',
               Authorization: `Bearer ${token}`,
             },
-            body: JSON.stringify({
-              texts: ['test'],
-              target_lang: 'zh-CN',
-            }),
           })
             .then((authRes) => {
               if (authRes.status === 401) {

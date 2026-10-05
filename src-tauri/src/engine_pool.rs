@@ -38,44 +38,43 @@ impl EnginePool {
             }
         }
 
-        // 2. 写锁创建并缓存
+        // 2. 避免在持有写锁期间调用同步阻塞的 keyring I/O (secrets::get_secret)
+        // 先在锁外安全执行阻塞凭据读取和引擎构建
+        let created = self.create_engine_blocking(&id_clean).await;
+
+        // 3. 获取写锁写入缓存（双重校验，杜绝重复写入覆盖）
         let mut map = self.cache.write().await;
         if let Some(engine) = map.get(&id_clean) {
             return engine.clone();
         }
 
-        let created = self.create_engine(&id_clean);
         map.insert(id_clean, created.clone());
         created
     }
 
-    fn create_engine(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
+    async fn create_engine_blocking(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
+        let id = engine_id.to_string();
         let fallback = self.default_engine.clone();
-        match engine_id {
+
+        tokio::task::spawn_blocking(move || match id.as_str() {
             "deepl" => {
-                if let Ok(key) = crate::secrets::get_secret("deepl") {
-                    if !key.is_empty() {
-                        let deepl = Arc::new(DeepLEngine::new(key));
-                        return Arc::new(FallbackEngine::new(deepl, fallback));
-                    }
-                }
-                fallback
+                let key = crate::secrets::get_secret("deepl").unwrap_or_default();
+                let deepl = Arc::new(DeepLEngine::new(key));
+                Arc::new(FallbackEngine::new(deepl, fallback)) as Arc<dyn TranslateEngine>
             }
             "openai" | "deepseek" => {
-                if let Ok(key) = crate::secrets::get_secret(engine_id) {
-                    if !key.is_empty() {
-                        let llm: Arc<dyn TranslateEngine> = if engine_id == "deepseek" {
-                            Arc::new(OpenAIEngine::deepseek(key))
-                        } else {
-                            Arc::new(OpenAIEngine::new(key, None, None))
-                        };
-                        return Arc::new(FallbackEngine::new(llm, fallback));
-                    }
-                }
-                fallback
+                let key = crate::secrets::get_secret(&id).unwrap_or_default();
+                let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
+                    Arc::new(OpenAIEngine::deepseek(key))
+                } else {
+                    Arc::new(OpenAIEngine::new(key, None, None))
+                };
+                Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
             }
             _ => fallback,
-        }
+        })
+        .await
+        .unwrap_or(self.default_engine.clone())
     }
 
     /// 密钥更新或删除时，使对应引擎缓存失效

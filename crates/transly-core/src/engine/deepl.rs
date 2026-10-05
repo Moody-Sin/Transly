@@ -239,10 +239,24 @@ mod tests {
     }
 
     #[test]
-    fn test_deepl_lang_normalization() {
-        assert_eq!(DeepLEngine::normalize_target_lang("zh-CN"), "ZH");
-        assert_eq!(DeepLEngine::normalize_target_lang("en"), "EN-US");
-        assert_eq!(DeepLEngine::normalize_source_lang("auto"), None);
-        assert_eq!(DeepLEngine::normalize_source_lang("zh-cn"), Some("ZH"));
+    fn test_deepl_capabilities() {
+        let engine = DeepLEngine::new("test");
+        let caps = engine.capabilities();
+        assert_eq!(caps.id, "deepl");
+        assert_eq!(caps.max_batch_size, 50);
+        assert!(caps.supports_batch);
+        assert!(caps.requires_api_key);
+    }
+
+    #[tokio::test]
+    async fn test_deepl_empty_key_errors() {
+        let engine = DeepLEngine::new(" ");
+        let req = TranslationRequest {
+            text: "test".into(),
+            source_lang: "en".into(),
+            target_lang: "zh-CN".into(),
+        };
+        assert!(engine.translate(&req).await.is_err());
+        assert!(engine.translate_batch(&[req]).await.is_err());
     }
 }

@@ -190,9 +190,6 @@ fn main() {
                                     if let Some(float_win) = handle.get_webview_window("float") {
                                         let _ = float_win.show();
                                         let _ = float_win.set_focus();
-                                        // 浮窗首次显示才加载页面；等页面就绪并注册监听后再投递
-                                        tokio::time::sleep(std::time::Duration::from_millis(400))
-                                            .await;
                                         let _ = float_win.emit("float-translate", req);
                                     }
                                 }
@@ -248,8 +245,6 @@ fn main() {
                     if let Some(float_win) = clip_handle.get_webview_window("float") {
                         let _ = float_win.show();
                         let _ = float_win.set_focus();
-                        // 浮窗首次显示才加载页面；等页面就绪并注册监听后再投递
-                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                         let _ = float_win.emit("float-translate", req);
                     }
                 }

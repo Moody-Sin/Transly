@@ -149,6 +149,10 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       if (!payload?.text?.trim()) return
       if (seenFloatIdsRef.current.has(payload.request_id)) return
       seenFloatIdsRef.current.add(payload.request_id)
+      if (seenFloatIdsRef.current.size > 200) {
+        const kept = Array.from(seenFloatIdsRef.current).slice(-100)
+        seenFloatIdsRef.current = new Set(kept)
+      }
       run(payload.text, { source: payload.source })
     }
     listen<FloatRequest>('float-translate', (event) => handle(event.payload))
@@ -169,12 +173,12 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   // 组件卸载时作废全部在途代际
   useEffect(() => () => { genRef.current += 1 }, [])
 
-  // 翻译中/错误态/已取消时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
+  // 翻译中/错误态时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
   // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
   const isFloatWindow = typeof window !== 'undefined' && window.location.hash === '#float'
   const needsSticky = isFloatWindow && (
     snapshot.state === 'running' || snapshot.state === 'queued'
-    || snapshot.state === 'cancelled' || snapshot.error !== null
+    || snapshot.error !== null
   )
   useEffect(() => {
     if (!isFloatWindow) return

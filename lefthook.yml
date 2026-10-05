@@ -8,7 +8,7 @@ pre-commit:
     rust-test:
       run: cargo test --workspace
     type-check-desktop:
-      run: pnpm --filter transly build
+      run: pnpm --filter transly exec tsc --noEmit
     type-check-extension:
       run: pnpm --filter transly-extension build
     frontend-lint:

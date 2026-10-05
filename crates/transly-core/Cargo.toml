@@ -23,4 +23,3 @@ futures = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1.43", features = ["full"] }
-tempfile = "3.17"

@@ -124,12 +124,15 @@ impl TranslateEngine for GoogleWebEngine {
                         detected_lang = res.detected_source_lang;
                     }
                     full_translated.push_str(&res.text);
+                    if !res.text.ends_with(' ') {
+                        full_translated.push(' ');
+                    }
                 }
                 full_translated.push('\n');
             }
 
             return Ok(TranslationResponse {
-                text: full_translated.trim_end_matches('\n').to_string(),
+                text: full_translated.trim().to_string(),
                 detected_source_lang: detected_lang,
                 engine: self.id().to_string(),
             });
@@ -137,6 +140,33 @@ impl TranslateEngine for GoogleWebEngine {
 
         self.translate_single_chunk(&req.text, &req.source_lang, &req.target_lang)
             .await
+    }
+
+    async fn translate_batch(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Result<Vec<TranslationResponse>> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if requests.len() == 1 {
+            return Ok(vec![self.translate(&requests[0]).await?]);
+        }
+
+        // 使用受控并发（并发度 4）并发执行单项翻译，避免串行阻塞过慢
+        let chunk_size = 4;
+        let mut all_results = Vec::with_capacity(requests.len());
+
+        for chunk in requests.chunks(chunk_size) {
+            let futures: Vec<_> = chunk.iter().map(|req| self.translate(req)).collect();
+            let chunk_results = futures::future::join_all(futures).await;
+            for res in chunk_results {
+                all_results.push(res?);
+            }
+        }
+
+        Ok(all_results)
     }
 }
 
@@ -149,5 +179,16 @@ mod tests {
         let engine = GoogleWebEngine::new();
         assert_eq!(engine.id(), "google_web");
         assert_eq!(engine.name(), "Google 网页翻译");
+        let caps = engine.capabilities();
+        assert_eq!(caps.max_batch_size, 50);
+        assert!(caps.supports_batch);
+        assert!(!caps.requires_api_key);
+    }
+
+    #[tokio::test]
+    async fn test_translate_batch_empty() {
+        let engine = GoogleWebEngine::new();
+        let res = engine.translate_batch(&[]).await.unwrap();
+        assert!(res.is_empty());
     }
 }

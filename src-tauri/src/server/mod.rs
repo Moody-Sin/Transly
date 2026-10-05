@@ -108,6 +108,7 @@ pub fn create_router(
 
     let protected = Router::new()
         .route("/translate", post(translate_batch_handler))
+        .route("/verify_token", get(verify_token_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -159,6 +160,13 @@ async fn auth_middleware(
 }
 
 async fn health_handler() -> Json<StatusResponse> {
+    Json(StatusResponse {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
+
+async fn verify_token_handler() -> Json<StatusResponse> {
     Json(StatusResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
@@ -237,16 +245,32 @@ async fn translate_batch_handler(
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
-    // 1. 若开启缓存，优先查缓存
+    // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
         for (idx, item) in unified_items.iter().enumerate() {
-            if let Ok(Some(cached_text)) = state.cache.get(&item.text, &source, &target, engine_id)
-            {
+            let cached_opt = match state.cache.get(&item.text, &source, &target, engine_id) {
+                Ok(Some(cached_text)) => Some((cached_text, engine_id.to_string())),
+                _ => {
+                    let fallback_id = "google_web";
+                    if engine_id != fallback_id {
+                        match state.cache.get(&item.text, &source, &target, fallback_id) {
+                            Ok(Some(cached_text)) => {
+                                Some((cached_text, format!("{fallback_id}(fallback)")))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            if let Some((cached_text, used_engine)) = cached_opt {
                 item_results[idx] = Some(BatchItemResult::Success {
                     id: item.id.clone(),
                     text: cached_text,
                     detected_source_lang: None,
-                    engine: engine_id.to_string(),
+                    engine: used_engine,
                 });
             } else {
                 missing_indices.push(idx);
@@ -771,5 +795,61 @@ mod tests {
         assert_eq!(resp.items.len(), 1);
         assert_eq!(resp.items[0].id(), "node-1");
         assert!(resp.items[0].is_success());
+    }
+
+    #[tokio::test]
+    async fn test_fallback_cache_hit_on_secondary() {
+        let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+        let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+        let token = Arc::new(RwLock::new("valid-token".to_string()));
+
+        // 模拟先前 Fallback 写回了实际成功的 google_web 引擎缓存
+        cache
+            .set("fallback-test", "降级译文", "auto", "zh-CN", "google_web")
+            .unwrap();
+
+        let state = ServerState {
+            token,
+            pool,
+            cache,
+            glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
+            cache_controller,
+        };
+
+        let app = Router::new()
+            .route(
+                "/translate",
+                post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth_middleware,
+                )),
+            )
+            .with_state(state);
+
+        // 使用 deepl 引擎请求，但该 key 曾在 google_web 命中过缓存
+        let req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{
+                    "texts": ["fallback-test"],
+                    "target_lang": "zh-CN",
+                    "engine": "deepl"
+                }"#,
+            ))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.translations, vec!["降级译文"]);
+        assert_eq!(resp.items[0].engine(), Some("google_web(fallback)"));
     }
 }

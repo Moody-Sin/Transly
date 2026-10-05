@@ -9,12 +9,10 @@ pub fn detect_language(text: &str) -> String {
             // 日文平假名 & 片假名
             '\u{3040}'..='\u{309f}' | '\u{30a0}'..='\u{30ff}' => {
                 has_kana = true;
-                break;
             }
             // 韩文字母 / 音节
             '\u{ac00}'..='\u{d7af}' | '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' => {
                 has_hangul = true;
-                break;
             }
             // 汉字 (CJK Unified Ideographs)
             '\u{4e00}'..='\u{9fff}' => {

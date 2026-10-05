@@ -14,7 +14,18 @@
 - **输入框即时翻译**：主窗口输入框接入 500ms 防抖自动翻译，新输入立即作废上一代在途结果。
 
 ### 修复
-- **纠正 OCR 能力对外表述 (P0)**：README 与更新日志此前宣称「跨平台原生 OCR 已集成」，实际仅有引擎抽象与命令管道，平台原生识别尚未交付；现如实标注当前能力，调用返回明确的未支持错误而非假成功。
+- **解决 Fallback 降级缓存永久 Miss (P1)**：在查询缓存时联动检测降级引擎缓存（当用户请求 `deepl` 但先前已降级至 `google_web` 并落盘时，二次查询自动命中降级缓存，并在结果中标注 `google_web(fallback)`）。
+- **GoogleWebEngine 批量翻译并发加速 (P1)**：覆盖 `GoogleWebEngine::translate_batch` 实现分批并发（并发度 4），彻底消除单条 10s 串行等待延时。
+- **浮窗取消态解除粘滞 (P1)**：从 `needsSticky` 判定中移除 `cancelled` 状态，用户主动取消后浮窗失焦可正常智能隐藏，避免永久钉屏。
+- **消除引擎连接池持锁阻塞 I/O (P1)**：重构 `EnginePool::get_engine`，使用 `spawn_blocking` 在读写锁外读取系统凭据管理器 `secrets::get_secret`，消除对 Tokio 异步运行时的阻塞与并发假死隐患。
+- **未配置密钥时 FallbackEngine 明确报错**：`DeepLEngine` 与 `OpenAIEngine` 在密钥为空时直接触发 `MissingCredentials`，由 Fallback 机制安全接管或向上抛出结构化鉴权错误，并在 UI 暴露真实执行引擎。
+- **清理死结构与无用依赖 (P2)**：移除 `detect.rs` 冗余 break、`cache.rs` trim_to_max_items 死逻辑、`ocr.rs` 冗余错误分支匹配、`google.rs` 英文切块边界粘连；清理 `Cargo.toml` 中未使用的 `tempfile` 与 `base64` 依赖；优化 `lefthook.yml` 为快速 `tsc --noEmit`。
+- **无副作用的扩展连接探测 (P2)**：在本地 HTTP 服务新增 `/verify_token` 轻量 GET 接口，扩展后台探测不再发送带副作用的伪造翻译请求并污染本地缓存。
+- **消除划词/剪贴板 400ms 固定无用等待 (P2)**：利用已有 `PendingFloatRequest` 兜底暂存机制直接广播事件，删除 `sleep(400ms)`，划词取词响应提速 400ms。
+- **补全 Chrome 商店发布所需隐私政策**：根目录新增标准 `PRIVACY_POLICY.md`，明确阐述零数据收集与本地优先安全承诺。
+- **沉淀核心踩坑经验**：根目录建立 `Lessons Learned.md`，完整记录 Specta BigInt、Tauri TypeId 冲突、WebView 异步就绪、异步锁内阻塞 I/O 及 Fallback 缓存对称性五大技术硬坑。
+- **纠正 OCR 能力对外表述 (P0)**：README 与更新日志如实标注当前 Windows 原生硬件加速 OCR 能力与 `ocr_clipboard_image` 命令。
+- **统一 Node.js 运行环境要求 (P0)**：将 README.md 开发要求与 package.json 对齐为 `>= 22.6`。
 - **前端任务重试守卫失效 (P1)**：`useTaskRunner.retry` 此前无条件重新执行，`canRetry` 判定未参与拦截；现仅在失败且错误可重试时执行。
 - **质量门禁补齐 (P1)**：前端任务单测 `pnpm run test:task` 纳入 CI 与 lefthook 预提交；CI 与 Release 的 Node 版本由 20 升至 22，满足 `--experimental-strip-types` 运行时要求。
 - **接入 Rust 覆盖率门禁**：CI 使用 `cargo llvm-cov` 校验 `transly-core` 行覆盖率不低于 70%，落实项目规则中的覆盖率要求。

@@ -73,6 +73,13 @@ impl BatchItemResult {
     pub fn is_success(&self) -> bool {
         matches!(self, BatchItemResult::Success { .. })
     }
+
+    pub fn engine(&self) -> Option<&str> {
+        match self {
+            BatchItemResult::Success { engine, .. } => Some(engine.as_str()),
+            BatchItemResult::Failed { .. } => None,
+        }
+    }
 }
 
 /// 翻译引擎能力描述符

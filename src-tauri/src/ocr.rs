@@ -64,9 +64,6 @@ pub async fn recognize_clipboard_image(
             Ok(im) => im,
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("no image") || msg.contains("empty") {
-                    return Err(OcrErrorDto::no_image());
-                }
                 return Err(OcrErrorDto::new(OcrErrorKind::NoImage, msg));
             }
         };

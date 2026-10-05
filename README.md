@@ -60,7 +60,7 @@ Transly 是一款基于 Rust 与 Tauri 2 构建的跨平台桌面翻译软件，
 ### 源码开发构建
 
 需要满足以下开发环境要求：
-- [Node.js](https://nodejs.org/) (>= 18) 与 [pnpm](https://pnpm.io/)
+- [Node.js](https://nodejs.org/) (>= 22.6) 与 [pnpm](https://pnpm.io/)
 - [Rust](https://www.rust-lang.org/) (edition 2021+)
 - 目标平台对应的 C/C++ 构建工具链（如 Windows 上的 MSVC，Linux 上的 build-essential 和 WebKitGTK 依赖等）
 
@@ -96,7 +96,7 @@ pnpm tauri dev
 
 ### 3. 已知限制与注意事项
 - **复杂富文本编辑器**：为保障页面编辑安全，Transly 默认不对 `contenteditable`、富文本代码编辑器（如 Monaco / CodeMirror）及包含 `.notranslate` 属性的节点进行强行替换。
-- **图片 OCR 尚未可用**：`OcrEngine` 抽象与 `ocr_image` 命令管道已就位，但平台原生识别实现尚未交付，调用会返回明确的「未支持」错误而非假成功。截图 OCR 翻译将在后续版本交付。
+- **图片 OCR 翻译 (Windows 原生)**：支持主输入框底栏「识别剪贴板图片」入口或 `ocr_clipboard_image` 命令。Windows 平台基于系统 `Windows.Media.Ocr` 原生硬件加速识别并自动触发即时翻译，全流程内存零落盘。非 Windows 平台调用返回明确的未支持错误。
 - **外部 API 差异**：DeepL、OpenAI 及 DeepSeek 需在设置中配置有效 API Key（安全托管于系统凭据管理器中，绝不上传第三方服务器）。
 
 ## 维护者

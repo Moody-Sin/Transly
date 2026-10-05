@@ -211,8 +211,9 @@ export default function App() {
         // debounceMs: 0 立即投递统一任务状态机，秒级出译文
         runner.run(text, { source: 'clipboard', debounceMs: 0 })
       } else {
-        const errMap = (t as unknown as { ocrError?: Record<string, string> }).ocrError || {}
-        setOcrError(errMap[res.error.kind] || res.error.message)
+        const errKind = res.error.kind as keyof typeof t.ocrError
+        const errMap = t.ocrError
+        setOcrError(errMap[errKind] || res.error.message)
       }
     } catch (e) {
       setOcrError(String(e))

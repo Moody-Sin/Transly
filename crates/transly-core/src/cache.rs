@@ -174,30 +174,19 @@ impl TranslationCache {
             .lock()
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
-        // 先定位第 max_items 条记录的 rowid / created_at 偏移阈值
-        let mut stmt = conn.prepare_cached(
-            "SELECT rowid FROM translation_cache ORDER BY created_at DESC, rowid DESC LIMIT 1 OFFSET ?1",
+        let deleted = conn.execute(
+            r#"
+            DELETE FROM translation_cache 
+            WHERE rowid IN (
+                SELECT rowid FROM translation_cache 
+                ORDER BY created_at DESC, rowid DESC 
+                LIMIT -1 OFFSET ?1
+            )
+            "#,
+            params![max_items as i64],
         )?;
-        let mut rows = stmt.query(params![max_items as i64])?;
 
-        if let Some(row) = rows.next()? {
-            let threshold_rowid: i64 = row.get(0)?;
-            let deleted = conn.execute(
-                r#"
-                DELETE FROM translation_cache 
-                WHERE rowid IN (
-                    SELECT rowid FROM translation_cache 
-                    ORDER BY created_at DESC, rowid DESC 
-                    LIMIT -1 OFFSET ?1
-                )
-                "#,
-                params![max_items as i64],
-            )?;
-            let _ = threshold_rowid;
-            Ok(deleted)
-        } else {
-            Ok(0)
-        }
+        Ok(deleted)
     }
 
     /// 读取持久化保存的所有术语库规则

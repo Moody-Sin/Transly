@@ -358,9 +358,13 @@ async function retryFailedTranslations() {
   const entries = Array.from(failedItemsMap.values()).map(({ node, text, id }) => ({ node, text, id }))
   if (entries.length === 0) return
 
+  stopDynamicObserver()
   currentGeneration += 1
   const retryGeneration = currentGeneration
   await translateEntries(entries, currentTargetLang, currentEngine, 30, retryGeneration)
+  if (retryGeneration === currentGeneration) {
+    startDynamicObserver(currentTargetLang, currentEngine, retryGeneration)
+  }
 }
 
 function cancelTranslation() {

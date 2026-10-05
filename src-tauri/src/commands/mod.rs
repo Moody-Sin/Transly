@@ -86,14 +86,32 @@ pub async fn translate(
     // 检查缓存状态快照与 generation 版本号
     let (cache_enabled, start_gen) = cache_controller.snapshot();
 
-    // 1. 若开启缓存，优先查缓存
+    // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中 fallback 历史缓存）
     if cache_enabled {
-        if let Ok(Some(cached_text)) = cache.get(&text, &sl, &target_lang, engine_id) {
+        let cached_opt = match cache.get(&text, &sl, &target_lang, engine_id) {
+            Ok(Some(cached_text)) => Some((cached_text, engine_id.to_string())),
+            _ => {
+                // 如果当前引擎降级后写回的是实际引擎（如 "google_web"），且不同于 engine_id，尝试命中降级缓存
+                let fallback_id = "google_web";
+                if engine_id != fallback_id {
+                    match cache.get(&text, &sl, &target_lang, fallback_id) {
+                        Ok(Some(cached_text)) => {
+                            Some((cached_text, format!("{fallback_id}(fallback)")))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some((cached_text, used_engine)) = cached_opt {
             let g = glossary.read().await;
             let applied = g.apply(&cached_text);
             return Ok(TranslateOutcomeDto {
                 text: applied,
-                engine: engine_id.to_string(),
+                engine: used_engine,
                 cached: true,
                 detected_source_lang: None,
             });

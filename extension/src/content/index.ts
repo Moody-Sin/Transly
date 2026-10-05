@@ -117,10 +117,17 @@ let currentObserver: MutationObserver | null = null
 let currentTargetLang = 'zh-CN'
 let currentEngine = 'google'
 
+// 任务版本号协调机制：杜绝请求跨越“还原原文”或“重新翻译”边界时写回污染
+let currentGeneration = 0
+
 /**
  * 启动动态增量监听（针对 SPA 单页或瀑布流懒加载内容，监听 childList 与 characterData）
  */
-export function startDynamicObserver(targetLang: string = 'zh-CN', engine: string = 'google') {
+export function startDynamicObserver(
+  targetLang: string = 'zh-CN',
+  engine: string = 'google',
+  generation: number = currentGeneration,
+) {
   currentTargetLang = targetLang
   currentEngine = engine
 
@@ -128,37 +135,45 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
   if (isObserving && currentObserver) return
   isObserving = true
 
-  let pendingNodes: Node[] = []
+  const pendingNodes = new Set<Node>()
   let debounceTimer: number | null = null
 
   currentObserver = new MutationObserver((mutations) => {
+    // 若当前任务版本已失效，停止收集
+    if (generation !== currentGeneration) return
+
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
         mutation.addedNodes.forEach((node) => {
           if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-            pendingNodes.push(node)
+            pendingNodes.add(node)
           }
         })
       } else if (mutation.type === 'characterData') {
         if (mutation.target.nodeType === Node.TEXT_NODE) {
           const textNode = mutation.target as Text
           if (!translatedTextSet.has(textNode)) {
-            pendingNodes.push(textNode)
+            pendingNodes.add(textNode)
           }
         }
       }
     }
 
-    if (pendingNodes.length > 0) {
+    if (pendingNodes.size > 0) {
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = window.setTimeout(async () => {
-        const nodesToProcess = [...pendingNodes]
-        pendingNodes = []
+        if (generation !== currentGeneration) {
+          pendingNodes.clear()
+          return
+        }
+        const nodesToProcess = Array.from(pendingNodes)
+        pendingNodes.clear()
         for (const root of nodesToProcess) {
+          if (generation !== currentGeneration) break
           if (document.body.contains(root)) {
             const entries = collectTextNodes(root)
             if (entries.length > 0) {
-              await translateEntries(entries, currentTargetLang, currentEngine)
+              await translateEntries(entries, currentTargetLang, currentEngine, 30, generation)
             }
           }
         }
@@ -186,8 +201,15 @@ async function translateEntries(
   targetLang: string,
   engine: string = 'google',
   batchSize: number = 30,
+  expectedGen: number = currentGeneration,
 ) {
   for (let i = 0; i < entries.length; i += batchSize) {
+    // 发送前检查：如果用户已经点击“还原原文”或发起了新任务，直接阻断
+    if (expectedGen !== currentGeneration) {
+      console.log(`[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`)
+      return
+    }
+
     const batch = entries.slice(i, i + batchSize)
     const texts = batch.map((item) => item.text)
 
@@ -207,15 +229,21 @@ async function translateEntries(
         },
       )
 
+      // 响应后强校验：如果请求在途期间用户触发了还原或新任务，彻底丢弃响应，严禁写入 DOM
+      if (expectedGen !== currentGeneration) {
+        console.log(`[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`)
+        return
+      }
+
       if (response && response.ok && response.data?.translations) {
         response.data.translations.forEach((translated, idx) => {
-          if (translated && batch[idx]) {
+          if (translated && batch[idx] && expectedGen === currentGeneration) {
             replaceTextNode(batch[idx].node, translated)
           }
         })
       }
     } catch (err) {
-      console.warn('[Transly] 动态增量翻译出错:', err)
+      console.warn('[Transly] 批量翻译出错:', err)
     }
   }
 }
@@ -228,17 +256,28 @@ export async function translateFullPage(
   engine: string = 'google',
   batchSize: number = 30,
 ) {
+  // 递增任务代际版本号，立即使所有历史在途请求与先前任务失效
+  currentGeneration += 1
+  const taskGeneration = currentGeneration
+
+  // 若存在先前动态监听器，先停止
+  stopDynamicObserver()
+
   const entries = collectTextNodes(document.body)
   if (entries.length === 0) {
     console.log('[Transly] 未检测到可翻译的文本节点')
-    startDynamicObserver(targetLang, engine)
+    startDynamicObserver(targetLang, engine, taskGeneration)
     return
   }
 
-  console.log(`[Transly] 收集到 ${entries.length} 个文本节点，开始批量翻译...`)
-  await translateEntries(entries, targetLang, engine, batchSize)
-  console.log('[Transly] 首屏整页翻译完成，已开启动态增量监听')
-  startDynamicObserver(targetLang, engine)
+  console.log(`[Transly] 收集到 ${entries.length} 个文本节点，任务版本=${taskGeneration}，开始批量翻译...`)
+  await translateEntries(entries, targetLang, engine, batchSize, taskGeneration)
+
+  // 翻译结束时再次校验代际版本，避免中途已被还原后误开启动态监听
+  if (taskGeneration === currentGeneration) {
+    console.log('[Transly] 首屏整页翻译完成，已开启动态增量监听')
+    startDynamicObserver(targetLang, engine, taskGeneration)
+  }
 }
 
 // 监听来自扩展 Popup 或快捷指令的消息
@@ -251,6 +290,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'RESTORE_PAGE_TRANSLATION') {
+    // 递增任务版本号，彻底废弃所有在途异步批次响应写回
+    currentGeneration += 1
     stopDynamicObserver()
     restoreOriginalText()
     sendResponse({ ok: true })

@@ -40,13 +40,11 @@ pub struct TaskError {
 ///
 /// 判定原则：只有“重试可能得到不同结果”的瞬时故障才可重试。
 /// Input（文本非法）、Auth（缺密钥）重试必然同样失败。
-/// Config 归为可重试：参数类非法输入在宿主层已显式映射为 Input，
-/// 此处的 Config 只承载运行时/代理类瞬时故障。
 pub fn classify_error(err: &Error) -> TaskError {
     let kind = err.kind();
     let retryable = matches!(
         kind,
-        ErrorKind::Network | ErrorKind::Timeout | ErrorKind::Engine | ErrorKind::Config
+        ErrorKind::Network | ErrorKind::Timeout | ErrorKind::Engine
     );
     TaskError {
         kind,
@@ -73,16 +71,15 @@ mod tests {
     #[test]
     fn test_classify_error_retryable_matrix() {
         // 可重试：瞬时故障
-        let cfg = classify_error(&Error::Config("proxy unreachable".into()));
         let eng = classify_error(&Error::Engine {
             engine: "deepl".into(),
             message: "rate limit".into(),
         });
         let timeout = classify_error(&Error::Timeout("request timed out".into()));
-        assert!(cfg.retryable, "Config 属瞬时运行时配置故障应可重试");
         assert!(eng.retryable, "Engine 限流应可重试");
         assert!(timeout.retryable, "Timeout 应可重试");
-        assert_eq!(cfg.kind, ErrorKind::Config);
+        assert_eq!(eng.kind, ErrorKind::Engine);
+        assert_eq!(timeout.kind, ErrorKind::Timeout);
 
         // 不可重试：重试同样结果
         let input = classify_error(&Error::Input("翻译文本过长".into()));

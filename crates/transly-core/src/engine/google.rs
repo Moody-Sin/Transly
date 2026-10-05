@@ -117,10 +117,27 @@ impl TranslateEngine for GoogleWebEngine {
                     continue;
                 }
 
-                // 若单段仍超出 800 字符，按句/固定窗口切块
-                let chars: Vec<char> = paragraph.chars().collect();
-                for chunk in chars.chunks(800) {
-                    let chunk_str: String = chunk.iter().collect();
+                // 若单段仍超出 800 字符，按单词/空格边界切块（避免切断西文单词）
+                let mut chunks: Vec<String> = Vec::new();
+                let mut current_chunk = String::new();
+
+                for word in paragraph.split_whitespace() {
+                    if current_chunk.chars().count() + word.chars().count() + 1 > 800
+                        && !current_chunk.is_empty()
+                    {
+                        chunks.push(current_chunk.trim().to_string());
+                        current_chunk = String::new();
+                    }
+                    if !current_chunk.is_empty() {
+                        current_chunk.push(' ');
+                    }
+                    current_chunk.push_str(word);
+                }
+                if !current_chunk.trim().is_empty() {
+                    chunks.push(current_chunk.trim().to_string());
+                }
+
+                for chunk_str in chunks {
                     let res = self
                         .translate_single_chunk(&chunk_str, &req.source_lang, &req.target_lang)
                         .await?;

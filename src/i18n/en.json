@@ -40,7 +40,6 @@
   },
   "error": {
     "input": "Invalid input; check the text and language selection",
-    "config": "Configuration problem; check network or engine settings",
     "auth": "API key not configured; add it in Settings",
     "network": "Network failed; check your connection and retry",
     "engine": "Engine error; retry or switch engines",

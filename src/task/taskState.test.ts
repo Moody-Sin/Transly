@@ -38,7 +38,7 @@ test('仅可重试错误才显示重试入口', () => {
 
 test('重试执行闸门：无历史请求、非失败态、不可重试错误一律拦截', () => {
   const retryable: TaskError = { kind: 'network', message: 'x', retryable: true }
-  const notRetryable: TaskError = { kind: 'config', message: 'x', retryable: false }
+  const notRetryable: TaskError = { kind: 'auth', message: 'x', retryable: false }
 
   assert.equal(canRetryExecution('failed', retryable, true), true, '失败且可重试时放行')
   assert.equal(canRetryExecution('failed', retryable, false), false, '从未发起过请求时不得重跑')

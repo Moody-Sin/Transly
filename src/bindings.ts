@@ -42,7 +42,7 @@ export type EngineCapabilitiesDto = {
 	requires_api_key: boolean,
 };
 
-export type ErrorKind = "input" | "config" | "auth" | "network" | "engine" | "timeout" | "internal";
+export type ErrorKind = "input" | "auth" | "network" | "engine" | "timeout" | "internal";
 
 export type OcrErrorDto = {
 	kind: OcrErrorKind,

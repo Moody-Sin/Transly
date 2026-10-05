@@ -7,7 +7,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     Input,
-    Config,
     Auth,
     Network,
     Engine,
@@ -19,9 +18,6 @@ pub enum ErrorKind {
 pub enum Error {
     #[error("输入错误: {0}")]
     Input(String),
-
-    #[error("配置错误: {0}")]
-    Config(String),
 
     #[error("网络请求错误: {0}")]
     Network(#[from] reqwest::Error),
@@ -52,7 +48,6 @@ impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Error::Input(_) | Error::UnsupportedLanguage(_) => ErrorKind::Input,
-            Error::Config(_) => ErrorKind::Config,
             Error::MissingCredentials(_) => ErrorKind::Auth,
             Error::Network(_) => ErrorKind::Network,
             Error::Engine { .. } => ErrorKind::Engine,

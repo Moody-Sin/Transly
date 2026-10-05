@@ -139,8 +139,7 @@ fn main() {
                             let handle = app_handle.clone();
                             tauri::async_runtime::spawn(async move {
                                 // 0. 备份旧剪贴板内容
-                                let old_clipboard =
-                                    handle.clipboard().read_text().unwrap_or_default();
+                                let old_clipboard = handle.clipboard().read_text().ok();
 
                                 // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
                                 if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
@@ -168,7 +167,7 @@ fn main() {
                                 }
 
                                 // 4. 恢复原剪贴板内容，避免污染用户复制历史
-                                if !old_clipboard.is_empty() {
+                                if let Some(old_clipboard) = old_clipboard {
                                     let _ = handle.clipboard().write_text(old_clipboard);
                                 }
                             });

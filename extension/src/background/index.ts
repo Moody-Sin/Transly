@@ -12,10 +12,11 @@ chrome.runtime.onInstalled.addListener(() => {
 
 interface TaskProgressState {
   generation: number
-  status: 'idle' | 'translating' | 'finished' | 'restored' | 'failed'
+  status: 'idle' | 'translating' | 'finished' | 'partially_failed' | 'cancelled' | 'restored' | 'failed'
   completed: number
   total: number
   failedBatches: number
+  failedCount?: number
 }
 
 // 每个 Tab 独立维护翻译进度快照
@@ -54,22 +55,36 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         failedBatches: message.failedBatches,
       })
     }
-  } else if (message.type === 'TRANSLATION_FINISHED') {
-    chrome.action.setBadgeText({ text: message.failedBatches > 0 ? 'WARN' : 'DONE' })
-    chrome.action.setBadgeBackgroundColor({ color: message.failedBatches > 0 ? '#f59e0b' : '#10b981' })
+  } else if (message.type === 'TRANSLATION_FINISHED' || message.type === 'TRANSLATION_PARTIAL_FAILED') {
+    const partial = message.type === 'TRANSLATION_PARTIAL_FAILED'
+    chrome.action.setBadgeText({ text: partial ? 'WARN' : 'DONE' })
+    chrome.action.setBadgeBackgroundColor({ color: partial ? '#f59e0b' : '#10b981' })
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
-        status: 'finished',
+        status: partial ? 'partially_failed' : 'finished',
         completed: message.completed,
         total: message.total,
         failedBatches: message.failedBatches,
+        failedCount: message.failedCount || 0,
       })
     }
     setTimeout(() => {
       chrome.action.setBadgeText({ text: '' })
     }, 3000)
-  } else if (message.type === 'TRANSLATION_CANCELLED' || message.type === 'TRANSLATION_RESTORED') {
+  } else if (message.type === 'TRANSLATION_CANCELLED') {
+    chrome.action.setBadgeText({ text: '' })
+    if (tabId) {
+      tabProgressMap.set(tabId, {
+        generation: message.generation,
+        status: 'cancelled',
+        completed: message.completed || 0,
+        total: message.total || 0,
+        failedBatches: message.failedBatches || 0,
+        failedCount: message.failedCount || 0,
+      })
+    }
+  } else if (message.type === 'TRANSLATION_RESTORED') {
     chrome.action.setBadgeText({ text: '' })
     if (tabId) {
       tabProgressMap.set(tabId, {
@@ -78,6 +93,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         completed: 0,
         total: 0,
         failedBatches: 0,
+        failedCount: 0,
       })
     }
   } else if (message.type === 'TRANSLATION_FAILED') {

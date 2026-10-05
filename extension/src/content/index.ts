@@ -350,6 +350,25 @@ async function translateEntries(
 }
 
 
+async function retryFailedTranslations() {
+  const entries = Array.from(failedItemsMap.values()).map(({ node, text, id }) => ({ node, text, id }))
+  if (entries.length === 0) return
+
+  currentGeneration += 1
+  const retryGeneration = currentGeneration
+  await translateEntries(entries, currentTargetLang, currentEngine, 30, retryGeneration)
+}
+
+function cancelTranslation() {
+  currentGeneration += 1
+  stopDynamicObserver()
+  chrome.runtime.sendMessage({
+    type: 'TRANSLATION_CANCELLED',
+    generation: currentGeneration,
+    failedCount: failedItemsMap.size,
+  }).catch(() => {})
+}
+
 /**
  * 执行整页沉浸式翻译（分批次打包请求，原地替换）
  */
@@ -358,9 +377,10 @@ export async function translateFullPage(
   engine: string = 'google',
   batchSize: number = 30,
 ) {
-  // 递增任务代际版本号，立即使所有历史在途请求与先前任务失效
+  // 递增任务代际版本号，立即使所有历史在途异步批次响应失效
   currentGeneration += 1
   const taskGeneration = currentGeneration
+  failedItemsMap.clear()
 
   // 若存在先前动态监听器，先停止
   stopDynamicObserver()
@@ -404,9 +424,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 
+  if (message.type === 'CANCEL_PAGE_TRANSLATION') {
+    cancelTranslation()
+    sendResponse({ ok: true })
+    return true
+  }
+
+  if (message.type === 'RETRY_FAILED_TRANSLATION') {
+    retryFailedTranslations()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }))
+    return true
+  }
+
   if (message.type === 'RESTORE_PAGE_TRANSLATION') {
     // 递增任务版本号，彻底废弃所有在途异步批次响应写回
     currentGeneration += 1
+    failedItemsMap.clear()
     stopDynamicObserver()
     restoreOriginalText()
     chrome.runtime.sendMessage({

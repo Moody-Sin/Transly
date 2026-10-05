@@ -1,7 +1,5 @@
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use transly_core::{
-    build_candidate_languages, clamp_dimensions, rgba_to_bgra, OcrErrorDto, OcrErrorKind,
-};
+use transly_core::{build_candidate_languages, clamp_dimensions, rgba_to_bgra, OcrErrorDto};
 
 #[cfg(not(target_os = "windows"))]
 pub async fn recognize_clipboard_image(
@@ -62,9 +60,8 @@ pub async fn recognize_clipboard_image(
         // 1. 在后台线程读取剪贴板图片（避免平台死锁）
         let img = match app_handle.clipboard().read_image() {
             Ok(im) => im,
-            Err(e) => {
-                let msg = e.to_string();
-                return Err(OcrErrorDto::new(OcrErrorKind::NoImage, msg));
+            Err(_) => {
+                return Err(OcrErrorDto::no_image());
             }
         };
 

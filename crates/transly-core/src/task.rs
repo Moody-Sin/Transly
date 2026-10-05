@@ -7,10 +7,8 @@ use crate::error::{Error, ErrorKind};
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
     Idle,
-    Queued,
     Running,
     Succeeded,
-    PartiallyFailed,
     Failed,
     Cancelled,
 }
@@ -20,16 +18,13 @@ impl TaskState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            TaskState::Succeeded
-                | TaskState::PartiallyFailed
-                | TaskState::Failed
-                | TaskState::Cancelled
+            TaskState::Succeeded | TaskState::Failed | TaskState::Cancelled
         )
     }
 
     /// 活动状态：存在在途请求
     pub fn is_active(self) -> bool {
-        matches!(self, TaskState::Queued | TaskState::Running)
+        matches!(self, TaskState::Running)
     }
 }
 
@@ -39,15 +34,6 @@ pub struct TaskError {
     pub kind: ErrorKind,
     pub message: String,
     pub retryable: bool,
-}
-
-/// 任务终态快照
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskOutcome {
-    pub state: TaskState,
-    pub text: Option<String>,
-    pub engine: Option<String>,
-    pub error: Option<TaskError>,
 }
 
 /// 错误类别 → 可重试判定的唯一来源。
@@ -77,10 +63,6 @@ mod tests {
     #[test]
     fn test_task_state_serde() {
         assert_eq!(
-            serde_json::to_string(&TaskState::PartiallyFailed).unwrap(),
-            "\"partially_failed\""
-        );
-        assert_eq!(
             serde_json::to_string(&TaskState::Cancelled).unwrap(),
             "\"cancelled\""
         );
@@ -105,13 +87,10 @@ mod tests {
         // 不可重试：重试同样结果
         let input = classify_error(&Error::Input("翻译文本过长".into()));
         let auth = classify_error(&Error::MissingCredentials("api_key".into()));
-        let cancelled = classify_error(&Error::Cancelled("user cancelled".into()));
         assert!(!input.retryable, "Input 错误重试必然同样失败");
         assert!(!auth.retryable, "Auth 错误须先配置密钥，重试无意义");
-        assert!(!cancelled.retryable, "Cancelled 不应提供重试");
         assert_eq!(input.kind, ErrorKind::Input);
         assert_eq!(auth.kind, ErrorKind::Auth);
-        assert_eq!(cancelled.kind, ErrorKind::Cancelled);
     }
 
     #[test]
@@ -119,10 +98,8 @@ mod tests {
         assert!(TaskState::Succeeded.is_terminal());
         assert!(TaskState::Failed.is_terminal());
         assert!(TaskState::Cancelled.is_terminal());
-        assert!(TaskState::PartiallyFailed.is_terminal());
         assert!(!TaskState::Running.is_terminal());
         assert!(TaskState::Running.is_active());
-        assert!(TaskState::Queued.is_active());
         assert!(!TaskState::Idle.is_active());
     }
 }

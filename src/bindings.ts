@@ -16,7 +16,6 @@ export const commands = {
 	 *  用扁平字段而非 `Option<FloatRequest>`：specta 不支持嵌套 Option 作为 IPC 返回类型。
 	 */
 	takePendingFloatRequest: () => typedError<PendingFloatResponse, string>(__TAURI_INVOKE("take_pending_float_request")),
-	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
 	rotateServerToken: () => typedError<string, string>(__TAURI_INVOKE("rotate_server_token")),
 	saveApiKey: (engine: string, key: string) => typedError<null, string>(__TAURI_INVOKE("save_api_key", { engine, key })),

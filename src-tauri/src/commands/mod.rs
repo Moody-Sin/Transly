@@ -2,9 +2,7 @@ use crate::engine_pool::EnginePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::task::classify_error;
-use transly_core::{
-    detect::detect_language, Error, ErrorKind, Glossary, TranslationCache, TranslationRequest,
-};
+use transly_core::{Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
 
 /// 翻译成功结果：携带实际执行引擎与缓存命中标记，供 UI 展示与降级识别
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
@@ -86,14 +84,14 @@ pub async fn translate(
     // 检查缓存状态快照与 generation 版本号
     let (cache_enabled, start_gen) = cache_controller.snapshot();
 
-    // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中 fallback 历史缓存）
+    // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
+        let is_fallback_capable = active_engine.capabilities().name.contains("容灾降级");
         let cached_opt = match cache.get(&text, &sl, &target_lang, engine_id) {
             Ok(Some(cached_text)) => Some((cached_text, engine_id.to_string())),
             _ => {
-                // 如果当前引擎降级后写回的是实际引擎（如 "google_web"），且不同于 engine_id，尝试命中降级缓存
                 let fallback_id = "google_web";
-                if engine_id != fallback_id {
+                if is_fallback_capable && engine_id != fallback_id {
                     match cache.get(&text, &sl, &target_lang, fallback_id) {
                         Ok(Some(cached_text)) => {
                             Some((cached_text, format!("{fallback_id}(fallback)")))
@@ -330,12 +328,6 @@ pub struct PendingFloatResponse {
     pub source: String,
     /// u32 而非 u64：specta 禁止导出 BigInt 类型以避免 JS 精度丢失
     pub request_id: u32,
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn detect_lang(text: String) -> String {
-    detect_language(&text)
 }
 
 #[tauri::command]

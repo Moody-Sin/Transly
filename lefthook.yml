@@ -10,7 +10,7 @@ pre-commit:
     type-check-desktop:
       run: pnpm --filter transly exec tsc --noEmit
     type-check-extension:
-      run: pnpm --filter transly-extension build
+      run: pnpm --filter transly-extension exec tsc --noEmit
     frontend-lint:
       run: pnpm run lint
     frontend-test:

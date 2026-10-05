@@ -14,7 +14,6 @@ use tauri::{
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tauri_specta::{collect_commands, Builder};
 use tokio::sync::RwLock;
 use transly_core::{AppConfig, Glossary, TranslationCache};
 
@@ -48,27 +47,7 @@ fn main() {
         }
     };
 
-    let builder = Builder::<tauri::Wry>::new().commands(collect_commands![
-        commands::translate,
-        commands::get_engine_capabilities,
-        commands::set_float_sticky,
-        commands::take_pending_float_request,
-        commands::detect_lang,
-        commands::get_server_token,
-        commands::rotate_server_token,
-        commands::save_api_key,
-        commands::is_api_key_configured,
-        commands::delete_api_key,
-        commands::add_glossary_term,
-        commands::get_glossary_terms,
-        commands::delete_glossary_term,
-        commands::clear_cache,
-        commands::set_cache_enabled,
-        commands::get_cache_enabled,
-        commands::ocr_clipboard_image,
-        commands::set_clipboard_monitor,
-        commands::get_clipboard_monitor
-    ]);
+    let builder = src_tauri::app_command_builder!();
 
     #[cfg(debug_assertions)]
     builder

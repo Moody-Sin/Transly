@@ -247,12 +247,13 @@ async fn translate_batch_handler(
 
     // 1. 若开启缓存，优先查缓存（先查当前引擎，若当前引擎具备 fallback 且未命中，允许命中降级引擎历史缓存）
     if cache_enabled {
+        let is_fallback_capable = active_engine.capabilities().name.contains("容灾降级");
         for (idx, item) in unified_items.iter().enumerate() {
             let cached_opt = match state.cache.get(&item.text, &source, &target, engine_id) {
                 Ok(Some(cached_text)) => Some((cached_text, engine_id.to_string())),
                 _ => {
                     let fallback_id = "google_web";
-                    if engine_id != fallback_id {
+                    if is_fallback_capable && engine_id != fallback_id {
                         match state.cache.get(&item.text, &source, &target, fallback_id) {
                             Ok(Some(cached_text)) => {
                                 Some((cached_text, format!("{fallback_id}(fallback)")))
@@ -800,6 +801,8 @@ mod tests {
     #[tokio::test]
     async fn test_fallback_cache_hit_on_secondary() {
         let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        // 使用配置了实际密钥的 EnginePool 模拟真实 DeepL 引擎具备容灾降级
+        let _ = crate::secrets::set_secret("deepl", "test-deepl-key");
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
         let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
@@ -829,7 +832,7 @@ mod tests {
             )
             .with_state(state);
 
-        // 使用 deepl 引擎请求，但该 key 曾在 google_web 命中过缓存
+        // 使用 deepl 引擎请求，该引擎具备容灾降级能力，可命中 google_web 降级缓存
         let req = Request::builder()
             .method("POST")
             .uri("/translate")
@@ -851,5 +854,7 @@ mod tests {
         let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(resp.translations, vec!["降级译文"]);
         assert_eq!(resp.items[0].engine(), Some("google_web(fallback)"));
+
+        let _ = crate::secrets::delete_secret("deepl");
     }
 }

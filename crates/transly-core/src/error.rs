@@ -45,9 +45,6 @@ pub enum Error {
     #[error("请求超时: {0}")]
     Timeout(String),
 
-    #[error("操作已取消: {0}")]
-    Cancelled(String),
-
     #[error("内部错误: {0}")]
     Internal(String),
 }
@@ -61,7 +58,6 @@ impl Error {
             Error::Network(_) => ErrorKind::Network,
             Error::Engine { .. } => ErrorKind::Engine,
             Error::Timeout(_) => ErrorKind::Timeout,
-            Error::Cancelled(_) => ErrorKind::Cancelled,
             Error::Database(_) | Error::Serialization(_) | Error::Internal(_) => {
                 ErrorKind::Internal
             }
@@ -89,8 +85,5 @@ mod tests {
 
         let err_timeout = Error::Timeout("request timed out".into());
         assert_eq!(err_timeout.kind(), ErrorKind::Timeout);
-
-        let err_cancelled = Error::Cancelled("user cancelled".into());
-        assert_eq!(err_cancelled.kind(), ErrorKind::Cancelled);
     }
 }

@@ -120,7 +120,7 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     // 递增代际使全部在途响应失效；已应用的译文保持（取消 ≠ 还原）
     genRef.current += 1
     setSnapshot((s) => (
-      s.state === 'running' || s.state === 'queued'
+      s.state === 'running'
         ? { ...s, state: nextState(s.state, 'cancel') }
         : s
     ))
@@ -177,8 +177,7 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
   const isFloatWindow = typeof window !== 'undefined' && window.location.hash === '#float'
   const needsSticky = isFloatWindow && (
-    snapshot.state === 'running' || snapshot.state === 'queued'
-    || snapshot.error !== null
+    snapshot.state === 'running' || snapshot.error !== null
   )
   useEffect(() => {
     if (!isFloatWindow) return

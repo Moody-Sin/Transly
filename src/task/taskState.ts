@@ -4,7 +4,7 @@
 import type { ErrorKind } from '../bindings'
 export type { ErrorKind }
 export type TaskState =
-  | 'idle' | 'queued' | 'running' | 'succeeded' | 'partially_failed' | 'failed' | 'cancelled'
+  | 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export interface TaskError {
   kind: ErrorKind
@@ -13,7 +13,7 @@ export interface TaskError {
 }
 
 const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>([
-  'succeeded', 'partially_failed', 'failed', 'cancelled',
+  'succeeded', 'failed', 'cancelled',
 ])
 
 export function isTerminal(state: TaskState): boolean {
@@ -49,7 +49,7 @@ export function nextState(
     case 'reject':
       return 'failed'
     case 'cancel':
-      return current === 'running' || current === 'queued' || current === 'idle'
+      return current === 'running' || current === 'idle'
         ? 'cancelled'
         : current
     case 'reset':

@@ -40,7 +40,7 @@ export default function App() {
   // 四类入口（输入框 / 划词 / 剪贴板 / 浮窗）共用同一任务状态机
   const runner = useTaskRunner(engine, targetLang)
   const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
-  const isTranslating = state === 'running' || state === 'queued'
+  const isTranslating = state === 'running'
 
   const loadGlossaryList = () => {
     commands.getGlossaryTerms().then((res) => {
@@ -211,9 +211,8 @@ export default function App() {
         // debounceMs: 0 立即投递统一任务状态机，秒级出译文
         runner.run(text, { source: 'clipboard', debounceMs: 0 })
       } else {
-        const errKind = res.error.kind as keyof typeof t.ocrError
         const errMap = t.ocrError
-        setOcrError(errMap[errKind] || res.error.message)
+        setOcrError(errMap[res.error.kind] || res.error.message)
       }
     } catch (e) {
       setOcrError(String(e))

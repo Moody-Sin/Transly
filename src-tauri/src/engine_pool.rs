@@ -58,18 +58,28 @@ impl EnginePool {
 
         tokio::task::spawn_blocking(move || match id.as_str() {
             "deepl" => {
-                let key = crate::secrets::get_secret("deepl").unwrap_or_default();
-                let deepl = Arc::new(DeepLEngine::new(key));
-                Arc::new(FallbackEngine::new(deepl, fallback)) as Arc<dyn TranslateEngine>
+                if let Ok(key) = crate::secrets::get_secret("deepl") {
+                    if !key.trim().is_empty() {
+                        let deepl = Arc::new(DeepLEngine::new(key));
+                        return Arc::new(FallbackEngine::new(deepl, fallback))
+                            as Arc<dyn TranslateEngine>;
+                    }
+                }
+                fallback
             }
             "openai" | "deepseek" => {
-                let key = crate::secrets::get_secret(&id).unwrap_or_default();
-                let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
-                    Arc::new(OpenAIEngine::deepseek(key))
-                } else {
-                    Arc::new(OpenAIEngine::new(key, None, None))
-                };
-                Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
+                if let Ok(key) = crate::secrets::get_secret(&id) {
+                    if !key.trim().is_empty() {
+                        let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
+                            Arc::new(OpenAIEngine::deepseek(key))
+                        } else {
+                            Arc::new(OpenAIEngine::new(key, None, None))
+                        };
+                        return Arc::new(FallbackEngine::new(llm, fallback))
+                            as Arc<dyn TranslateEngine>;
+                    }
+                }
+                fallback
             }
             _ => fallback,
         })

@@ -42,10 +42,6 @@ impl Glossary {
         );
     }
 
-    pub fn get(&self, source: &str) -> Option<&String> {
-        self.terms.get(source).map(|entry| &entry.target)
-    }
-
     pub fn apply(&self, text: &str) -> String {
         let mut result = text.to_string();
 
@@ -68,10 +64,6 @@ impl Glossary {
 
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.terms.len()
     }
 }
 

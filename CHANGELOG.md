@@ -5,21 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.2.0] - 2026-10-06
 
 ### 新增
 - **剪贴板图片 OCR 与即时翻译闭环 (阶段四)**：主输入框底栏集成「识别剪贴板图片」入口；Windows 平台基于系统 `Windows.Media.Ocr` 原生轻量驱动，支持先验定向与多语言去重轮询，识别文本自动注入输入框并以 `debounceMs: 0` 立即触发翻译；全流程内存零落盘阅后即焚，识别错误与翻译错误严格分层。
-- **桌面四类入口统一任务工作流**：主窗口输入框、划词、剪贴板监听与浮窗共用同一任务状态机（Idle/Queued/Running/Succeeded/PartiallyFailed/Failed/Cancelled），共享代际隔离的取消语义、结构化错误分类与可重试判定、同一缓存门禁策略。
+- **桌面四类入口统一任务工作流**：主窗口输入框、划词、剪贴板监听与浮窗共用统一任务状态机（Idle/Running/Succeeded/Failed/Cancelled），共享代际隔离的取消语义、结构化错误分类与可重试判定、同一缓存门禁策略。
+- **浏览器扩展多语言选择与原地 DOM 增强**：扩展 Popup 增加目标语言选择下拉（中文、英语、日语、韩语、法语、德语），自动持久化用户选择；原地 DOM 替换深度过滤 `contenteditable` 与 Monaco/CodeMirror 编辑器容器，保障页面编辑安全。
 - **划词与剪贴板来源区分**：浮窗事件携带来源标识与请求 ID，修复模拟复制导致的重复翻译与重复弹窗；相同剪贴板内容不再重复触发。
 - **输入框即时翻译**：主窗口输入框接入 500ms 防抖自动翻译，新输入立即作废上一代在途结果。
 
 ### 修复
-- **解决 Fallback 降级缓存永久 Miss (P1)**：在查询缓存时联动检测降级引擎缓存（当用户请求 `deepl` 但先前已降级至 `google_web` 并落盘时，二次查询自动命中降级缓存，并在结果中标注 `google_web(fallback)`）。
+- **解决 Fallback 降级缓存永久 Miss (P1)**：在核心库提供统一的 `lookup_cache_with_fallback`，支持在主引擎具备容灾降级时自动命中备用引擎历史缓存。
 - **GoogleWebEngine 批量翻译并发加速 (P1)**：覆盖 `GoogleWebEngine::translate_batch` 实现分批并发（并发度 4），彻底消除单条 10s 串行等待延时。
+- **落实各引擎批量分片与服务端防线 (P2)**：`DeepLEngine::translate_batch` 引入 50 项分片机制，本地 HTTP 服务上限收敛至 50 项，与所有引擎契约完全对齐。
 - **浮窗取消态解除粘滞 (P1)**：从 `needsSticky` 判定中移除 `cancelled` 状态，用户主动取消后浮窗失焦可正常智能隐藏，避免永久钉屏。
 - **消除引擎连接池持锁阻塞 I/O (P1)**：重构 `EnginePool::get_engine`，使用 `spawn_blocking` 在读写锁外读取系统凭据管理器 `secrets::get_secret`，消除对 Tokio 异步运行时的阻塞与并发假死隐患。
-- **未配置密钥时 FallbackEngine 明确报错**：`DeepLEngine` 与 `OpenAIEngine` 在密钥为空时直接触发 `MissingCredentials`，由 Fallback 机制安全接管或向上抛出结构化鉴权错误，并在 UI 暴露真实执行引擎。
-- **清理死结构与无用依赖 (P2)**：移除 `detect.rs` 冗余 break、`cache.rs` trim_to_max_items 死逻辑、`ocr.rs` 冗余错误分支匹配、`google.rs` 英文切块边界粘连；清理 `Cargo.toml` 中未使用的 `tempfile` 与 `base64` 依赖；优化 `lefthook.yml` 为快速 `tsc --noEmit`。
+- **未配置密钥时 FallbackEngine 明确报错**：`DeepLEngine` 与 `OpenAIEngine` 在密钥为空时直接触发 `MissingCredentials`，禁止 Fallback 静默由 Google 接管，真实向上暴露结构化 Auth 错误并触发 UI 配置提示。
+- **清理死结构与无用依赖 (P2)**：移除零使用的 `detect.rs` 语言检测模块、`cache.rs` trim_to_max_items 死逻辑、`ocr.rs` 冗余错误分支匹配；清理 `Cargo.toml` 中未使用的 `tempfile` 与 `base64` 依赖；优化 `lefthook.yml` 为快速 `tsc --noEmit`。
 - **无副作用的扩展连接探测 (P2)**：在本地 HTTP 服务新增 `/verify_token` 轻量 GET 接口，扩展后台探测不再发送带副作用的伪造翻译请求并污染本地缓存。
 - **消除划词/剪贴板 400ms 固定无用等待 (P2)**：利用已有 `PendingFloatRequest` 兜底暂存机制直接广播事件，删除 `sleep(400ms)`，划词取词响应提速 400ms。
 - **补全 Chrome 商店发布所需隐私政策**：根目录新增标准 `PRIVACY_POLICY.md`，明确阐述零数据收集与本地优先安全承诺。

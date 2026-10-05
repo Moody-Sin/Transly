@@ -11,10 +11,10 @@ pub use cache::TranslationCache;
 pub use config::AppConfig;
 pub use detect::detect_language;
 pub use engine::{
-    DeepLEngine, FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine,
-    TranslationRequest, TranslationResponse,
+    BatchItemRequest, BatchItemResult, DeepLEngine, EngineCapabilities, FallbackEngine,
+    GoogleWebEngine, OpenAIEngine, TranslateEngine, TranslationRequest, TranslationResponse,
 };
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;
 pub use ocr::{OcrEngine, OcrRequest, OcrResponse, SystemOcrEngine};
 pub use validation::{validate_engine_id, validate_language_code, validate_translation_input};

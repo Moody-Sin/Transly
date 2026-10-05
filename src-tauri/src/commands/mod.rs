@@ -57,15 +57,15 @@ pub async fn translate(
 
     match active_engine.translate(&req).await {
         Ok(res) => {
-            // 3. 异步写入缓存（校验 generation 协调版本，杜绝“请求开始后关闭缓存”的竞争窗口）
-            if cache_controller.is_valid_to_write(start_gen) {
-                let cache_target_engine = if res.engine.ends_with("(fallback)") {
-                    "google_web"
-                } else {
-                    engine_id
-                };
-                let _ = cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine);
-            }
+            // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
+            let cache_target_engine = if res.engine.ends_with("(fallback)") {
+                "google_web"
+            } else {
+                engine_id
+            };
+            let _ = cache_controller.set_if_current(start_gen, || {
+                cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
+            });
             let g = glossary.read().await;
             Ok(g.apply(&res.text))
         }
@@ -135,15 +135,17 @@ pub fn set_cache_enabled(
 ) -> Result<(), String> {
     crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
         .map_err(|e| format!("写入系统配置失败: {e}"))?;
-    // 递增 generation 版本号并更新内存开关
-    controller.set_enabled(enabled);
-    // 当用户选择关闭持久化翻译缓存时，彻底清除旧磁盘缓存，若清空失败则准确报告错误
-    if !enabled {
-        cache
-            .clear_all_cache()
-            .map_err(|e| format!("已禁用缓存，但清空历史缓存记录失败: {e}"))?;
+
+    if enabled {
+        controller.enable();
+        Ok(())
+    } else {
+        // 在同一门禁锁内递增 generation 并清空旧磁盘缓存，彻底原子闭环
+        match controller.disable_and_clear(cache.inner()) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("已禁用缓存，但清空历史缓存记录失败: {e}")),
+        }
     }
-    Ok(())
 }
 
 #[tauri::command]

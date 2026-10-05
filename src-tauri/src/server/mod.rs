@@ -247,21 +247,17 @@ async fn translate_batch_handler(
                 for (req_idx, res) in results.into_iter().enumerate() {
                     let original_idx = missing_indices[req_idx];
                     let original_text = &payload.texts[original_idx];
-                    // 写回前通过 generation 版本号与当前开关做原子协调，彻底关闭任何竞态窗口
-                    if state.cache_controller.is_valid_to_write(start_generation) {
-                        let actual_engine = if res.engine.ends_with("(fallback)") {
-                            "google_web"
-                        } else {
-                            engine_id
-                        };
-                        let _ = state.cache.set(
-                            original_text,
-                            &res.text,
-                            &source,
-                            &target,
-                            actual_engine,
-                        );
-                    }
+                    // 写回时通过同一同步门禁 set_if_current 校验版本并执行写入，彻底排除检查与写入之间的竞态
+                    let actual_engine = if res.engine.ends_with("(fallback)") {
+                        "google_web"
+                    } else {
+                        engine_id
+                    };
+                    let _ = state.cache_controller.set_if_current(start_generation, || {
+                        state
+                            .cache
+                            .set(original_text, &res.text, &source, &target, actual_engine)
+                    });
                     translations[original_idx] = res.text;
                 }
             }
@@ -613,6 +609,39 @@ mod tests {
             res_new.status(),
             StatusCode::OK,
             "新 Token 必须正常鉴权通过"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cache_disable_and_clear_synchronization_boundary() {
+        let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let controller = Arc::new(crate::cache_controller::CacheController::new(true));
+
+        // 1. 模拟请求 1 开始时获取快照
+        let (enabled, start_gen) = controller.snapshot();
+        assert!(enabled);
+
+        // 2. 模拟用户在请求 1 进行中关闭缓存并清空
+        let clear_res = controller.disable_and_clear(cache.as_ref());
+        assert!(clear_res.is_ok());
+        assert!(!controller.is_enabled());
+
+        // 3. 模拟请求 1 试图写入缓存 -> 必须被安全阻断拒绝
+        let written = controller.set_if_current(start_gen, || {
+            cache.set("concurrent_text", "译文", "en", "zh-CN", "google_web")
+        });
+        assert!(
+            !written,
+            "请求跨越关闭清空边界时，set_if_current 必须返回 false 拒绝写入"
+        );
+
+        // 4. 强断言数据库依然保持完全为空
+        let read_back = cache
+            .get("concurrent_text", "en", "zh-CN", "google_web")
+            .unwrap();
+        assert_eq!(
+            read_back, None,
+            "数据库中绝对不得残留关闭前发起的在途请求译文"
         );
     }
 }

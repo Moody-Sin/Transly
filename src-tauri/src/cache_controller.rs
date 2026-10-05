@@ -1,11 +1,13 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use transly_core::{Result, TranslationCache};
 
-/// 缓存状态协调器：采用 generation 版本号机制，彻底杜绝“翻译中关闭缓存导致清空后被重新写回”的竞态漏洞
+/// 缓存状态协调器：采用 generation 版本号 + 同步门禁锁，彻底杜绝“检查有效与写入之间插入关闭清空”的竞态漏洞
 #[derive(Clone)]
 pub struct CacheController {
     enabled: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
+    sync_gate: Arc<Mutex<()>>,
 }
 
 impl CacheController {
@@ -13,6 +15,7 @@ impl CacheController {
         Self {
             enabled: Arc::new(AtomicBool::new(initial_enabled)),
             generation: Arc::new(AtomicU64::new(1)),
+            sync_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -28,14 +31,34 @@ impl CacheController {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    /// 校验请求开始时记录的 generation 是否仍然有效且缓存保持开启
-    pub fn is_valid_to_write(&self, start_gen: u64) -> bool {
-        self.enabled.load(Ordering::Relaxed) && self.generation.load(Ordering::Relaxed) == start_gen
+    /// 原子条件写入：在门禁锁内同时验证 generation 版本与开启状态并执行写入，杜绝任何检查与写入间的竞态窗口
+    pub fn set_if_current<F>(&self, start_gen: u64, write_fn: F) -> bool
+    where
+        F: FnOnce() -> Result<()>,
+    {
+        let _guard = self.sync_gate.lock().unwrap();
+        if self.enabled.load(Ordering::Relaxed)
+            && self.generation.load(Ordering::Relaxed) == start_gen
+        {
+            let _ = write_fn();
+            true
+        } else {
+            false
+        }
     }
 
-    /// 切换缓存开关：若为关闭操作，原子递增 generation 宣告此前所有进行中的请求写入失效
-    pub fn set_enabled(&self, enabled: bool) -> u64 {
-        self.enabled.store(enabled, Ordering::Relaxed);
-        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    /// 原子关闭缓存并执行清空操作：在同一同步门禁内递增 generation、切换状态并清空磁盘缓存
+    pub fn disable_and_clear(&self, cache: &TranslationCache) -> Result<usize> {
+        let _guard = self.sync_gate.lock().unwrap();
+        self.enabled.store(false, Ordering::Relaxed);
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        cache.clear_all_cache()
+    }
+
+    /// 启用缓存并原子递增 generation
+    pub fn enable(&self) {
+        let _guard = self.sync_gate.lock().unwrap();
+        self.enabled.store(true, Ordering::Relaxed);
+        self.generation.fetch_add(1, Ordering::SeqCst);
     }
 }

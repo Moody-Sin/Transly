@@ -101,7 +101,7 @@ pnpm tauri dev
 
 ## 维护者
 
-[@transly](https://github.com/transly)
+[@Moody-Sin](https://github.com/Moody-Sin)
 
 ## 贡献
 

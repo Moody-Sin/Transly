@@ -17,6 +17,6 @@ pub use engine::{
 };
 pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;
-pub use ocr::{OcrEngine, OcrRequest, OcrResponse, SystemOcrEngine};
+pub use ocr::{OcrEngine, OcrErrorDto, OcrErrorKind, OcrRequest, OcrResponse, SystemOcrEngine};
 pub use task::{classify_error, TaskError, TaskOutcome, TaskState};
 pub use validation::{validate_engine_id, validate_language_code, validate_translation_input};

@@ -1,6 +1,5 @@
 pub mod cache;
 pub mod config;
-pub mod detect;
 pub mod engine;
 pub mod error;
 pub mod glossary;
@@ -10,7 +9,6 @@ pub mod validation;
 
 pub use cache::TranslationCache;
 pub use config::AppConfig;
-pub use detect::detect_language;
 pub use engine::{
     BatchItemRequest, BatchItemResult, DeepLEngine, EngineCapabilities, FallbackEngine,
     GoogleWebEngine, OpenAIEngine, TranslateEngine, TranslationRequest, TranslationResponse,

@@ -46,7 +46,6 @@
     "network": "网络连接失败，请检查网络后重试",
     "engine": "翻译引擎出错，可重试或切换引擎",
     "timeout": "请求超时，可重试",
-    "cancelled": "操作已取消",
     "internal": "内部错误，请重试"
   },
   "languages": {

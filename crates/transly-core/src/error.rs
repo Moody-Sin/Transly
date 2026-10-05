@@ -12,7 +12,6 @@ pub enum ErrorKind {
     Network,
     Engine,
     Timeout,
-    Cancelled,
     Internal,
 }
 

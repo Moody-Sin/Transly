@@ -17,7 +17,6 @@
 
 - **engine**: 定义了可扩展的 `TranslateEngine` trait 与多引擎适配（`GoogleWebEngine`、`DeepLEngine`、`OpenAIEngine` 及 `FallbackEngine` 主备容灾降级）。
 - **cache**: SQLite (WAL 模式) 持久化缓存，以 SHA-256 为哈希主键，内置自动衰减与最大容量限制，降低外部请求与网络开销。
-- **detect**: 轻量语言识别能力。
 - **glossary**: 专有名词与自定义术语库匹配机制。
 - **config**: 全局配置模型定义。
 

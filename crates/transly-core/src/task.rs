@@ -39,7 +39,7 @@ pub struct TaskError {
 /// 错误类别 → 可重试判定的唯一来源。
 ///
 /// 判定原则：只有“重试可能得到不同结果”的瞬时故障才可重试。
-/// Input（文本非法）、Auth（缺密钥）、Cancelled（用户主动）重试必然同样失败。
+/// Input（文本非法）、Auth（缺密钥）重试必然同样失败。
 /// Config 归为可重试：参数类非法输入在宿主层已显式映射为 Input，
 /// 此处的 Config 只承载运行时/代理类瞬时故障。
 pub fn classify_error(err: &Error) -> TaskError {

@@ -46,7 +46,6 @@
     "network": "Network failed; check your connection and retry",
     "engine": "Engine error; retry or switch engines",
     "timeout": "Request timed out; you can retry",
-    "cancelled": "Operation cancelled",
     "internal": "Internal error; please retry"
   },
   "languages": {

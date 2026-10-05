@@ -83,12 +83,19 @@ fn main() {
 
     let monitor_flag = clipboard_monitor_enabled.clone();
 
+    // 缓存内存状态（从系统凭据读取一次并在内存维护）
+    let initial_cache_enabled = secrets::get_secret("cache_enabled")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    let cache_enabled_flag = Arc::new(AtomicBool::new(initial_cache_enabled));
+
     // 克隆传递给 setup 内部异步启动
     let server_token = token;
     let server_cache = cache.clone();
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
     let server_port = config.local_server_port;
+    let server_cache_flag = cache_enabled_flag.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -98,6 +105,7 @@ fn main() {
         .manage(glossary)
         .manage(ocr_engine)
         .manage(clipboard_monitor_enabled)
+        .manage(cache_enabled_flag)
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
@@ -109,6 +117,7 @@ fn main() {
                         server_cache,
                         server_pool,
                         server_glossary,
+                        server_cache_flag,
                     )
                     .await
                     {

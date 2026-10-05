@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::{detect::detect_language, Glossary, TranslationCache, TranslationRequest};
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
 pub async fn translate(
@@ -13,6 +14,7 @@ pub async fn translate(
     cache: tauri::State<'_, Arc<TranslationCache>>,
     pool: tauri::State<'_, Arc<EnginePool>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+    cache_enabled_flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<String, String> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
@@ -35,10 +37,8 @@ pub async fn translate(
 
     let engine_id = active_engine.id();
 
-    // 检查缓存是否启用 (用户可通过配置禁用缓存)
-    let cache_enabled = crate::secrets::get_secret("cache_enabled")
-        .map(|v| v != "false")
-        .unwrap_or(true);
+    // 检查内存中高效共享的缓存开关，完全消除每次查询系统凭据的同步IO与并发竞争
+    let cache_enabled = cache_enabled_flag.load(std::sync::atomic::Ordering::Relaxed);
 
     // 1. 若开启缓存，优先查缓存
     if cache_enabled {
@@ -128,17 +128,25 @@ pub fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_cache_enabled(enabled: bool) -> Result<(), String> {
+pub fn set_cache_enabled(
+    enabled: bool,
+    flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
     crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
-        .map_err(|e| format!("写入系统配置失败: {e}"))
+        .map_err(|e| format!("写入系统配置失败: {e}"))?;
+    flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    // 当用户选择关闭持久化翻译缓存时，彻底清除旧磁盘缓存，践行隐私不留存语义
+    if !enabled {
+        let _ = cache.clear_all_cache();
+    }
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_cache_enabled() -> bool {
-    crate::secrets::get_secret("cache_enabled")
-        .map(|v| v != "false")
-        .unwrap_or(true)
+pub fn get_cache_enabled(flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>) -> bool {
+    flag.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};

@@ -92,6 +92,21 @@ export default function App() {
     }
   }
 
+  const handleRotateToken = async () => {
+    try {
+      const res = await commands.rotateServerToken()
+      if (res.status === 'ok') {
+        setServerToken(res.data)
+        setSaveStatus('Token 已重新生成，旧插件配对已自动失效！')
+        setTimeout(() => setSaveStatus(null), 2500)
+      } else {
+        setSaveStatus(res.error)
+      }
+    } catch {
+      setSaveStatus('重新生成 Token 失败')
+    }
+  }
+
   const handleCopyToken = () => {
     if (!serverToken) return
     navigator.clipboard.writeText(serverToken)
@@ -485,6 +500,20 @@ export default function App() {
                   onChange={handleToggleClipboardMonitor}
                   className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
+              </div>
+
+              {/* 插件通信 Token 轮换管理 */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div>
+                  <div className="font-medium text-slate-700">浏览器插件配对 Token 轮换</div>
+                  <div className="text-[11px] text-slate-400">重新生成并强制让旧插件配对失效，保障本地接口安全</div>
+                </div>
+                <button
+                  onClick={handleRotateToken}
+                  className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+                >
+                  重新生成 Token
+                </button>
               </div>
 
               {/* 缓存数据管理 */}

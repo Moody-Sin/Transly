@@ -221,6 +221,17 @@ pub fn get_server_token() -> Result<String, String> {
     crate::secrets::get_or_create_server_token().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn rotate_server_token(
+    current_token: tauri::State<'_, Arc<RwLock<String>>>,
+) -> Result<String, String> {
+    let new_token = crate::secrets::rotate_server_token().map_err(|e| e.to_string())?;
+    let mut lock = current_token.write().await;
+    *lock = new_token.clone();
+    Ok(new_token)
+}
+
 fn validate_engine_name(engine: &str) -> Result<(), String> {
     match engine.to_lowercase().as_str() {
         "deepl" | "openai" | "deepseek" => Ok(()),

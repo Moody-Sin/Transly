@@ -42,7 +42,7 @@ fn main() {
 
     // 获取或生成用于本地扩展通信的 Bearer Token（失败则不启动服务，杜绝固定 Token 降级）
     let token = match secrets::get_or_create_server_token() {
-        Ok(t) => Some(t),
+        Ok(t) => Some(Arc::new(RwLock::new(t))),
         Err(e) => {
             eprintln!("系统安全凭据管理器不可用，已禁用本地扩展服务: {e}");
             None
@@ -53,6 +53,7 @@ fn main() {
         commands::translate,
         commands::detect_lang,
         commands::get_server_token,
+        commands::rotate_server_token,
         commands::save_api_key,
         commands::is_api_key_configured,
         commands::delete_api_key,
@@ -90,7 +91,7 @@ fn main() {
     let cache_enabled_flag = Arc::new(AtomicBool::new(initial_cache_enabled));
 
     // 克隆传递给 setup 内部异步启动
-    let server_token = token;
+    let server_token = token.clone();
     let server_cache = cache.clone();
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
@@ -106,6 +107,7 @@ fn main() {
         .manage(ocr_engine)
         .manage(clipboard_monitor_enabled)
         .manage(cache_enabled_flag)
+        .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）

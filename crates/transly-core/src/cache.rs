@@ -322,4 +322,28 @@ mod tests {
         let expired = cache.cleanup_older_than_days(1).unwrap();
         assert_eq!(expired, 0);
     }
+
+    #[test]
+    fn test_clear_all_cache_retains_glossary() {
+        let cache = TranslationCache::in_memory().unwrap();
+        // 1. 插入翻译缓存与术语库
+        cache.set("apple", "苹果", "en", "zh-CN", "m").unwrap();
+        cache.set_glossary_term("LLM", "大模型").unwrap();
+
+        assert_eq!(
+            cache.get("apple", "en", "zh-CN", "m").unwrap(),
+            Some("苹果".to_string())
+        );
+        assert_eq!(cache.get_all_glossary_terms().unwrap().len(), 1);
+
+        // 2. 清空翻译缓存
+        let cleared = cache.clear_all_cache().unwrap();
+        assert_eq!(cleared, 1);
+
+        // 3. 验证翻译缓存已空，但术语库依然完整保留
+        assert_eq!(cache.get("apple", "en", "zh-CN", "m").unwrap(), None);
+        let glossary_terms = cache.get_all_glossary_terms().unwrap();
+        assert_eq!(glossary_terms.len(), 1);
+        assert_eq!(glossary_terms[0], ("LLM".to_string(), "大模型".to_string()));
+    }
 }

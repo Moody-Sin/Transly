@@ -7,6 +7,7 @@ export const commands = {
 	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<string, string>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
 	detectLang: (text: string) => __TAURI_INVOKE<string>("detect_lang", { text }),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
+	rotateServerToken: () => typedError<string, string>(__TAURI_INVOKE("rotate_server_token")),
 	saveApiKey: (engine: string, key: string) => typedError<null, string>(__TAURI_INVOKE("save_api_key", { engine, key })),
 	isApiKeyConfigured: (engine: string) => __TAURI_INVOKE<boolean>("is_api_key_configured", { engine }),
 	deleteApiKey: (engine: string) => typedError<null, string>(__TAURI_INVOKE("delete_api_key", { engine })),

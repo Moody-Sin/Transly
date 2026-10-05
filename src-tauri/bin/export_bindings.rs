@@ -7,6 +7,7 @@ fn main() {
         commands::translate,
         commands::detect_lang,
         commands::get_server_token,
+        commands::rotate_server_token,
         commands::save_api_key,
         commands::is_api_key_configured,
         commands::delete_api_key,

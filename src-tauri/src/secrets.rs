@@ -42,6 +42,18 @@ pub fn get_or_create_server_token() -> anyhow::Result<String> {
     Ok(token)
 }
 
+pub fn rotate_server_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let mut token = String::with_capacity(64);
+    for b in bytes {
+        token.push_str(&format!("{:02x}", b));
+    }
+
+    set_secret(SERVER_TOKEN_KEY, &token)?;
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

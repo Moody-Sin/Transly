@@ -35,7 +35,7 @@ pub struct TranslateBatchResponse {
 
 #[derive(Clone)]
 pub struct ServerState {
-    pub token: Arc<String>,
+    pub token: Arc<RwLock<String>>,
     pub pool: Arc<crate::engine_pool::EnginePool>,
     pub cache: Arc<TranslationCache>,
     pub glossary: Arc<RwLock<Glossary>>,
@@ -79,14 +79,14 @@ fn is_allowed_origin(origin_str: &str) -> bool {
 }
 
 pub fn create_router(
-    token: String,
+    token: Arc<RwLock<String>>,
     cache: Arc<TranslationCache>,
     pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
     cache_enabled_flag: Arc<AtomicBool>,
 ) -> Router {
     let state = ServerState {
-        token: Arc::new(token),
+        token,
         pool,
         cache,
         glossary,
@@ -136,8 +136,10 @@ async fn auth_middleware(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
+    let current_token = state.token.read().await;
     match auth_header {
-        Some(val) if val == format!("Bearer {}", state.token.as_str()) => {
+        Some(val) if val == format!("Bearer {}", current_token.as_str()) => {
+            drop(current_token);
             Ok(next.run(request).await)
         }
         _ => Err(StatusCode::UNAUTHORIZED),
@@ -280,7 +282,7 @@ async fn translate_batch_handler(
 
 pub async fn start_server(
     port: u16,
-    token: String,
+    token: Arc<RwLock<String>>,
     cache: Arc<TranslationCache>,
     pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
@@ -332,13 +334,8 @@ mod tests {
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
         let cache_enabled_flag = Arc::new(AtomicBool::new(true));
-        let app = create_router(
-            "test-token".to_string(),
-            Arc::new(cache),
-            pool,
-            glossary,
-            cache_enabled_flag,
-        );
+        let token = Arc::new(RwLock::new("test-token".to_string()));
+        let app = create_router(token, Arc::new(cache), pool, glossary, cache_enabled_flag);
         let req = Request::builder()
             .uri("/health")
             .body(Body::empty())
@@ -354,13 +351,8 @@ mod tests {
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
         let cache_enabled_flag = Arc::new(AtomicBool::new(true));
-        let app = create_router(
-            "test-token".to_string(),
-            Arc::new(cache),
-            pool,
-            glossary,
-            cache_enabled_flag,
-        );
+        let token = Arc::new(RwLock::new("test-token".to_string()));
+        let app = create_router(token, Arc::new(cache), pool, glossary, cache_enabled_flag);
 
         // 1. 允许扩展协议与本地开发
         let allowed_req = Request::builder()
@@ -403,13 +395,8 @@ mod tests {
         let pool = Arc::new(crate::engine_pool::EnginePool::new());
         let glossary = Arc::new(RwLock::new(Glossary::new()));
         let cache_enabled_flag = Arc::new(AtomicBool::new(true));
-        let app = create_router(
-            "valid-token".to_string(),
-            Arc::new(cache),
-            pool,
-            glossary,
-            cache_enabled_flag,
-        );
+        let token = Arc::new(RwLock::new("valid-token".to_string()));
+        let app = create_router(token, Arc::new(cache), pool, glossary, cache_enabled_flag);
         let req = Request::builder()
             .method("POST")
             .uri("/translate")
@@ -433,8 +420,9 @@ mod tests {
         glossary_instance.insert("你好", "世界你好");
         let glossary = Arc::new(RwLock::new(glossary_instance));
         let cache_enabled_flag = Arc::new(AtomicBool::new(true));
+        let token = Arc::new(RwLock::new("valid-token".to_string()));
         let state = ServerState {
-            token: Arc::new("valid-token".to_string()),
+            token,
             pool,
             cache: cache.clone(),
             glossary,
@@ -482,8 +470,9 @@ mod tests {
         // 直接注入内存级关闭状态，完全隔离全局系统 keyring，彻底消除测试并行竞争
         let cache_enabled_flag = Arc::new(AtomicBool::new(false));
 
+        let token = Arc::new(RwLock::new("valid-token".to_string()));
         let state = ServerState {
-            token: Arc::new("valid-token".to_string()),
+            token,
             pool,
             cache: cache.clone(),
             glossary,
@@ -531,8 +520,9 @@ mod tests {
         let glossary = Arc::new(RwLock::new(Glossary::new()));
         let cache_enabled_flag = Arc::new(AtomicBool::new(true));
 
+        let token = Arc::new(RwLock::new("valid-token".to_string()));
         let state = ServerState {
-            token: Arc::new("valid-token".to_string()),
+            token: token.clone(),
             pool,
             cache,
             glossary,
@@ -587,7 +577,43 @@ mod tests {
                 r#"{"texts":["hello"],"target_lang":"zh-CN","engine":"unknown_provider"}"#,
             ))
             .unwrap();
-        let res3 = app.oneshot(invalid_engine_req).await.unwrap();
+        let res3 = app.clone().oneshot(invalid_engine_req).await.unwrap();
         assert_eq!(res3.status(), StatusCode::BAD_REQUEST);
+
+        // 4. 测试 Token 轮换：旧 Token 立即返回 401，新 Token 正常访问
+        {
+            let mut w = token.write().await;
+            *w = "rotated-token-123456".to_string();
+        }
+
+        // 使用旧 Token 请求 -> 必须 401
+        let old_token_req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"texts":["hello"],"target_lang":"zh-CN"}"#))
+            .unwrap();
+        let res_old = app.clone().oneshot(old_token_req).await.unwrap();
+        assert_eq!(
+            res_old.status(),
+            StatusCode::UNAUTHORIZED,
+            "Token 轮换后旧 Token 必须被立即拒绝"
+        );
+
+        // 使用新 Token 请求 -> 必须 200
+        let new_token_req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer rotated-token-123456")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"texts":["hello"],"target_lang":"zh-CN"}"#))
+            .unwrap();
+        let res_new = app.oneshot(new_token_req).await.unwrap();
+        assert_eq!(
+            res_new.status(),
+            StatusCode::OK,
+            "新 Token 必须正常鉴权通过"
+        );
     }
 }

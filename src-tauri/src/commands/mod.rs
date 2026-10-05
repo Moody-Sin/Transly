@@ -16,10 +16,9 @@ pub async fn translate(
 ) -> Result<String, String> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
-    // 限制单次输入文本最大长度为 10,000 字符，与 HTTP 批量服务统一防线
-    if text.chars().count() > 10_000 {
-        return Err("输入文本过长 (单次最大限制 10,000 字符)".to_string());
-    }
+    // 统一输入参数防线校验
+    transly_core::validate_translation_input(&text, &sl, &target_lang)
+        .map_err(|e| e.to_string())?;
 
     // 从全局引擎池中快速复用长连接实例
     let active_engine = if let Some(ref name) = engine_name {
@@ -208,6 +207,13 @@ pub fn get_server_token() -> Result<String, String> {
     crate::secrets::get_or_create_server_token().map_err(|e| e.to_string())
 }
 
+fn validate_engine_name(engine: &str) -> Result<(), String> {
+    match engine.to_lowercase().as_str() {
+        "deepl" | "openai" | "deepseek" => Ok(()),
+        other => Err(format!("不支持或未知的引擎凭据配置: {other}")),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn save_api_key(
@@ -215,7 +221,14 @@ pub async fn save_api_key(
     key: String,
     pool: tauri::State<'_, Arc<EnginePool>>,
 ) -> Result<(), String> {
-    crate::secrets::set_secret(&engine, &key).map_err(|e| e.to_string())?;
+    validate_engine_name(&engine)?;
+    if key.trim().is_empty() {
+        return Err("API 密钥不能为空".to_string());
+    }
+    if key.len() > 512 {
+        return Err("API 密钥长度超出限制".to_string());
+    }
+    crate::secrets::set_secret(&engine, key.trim()).map_err(|e| e.to_string())?;
     pool.invalidate(&engine).await;
     Ok(())
 }
@@ -223,6 +236,9 @@ pub async fn save_api_key(
 #[tauri::command]
 #[specta::specta]
 pub fn is_api_key_configured(engine: String) -> bool {
+    if validate_engine_name(&engine).is_err() {
+        return false;
+    }
     crate::secrets::get_secret(&engine)
         .map(|k| !k.trim().is_empty())
         .unwrap_or(false)
@@ -234,6 +250,7 @@ pub async fn delete_api_key(
     engine: String,
     pool: tauri::State<'_, Arc<EnginePool>>,
 ) -> Result<(), String> {
+    validate_engine_name(&engine)?;
     crate::secrets::delete_secret(&engine).map_err(|e| e.to_string())?;
     pool.invalidate(&engine).await;
     Ok(())

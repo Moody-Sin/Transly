@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::Response,
@@ -116,6 +116,7 @@ pub fn create_router(
         .route("/health", get(health_handler))
         .merge(protected)
         .layer(cors)
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 限制单次 HTTP 请求体最大 2MB
         .with_state(state)
 }
 
@@ -148,9 +149,13 @@ async fn translate_batch_handler(
     State(state): State<ServerState>,
     Json(payload): Json<TranslateBatchRequest>,
 ) -> Result<Json<TranslateBatchResponse>, StatusCode> {
-    // 限制单次批量文本数量与长度，防御过载攻击
-    if payload.texts.len() > 100 {
+    // 限制单次批量文本数量与总字符数，防御 DoS 与过载攻击
+    if payload.texts.is_empty() || payload.texts.len() > 100 {
         return Err(StatusCode::BAD_REQUEST);
+    }
+    let total_chars: usize = payload.texts.iter().map(|t| t.chars().count()).sum();
+    if total_chars > 50_000 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     for t in &payload.texts {
         if t.chars().count() > 10_000 {
@@ -160,6 +165,14 @@ async fn translate_batch_handler(
 
     let target = payload.target_lang;
     let source = payload.source_lang.unwrap_or_else(|| "auto".to_string());
+
+    // 强校验语言参数代码，拒绝异常或恶意超长代码
+    if !transly_core::validate_language_code(&target)
+        || target.eq_ignore_ascii_case("auto")
+        || (!source.is_empty() && !transly_core::validate_language_code(&source))
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     // 支持按请求参数动态选择引擎，未指定则使用默认引擎
     let active_engine = if let Some(ref eng) = payload.engine {
@@ -464,5 +477,56 @@ mod tests {
 
         // 恢复默认设置
         let _ = crate::secrets::set_secret("cache_enabled", "true");
+    }
+
+    #[tokio::test]
+    async fn test_translate_language_and_length_validation() {
+        let cache = Arc::new(TranslationCache::in_memory().unwrap());
+        let pool = Arc::new(crate::engine_pool::EnginePool::new());
+        let glossary = Arc::new(RwLock::new(Glossary::new()));
+
+        let state = ServerState {
+            token: Arc::new("valid-token".to_string()),
+            pool,
+            cache,
+            glossary,
+        };
+
+        let app = Router::new()
+            .route(
+                "/translate",
+                post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth_middleware,
+                )),
+            )
+            .with_state(state);
+
+        // 1. 测试非法语言参数拒绝 (target_lang 为 auto 或 包含非法字符)
+        let invalid_lang_req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"texts":["hello"],"target_lang":"auto"}"#))
+            .unwrap();
+        let res = app.clone().oneshot(invalid_lang_req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // 2. 测试总字符数超限拒绝 (超过 50,000 字符)
+        let huge_text = "a".repeat(50_001);
+        let payload = serde_json::json!({
+            "texts": [huge_text],
+            "target_lang": "zh-CN"
+        });
+        let huge_req = Request::builder()
+            .method("POST")
+            .uri("/translate")
+            .header(header::AUTHORIZATION, "Bearer valid-token")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let res2 = app.oneshot(huge_req).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

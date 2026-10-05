@@ -8,6 +8,8 @@
 ## [Unreleased]
 
 ### 修复
+- **强化语言参数白名单与批量请求防线 (P1)**：在 `transly-core` 建立 `validation` 模块统一语言代码（BCP-47 规范）与字符合法性校验；本地 HTTP 服务增加 2MB 请求体上限、单次批量 50,000 总字符防线，全面拦截长语言代码注入与 DoS。
+- **限制 API Key 凭据存储目标引擎枚举 (P2)**：在 `save_api_key` 与 `delete_api_key` 中严格限制目标仅允许受支持的 `deepl`、`openai`、`deepseek`，杜绝写入任意键名。
 - **代码格式化与缓存关闭路径自动化测试补齐**：执行 `cargo fmt --all` 消除格式漂移；为本地 HTTP 批量服务补充 `test_translate_cache_disabled_path` 测试，强断言在 `cache_enabled == false` 下绝对不向本地 SQLite 写入新条目。
 - **扩展批量翻译严格遵循缓存隐私开关 (P1)**：在本地 HTTP 服务的 `translate_batch_handler` 中集成 `cache_enabled` 共享判定，关闭持久化翻译缓存后彻底停止查询与写入 SQLite 磁盘库，确保桌面端与浏览器扩展两路隐私策略完全一致。
 

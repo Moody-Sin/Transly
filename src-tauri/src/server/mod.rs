@@ -169,16 +169,33 @@ async fn translate_batch_handler(
     };
     let engine_id = active_engine.id();
 
+    // 检查全局缓存开关（尊重用户隐私配置，关闭时既不查也不写）
+    let cache_enabled = crate::secrets::get_secret("cache_enabled")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+
     let mut translations = Vec::with_capacity(payload.texts.len());
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
-    // 1. 优先查缓存
-    for (idx, text) in payload.texts.iter().enumerate() {
-        if let Ok(Some(cached_text)) = state.cache.get(text, &source, &target, engine_id) {
-            translations.push(cached_text);
-        } else {
-            translations.push(String::new()); // 占位
+    // 1. 若开启缓存，优先查缓存
+    if cache_enabled {
+        for (idx, text) in payload.texts.iter().enumerate() {
+            if let Ok(Some(cached_text)) = state.cache.get(text, &source, &target, engine_id) {
+                translations.push(cached_text);
+            } else {
+                translations.push(String::new()); // 占位
+                missing_indices.push(idx);
+                missing_requests.push(TranslationRequest {
+                    text: text.clone(),
+                    source_lang: source.clone(),
+                    target_lang: target.clone(),
+                });
+            }
+        }
+    } else {
+        for (idx, text) in payload.texts.iter().enumerate() {
+            translations.push(String::new());
             missing_indices.push(idx);
             missing_requests.push(TranslationRequest {
                 text: text.clone(),
@@ -199,15 +216,17 @@ async fn translate_batch_handler(
                 for (req_idx, res) in results.into_iter().enumerate() {
                     let original_idx = missing_indices[req_idx];
                     let original_text = &payload.texts[original_idx];
-                    let actual_engine = if res.engine.ends_with("(fallback)") {
-                        "google_web"
-                    } else {
-                        engine_id
-                    };
-                    let _ =
-                        state
-                            .cache
-                            .set(original_text, &res.text, &source, &target, actual_engine);
+                    if cache_enabled {
+                        let actual_engine = if res.engine.ends_with("(fallback)") {
+                            "google_web"
+                        } else {
+                            engine_id
+                        };
+                        let _ =
+                            state
+                                .cache
+                                .set(original_text, &res.text, &source, &target, actual_engine);
+                    }
                     translations[original_idx] = res.text;
                 }
             }

@@ -7,6 +7,9 @@
 
 ## [Unreleased]
 
+### 修复
+- **扩展批量翻译严格遵循缓存隐私开关 (P1)**：在本地 HTTP 服务的 `translate_batch_handler` 中集成 `cache_enabled` 共享判定，关闭持久化翻译缓存后彻底停止查询与写入 SQLite 磁盘库，确保桌面端与浏览器扩展两路隐私策略完全一致。
+
 ### 安全
 - **Linux Secret Service 启用加密传输 (P1)**：为 Linux `keyring` 配置 `features = ["sync-secret-service", "crypto-rust"]`，确保 Linux 桌面凭据通信符合安全加密规范。
 - **凭据持久化单测强断言 (P2)**：在 `secrets.rs` 增加强制写入、读取与 Token 连续性双向强断言单测，杜绝异常被静默跳过。

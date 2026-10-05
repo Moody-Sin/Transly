@@ -66,6 +66,7 @@ fn main() {
         commands::set_cache_enabled,
         commands::get_cache_enabled,
         commands::ocr_image,
+        commands::ocr_clipboard_image,
         commands::set_clipboard_monitor,
         commands::get_clipboard_monitor
     ]);

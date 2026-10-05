@@ -238,6 +238,15 @@ pub fn get_clipboard_monitor(_flag: tauri::State<'_, Arc<std::sync::atomic::Atom
 
 #[tauri::command]
 #[specta::specta]
+pub async fn ocr_clipboard_image(
+    target_lang: String,
+    app: tauri::AppHandle,
+) -> Result<String, transly_core::OcrErrorDto> {
+    crate::ocr::recognize_clipboard_image(&app, &target_lang).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn ocr_image(
     image_base64: String,
     ocr: tauri::State<'_, Arc<transly_core::SystemOcrEngine>>,

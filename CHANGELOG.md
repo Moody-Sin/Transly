@@ -8,7 +8,11 @@
 ## [未发布]
 
 ### 新增
+- **扩展网页内划词翻译（右键菜单 + Shadow DOM 气泡）**：在任意网页选中文本后右键选择「Transly 翻译选中文本」，即可在选区旁弹出只读译文气泡，支持一键复制与 `Esc` / 点击外部关闭。气泡渲染在 **封闭式 Shadow DOM**（`mode: 'closed'` + `all: initial` + `adoptedStyleSheets`）中，宿主页面 CSS 无法污染、宿主脚本无法读取；宿主节点带 `data-no-translate` 且挂在 `documentElement` 上（而非 `body`），因此整页翻译的 TreeWalker 从源头就不会把气泡自身文案当作待翻译正文。脚本沿用既有的**主动注入**模式：新增 `contextMenus` 权限，仍不申请 `<all_urls>`、不常驻注入、不监听 `mouseup`，维持 `PRIVACY_POLICY.md` 的隐私承诺。翻译链路 100% 复用现有 `TRANSLATE_BATCH` 与 `/translate`，目标语言与引擎沿用 Popup 中的配置；选区锚点由页面侧读取 `window.getSelection()` 的 Range 矩形获得（右键菜单回调只有文本、没有几何信息），滚动/缩放时按记录时的滚动偏移回推坐标重新定位。
 - **桌面端翻译历史面板**：把一直存在但用户不可见的 `translation_cache` 表变为可视化「最近翻译」。主区新增「翻译 / 历史」顶层 Tab；历史页支持倒序分页浏览（每页 50 条，可加载更多）、单条复制、单条删除与刷新，空态给出「开启持久化缓存后记录会出现在这里」的引导。`transly-core` 新增 `CacheEntry` DTO 与 `list_recent` / `delete_entry`；命令层新增 `get_translation_history` / `delete_history_entry`（均下沉 `spawn_blocking`，SQLite 同步 I/O 不占 async 工作线程）。`created_at` 以 `u32` 纪元秒导出，规避 specta 将 `i64` 映射为 JS `BigInt` 导致的 `JSON.stringify` 崩溃（Lessons Learned 第 1 条）。该表按 `cache_key` 去重，故语义为「近期不重复的翻译记录」，而非逐次操作日志。
+
+### 修复
+- **扩展构建把共享模块拆成独立 chunk，Popup 与划词气泡会静默失效 (P1)**：`extension` 的构建是单次多入口（`rollupOptions.input` 含 4 个入口），`src/i18n` 被多个入口共享后会被 Rollup 提升为独立 chunk，`popup.js` / `selection.js` 于是以 `import { t } from "./assets/index-*.js"` 开头。但 `chrome.scripting.executeScript` 按**经典脚本**注入、`popup.html` 也用经典 `<script src>`，二者都不支持 ESM 导入 —— 扩展能正常加载、控制台无任何报错，但 Popup 与划词气泡全部失效。此前只有 3 个入口且恰好无共享模块，该缺陷一直被掩盖。现改为 `scripts/build.mjs` 逐入口独立构建（每个产物自包含），并在构建后**断言产物不含 ESM 导入、`dist/assets/` 不存在**，让该类回归无法再次静默通过。
 
 ## [0.2.1] - 2026-10-08
 

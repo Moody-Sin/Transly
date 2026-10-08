@@ -226,3 +226,20 @@
 2. **同一函数内多个分支，闸门要么全部覆盖，要么提到函数入口统一判定**。逐分支各写一次必然漏（本次 `items` 漏、`translations` 有）。提到入口是唯一不会漂移的写法。
 3. **副作用不止「写回成功」**：失败集登记（`markBatchFailed` / `rememberFailed`）同样是副作用。还原后登记失败项，会让「重试失败项」按钮凭空出现并指向已还原的节点，因此失败路径也要判代际。
 4. 审查方法：对每个异步写回点问一句「如果这一刻用户点了还原/取消，这段代码还会执行吗？」——若答案是「会」，就是本类缺陷。
+
+---
+
+## 16. 多入口构建的「共享模块」会被拆成 ESM chunk，而扩展注入脚本是经典脚本
+
+### 现象与问题
+- 扩展构建用单次多入口（`rollupOptions.input` 含 `background` / `content` / `popup` / `selection`）。
+- 新增 `selection` 入口后，`src/i18n` 变成**被多个入口共享**的模块，Rollup 随即把它提升为独立 chunk：`popup.js` 与 `selection.js` 的产物**第一行**变成 `import { t } from "./assets/index-*.js"`。
+- 但 `chrome.scripting.executeScript` 是按**经典脚本**注入的，`popup.html` 用的也是经典 `<script src>`——只有 Service Worker 声明了 `"type": "module"`。经典脚本里出现 `import` 直接抛 `SyntaxError`。
+- 危险之处在于**没有任何报错**：扩展照常加载、`chrome://extensions` 无错误、控制台无声，只是 Popup 打开白屏、划词气泡毫无反应。
+- 此前只有 3 个入口且恰好没有跨入口共享模块（`content` 独享切批、`popup` 独享 i18n），所以这个坑一直没被踩到——**新增入口这个动作本身才引爆了它**。
+
+### 经验与规程
+1. **扩展产物必须逐个入口独立构建，保证每个产物自包含**。共享模块一旦被拆成 chunk，受影响的不只是新入口，所有经典脚本上下文一起坏掉。
+2. `output.experimentalMinChunkSize` **解决不了这个问题**：实测它只报告「5 chunks 全部低于阈值」却一个都不合并——Rollup 只在保持入口语义的前提下合并 chunk，跨入口共享模块不受该选项支配。
+3. **给产物加断言，而不是靠人看**：`scripts/build.mjs` 在构建后扫描每个 `.js`，出现 `^\s*(import|export)\s` 即失败，并断言 `dist/assets/` 不存在。这样同类回归不可能再静默通过。
+4. 排查这类问题的快捷方式：`Select-String -Path dist\*.js -Pattern '^\s*import'`——产物首行有 `import` 就是它。

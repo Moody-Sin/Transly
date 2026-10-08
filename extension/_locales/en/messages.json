@@ -88,5 +88,29 @@
   },
   "cannotAccessPage": {
     "message": "Cannot access this page; try a regular web page"
+  },
+  "ctxMenuTranslateSelection": {
+    "message": "Translate selection with Transly"
+  },
+  "bubbleTranslating": {
+    "message": "Translating..."
+  },
+  "bubbleFailed": {
+    "message": "Translation failed; please try again"
+  },
+  "bubbleEmptySelection": {
+    "message": "No text selected"
+  },
+  "bubbleTextTooLong": {
+    "message": "Selected text is too long; shorten the selection and retry"
+  },
+  "bubbleCopy": {
+    "message": "Copy"
+  },
+  "bubbleCopied": {
+    "message": "Copied ✓"
+  },
+  "bubbleClose": {
+    "message": "Close"
   }
 }

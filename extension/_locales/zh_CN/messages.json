@@ -88,5 +88,29 @@
   },
   "cannotAccessPage": {
     "message": "无法访问当前页面，请改用普通网页重试"
+  },
+  "ctxMenuTranslateSelection": {
+    "message": "Transly 翻译选中文本"
+  },
+  "bubbleTranslating": {
+    "message": "翻译中..."
+  },
+  "bubbleFailed": {
+    "message": "翻译失败，请稍后重试"
+  },
+  "bubbleEmptySelection": {
+    "message": "未选中任何文本"
+  },
+  "bubbleTextTooLong": {
+    "message": "选中文本过长，请缩短选区后重试"
+  },
+  "bubbleCopy": {
+    "message": "复制"
+  },
+  "bubbleCopied": {
+    "message": "已复制 ✓"
+  },
+  "bubbleClose": {
+    "message": "关闭"
   }
 }

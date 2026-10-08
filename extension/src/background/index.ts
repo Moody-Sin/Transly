@@ -1,5 +1,7 @@
 const LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
 
+const CONTEXT_MENU_ID_TRANSLATE_SELECTION = 'transly-translate-selection'
+
 /**
  * 服务端批量上限（由 `/health` 公开）。
  *
@@ -66,6 +68,26 @@ async function ensureContentScriptInjected(tabId: number): Promise<void> {
   })
 }
 
+/**
+ * 注入划词翻译气泡脚本。
+ *
+ * 与整页翻译同样采用**主动注入**：仅在用户点击右键菜单时注入，
+ * 不声明 `content_scripts` 常驻，也不监听 `mouseup`，
+ * 维持「仅在主动触发时处理选中文本」的隐私承诺。
+ */
+async function ensureSelectionScriptInjected(tabId: number): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'PING_SELECTION_SCRIPT' })
+    return
+  } catch {
+    // 未就绪，执行注入
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['selection.js'],
+  })
+}
+
 // 获取存储的通信 Token
 async function getServerToken(): Promise<string | null> {
   const result = await chrome.storage.local.get(['transly_server_token'])
@@ -74,6 +96,48 @@ async function getServerToken(): Promise<string | null> {
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Transly Extension] 插件已安装并就绪')
+
+  // 菜单标题走 i18n（Chrome 原生），不硬编码文案。
+  // 仅注册 `selection` 上下文：菜单只在用户选中文本后出现，
+  // 未选中文本时不会出现无效入口。
+  //
+  // 先 removeAll 再 create：菜单跨浏览器会话持久化，扩展更新时
+  // 重复 create 同一 id 会写入 runtime.lastError。
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create(
+      {
+        id: CONTEXT_MENU_ID_TRANSLATE_SELECTION,
+        title: chrome.i18n.getMessage('ctxMenuTranslateSelection'),
+        contexts: ['selection'],
+      },
+      () => void chrome.runtime.lastError,
+    )
+  })
+})
+
+// 右键菜单点击 → 向页面注入气泡脚本并投递待翻译文本。
+// 目标语言与引擎沿用 Popup 中保存的配置，与整页翻译保持同一套偏好。
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== CONTEXT_MENU_ID_TRANSLATE_SELECTION) return
+  const tabId = tab?.id
+  if (typeof tabId !== 'number') return
+
+  void (async () => {
+    try {
+      await ensureSelectionScriptInjected(tabId)
+      const stored = await chrome.storage.local.get(['transly_engine', 'transly_target_lang'])
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'SHOW_SELECTION_TRANSLATION',
+        text: info.selectionText || '',
+        target_lang: stored.transly_target_lang || 'zh-CN',
+        engine: stored.transly_engine || 'google',
+      })
+    } catch (err) {
+      // 受限页面（chrome://、应用商店等）无法注入，属正常路径；
+      // 但不能静默吞掉（Lessons Learned 第 8 条）。
+      console.warn('[Transly Extension] 划词翻译气泡注入失败:', err)
+    }
+  })()
 })
 
 interface TaskProgressState {

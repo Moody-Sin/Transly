@@ -26,6 +26,22 @@
     "engineOpenai": "OpenAI (API key required / auto fallback)",
     "btnClose": "Close"
   },
+  "history": {
+    "tabTranslate": "Translate",
+    "tabHistory": "History",
+    "title": "Translation History",
+    "refresh": "Refresh",
+    "loadMore": "Load more",
+    "loading": "Loading...",
+    "empty": "No translation history yet",
+    "emptyHint": "Enable persistent cache and your translations will appear here",
+    "copy": "Copy",
+    "copied": "Copied",
+    "delete": "Delete",
+    "loadFailed": "Failed to load translation history",
+    "deleteFailed": "Failed to delete",
+    "entryCount": "{n} entries"
+  },
   "ocrError": {
     "no_image": "No image in clipboard. Copy or take a screenshot first.",
     "no_language_pack": "System OCR language pack not installed.",

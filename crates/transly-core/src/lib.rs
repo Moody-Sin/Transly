@@ -7,7 +7,7 @@ pub mod ocr;
 pub mod task;
 pub mod validation;
 
-pub use cache::TranslationCache;
+pub use cache::{CacheEntry, TranslationCache};
 pub use config::AppConfig;
 pub use engine::{
     lookup_cache_with_fallback, plan_batch_ranges, BatchItemRequest, BatchItemResult, DeepLEngine,

@@ -26,6 +26,22 @@
     "engineOpenai": "OpenAI (需API Key / 自动降级)",
     "btnClose": "关闭"
   },
+  "history": {
+    "tabTranslate": "翻译",
+    "tabHistory": "历史",
+    "title": "翻译历史",
+    "refresh": "刷新",
+    "loadMore": "加载更多",
+    "loading": "加载中...",
+    "empty": "暂无翻译历史",
+    "emptyHint": "开启持久化缓存后，翻译记录会显示在这里",
+    "copy": "复制",
+    "copied": "已复制",
+    "delete": "删除",
+    "loadFailed": "读取翻译历史失败",
+    "deleteFailed": "删除失败",
+    "entryCount": "共 {n} 条"
+  },
   "ocrError": {
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",
     "no_language_pack": "系统未安装 OCR 语言包，请在 Windows 设置中安装",

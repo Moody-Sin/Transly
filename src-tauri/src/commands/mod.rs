@@ -2,7 +2,7 @@ use crate::engine_pool::EnginePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::task::classify_error;
-use transly_core::{Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
+use transly_core::{CacheEntry, Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
 
 /// 翻译成功结果：携带实际执行引擎，供 UI 展示与降级识别
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
@@ -204,6 +204,43 @@ pub async fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Resu
     })
     .await
     .unwrap_or_else(|e| Err(format!("缓存清理任务调度异常: {e}")))
+}
+
+/// 分页读取翻译历史（最近优先）。`limit` / `offset` 由前端控制。
+#[tauri::command]
+#[specta::specta]
+pub async fn get_translation_history(
+    limit: u32,
+    offset: u32,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<Vec<CacheEntry>, String> {
+    // SQLite 同步 I/O 禁止占用 async 工作线程
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .list_recent(limit, offset)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("翻译历史读取任务调度异常: {e}")))
+}
+
+/// 按 `cache_key` 删除单条翻译历史。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_history_entry(
+    cache_key: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<bool, String> {
+    // SQLite 同步 I/O 禁止占用 async 工作线程
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .delete_entry(&cache_key)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("翻译历史删除任务调度异常: {e}")))
 }
 
 #[tauri::command]

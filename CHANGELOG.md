@@ -7,6 +7,9 @@
 
 ## [未发布]
 
+### 新增
+- **桌面端翻译历史面板**：把一直存在但用户不可见的 `translation_cache` 表变为可视化「最近翻译」。主区新增「翻译 / 历史」顶层 Tab；历史页支持倒序分页浏览（每页 50 条，可加载更多）、单条复制、单条删除与刷新，空态给出「开启持久化缓存后记录会出现在这里」的引导。`transly-core` 新增 `CacheEntry` DTO 与 `list_recent` / `delete_entry`；命令层新增 `get_translation_history` / `delete_history_entry`（均下沉 `spawn_blocking`，SQLite 同步 I/O 不占 async 工作线程）。`created_at` 以 `u32` 纪元秒导出，规避 specta 将 `i64` 映射为 JS `BigInt` 导致的 `JSON.stringify` 崩溃（Lessons Learned 第 1 条）。该表按 `cache_key` 去重，故语义为「近期不重复的翻译记录」，而非逐次操作日志。
+
 ## [0.2.1] - 2026-10-08
 
 ### 修复

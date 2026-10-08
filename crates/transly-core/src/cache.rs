@@ -2,9 +2,26 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::Result;
+
+/// 翻译历史单条记录（对外暴露给 UI 的只读视图）。
+///
+/// `created_at` 使用 `u32`（纪元秒）而非 `i64`：specta 会把 `i64` 导出为
+/// JS `BigInt`，在 `JSON.stringify` 时直接抛错（见 Lessons Learned 第 1 条）。
+/// `u32` 上限至 2106 年，对「最近翻译」语义绰绰有余。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct CacheEntry {
+    pub cache_key: String,
+    pub source_text: String,
+    pub translated_text: String,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub engine: String,
+    pub created_at: u32,
+}
 
 pub struct TranslationCache {
     conn: Mutex<Connection>,
@@ -260,6 +277,60 @@ impl TranslationCache {
         let deleted = conn.execute("DELETE FROM translation_cache", [])?;
         Ok(deleted)
     }
+
+    /// 按时间倒序分页读取翻译历史（最近优先）。
+    ///
+    /// 该表是去重缓存（`cache_key` 为主键，重复翻译同一文本会刷新 `created_at`），
+    /// 因此结果语义为「近期不重复的翻译记录」，与 UI「最近翻译」的直觉一致。
+    /// 排序附加 `rowid DESC` 作为时间相同时的稳定次序，避免分页出现重复/漏项。
+    pub fn list_recent(&self, limit: u32, offset: u32) -> Result<Vec<CacheEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let mut stmt = conn.prepare_cached(
+            r#"
+            SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
+            FROM translation_cache
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?1 OFFSET ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
+            Ok(CacheEntry {
+                cache_key: row.get(0)?,
+                source_text: row.get(1)?,
+                translated_text: row.get(2)?,
+                source_lang: row.get(3)?,
+                target_lang: row.get(4)?,
+                engine: row.get(5)?,
+                // 库内为 i64 纪元秒，正值恒可回落 u32（2106 年前）
+                created_at: row.get::<_, i64>(6)? as u32,
+            })
+        })?;
+
+        let mut entries = Vec::new();
+        for item in rows {
+            entries.push(item?);
+        }
+        Ok(entries)
+    }
+
+    /// 按 `cache_key` 删除单条翻译历史。返回是否确实删除了记录。
+    pub fn delete_entry(&self, cache_key: &str) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let deleted = conn.execute(
+            "DELETE FROM translation_cache WHERE cache_key = ?1",
+            params![cache_key],
+        )?;
+        Ok(deleted > 0)
+    }
 }
 
 #[cfg(test)]
@@ -324,5 +395,97 @@ mod tests {
         let glossary_terms = cache.get_all_glossary_terms().unwrap();
         assert_eq!(glossary_terms.len(), 1);
         assert_eq!(glossary_terms[0], ("LLM".to_string(), "大模型".to_string()));
+    }
+
+    #[test]
+    fn test_list_recent_orders_newest_first_and_paginates() {
+        let cache = TranslationCache::in_memory().unwrap();
+        cache.set("one", "一", "en", "zh-CN", "m").unwrap();
+        cache.set("two", "二", "en", "zh-CN", "m").unwrap();
+        cache.set("three", "三", "en", "zh-CN", "m").unwrap();
+
+        // 同一秒内写入时 created_at 相同，靠 rowid DESC 保证「后写入的在前」
+        let all = cache.list_recent(50, 0).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].source_text, "three", "最近翻译必须排在首位");
+        assert_eq!(all[2].source_text, "one");
+
+        // 分页：第一页 2 条 + 第二页 1 条，且不重复不遗漏
+        let page1 = cache.list_recent(2, 0).unwrap();
+        let page2 = cache.list_recent(2, 2).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page1[0].source_text, "three");
+        assert_eq!(page1[1].source_text, "two");
+        assert_eq!(page2[0].source_text, "one");
+
+        // 字段映射正确（含 u32 时间戳，不得退化为 i64/BigInt）
+        let entry = &all[0];
+        assert_eq!(entry.translated_text, "三");
+        assert_eq!(entry.source_lang, "en");
+        assert_eq!(entry.target_lang, "zh-CN");
+        assert_eq!(entry.engine, "m");
+        assert!(entry.created_at > 0);
+    }
+
+    #[test]
+    fn test_delete_entry_removes_only_target() {
+        let cache = TranslationCache::in_memory().unwrap();
+        cache.set("keep", "留", "en", "zh-CN", "m").unwrap();
+        cache.set("drop", "删", "en", "zh-CN", "m").unwrap();
+
+        let target_key = cache
+            .list_recent(10, 0)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.source_text == "drop")
+            .expect("待删除条目必须存在")
+            .cache_key;
+
+        assert!(
+            cache.delete_entry(&target_key).unwrap(),
+            "命中删除应返回 true"
+        );
+        assert!(
+            !cache.delete_entry(&target_key).unwrap(),
+            "重复删除应返回 false"
+        );
+
+        let remaining = cache.list_recent(10, 0).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].source_text, "keep");
+    }
+
+    #[test]
+    fn test_history_persists_across_file_reopen() {
+        // 内存路径与文件路径共用同一 SQL 逻辑，但文件路径额外涉及
+        // 建表、WAL 与「重开连接后仍可读」。历史面板在生产走文件路径，
+        // 故此处覆盖内存测试触及不到的重开持久化。
+        let dir = std::env::temp_dir().join(format!(
+            "transly_history_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("cache.db");
+
+        {
+            let cache = TranslationCache::new(&db_path).unwrap();
+            cache.set("persist", "持久", "en", "zh-CN", "m").unwrap();
+        }
+
+        // 重新打开同一文件，历史必须仍在（且字段完整）
+        let reopened = TranslationCache::new(&db_path).unwrap();
+        let entries = reopened.list_recent(10, 0).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_text, "persist");
+        assert_eq!(entries[0].translated_text, "持久");
+        assert!(entries[0].created_at > 0);
+
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

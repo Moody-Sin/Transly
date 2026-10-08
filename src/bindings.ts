@@ -25,6 +25,10 @@ export const commands = {
 	getGlossaryTerms: () => typedError<([string, string])[], string>(__TAURI_INVOKE("get_glossary_terms")),
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
 	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
+	/**  分页读取翻译历史（最近优先）。`limit` / `offset` 由前端控制。 */
+	getTranslationHistory: (limit: number, offset: number) => typedError<CacheEntry[], string>(__TAURI_INVOKE("get_translation_history", { limit, offset })),
+	/**  按 `cache_key` 删除单条翻译历史。 */
+	deleteHistoryEntry: (cacheKey: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_history_entry", { cacheKey })),
 	setCacheEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_cache_enabled", { enabled })),
 	getCacheEnabled: () => __TAURI_INVOKE<boolean>("get_cache_enabled"),
 	ocrClipboardImage: (targetLang: string) => typedError<string, OcrErrorDto>(__TAURI_INVOKE("ocr_clipboard_image", { targetLang })),
@@ -34,6 +38,23 @@ export const commands = {
 };
 
 /* Types */
+/**
+ *  翻译历史单条记录（对外暴露给 UI 的只读视图）。
+ * 
+ *  `created_at` 使用 `u32`（纪元秒）而非 `i64`：specta 会把 `i64` 导出为
+ *  JS `BigInt`，在 `JSON.stringify` 时直接抛错（见 Lessons Learned 第 1 条）。
+ *  `u32` 上限至 2106 年，对「最近翻译」语义绰绰有余。
+ */
+export type CacheEntry = {
+	cache_key: string,
+	source_text: string,
+	translated_text: string,
+	source_lang: string,
+	target_lang: string,
+	engine: string,
+	created_at: number,
+};
+
 export type EngineCapabilitiesDto = {
 	id: string,
 	name: string,

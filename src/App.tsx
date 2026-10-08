@@ -16,6 +16,7 @@ import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
 import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
+import HistoryPanel from './HistoryPanel'
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>('zh-CN')
@@ -30,6 +31,7 @@ export default function App() {
 
   // 设置面板状态
   const [showSettings, setShowSettings] = useState(false)
+  const [activeTab, setActiveTab] = useState<'translate' | 'history'>('translate')
   const [deeplConfigured, setDeeplConfigured] = useState(false)
   const [deepseekConfigured, setDeepseekConfigured] = useState(false)
   const [openaiConfigured, setOpenaiConfigured] = useState(false)
@@ -434,150 +436,182 @@ export default function App() {
 
       {/* 翻译工作区 */}
       <main className="flex flex-1 flex-col p-4 gap-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-medium text-slate-500">{t.translation.autoDetect}</span>
-            <ArrowRight className="h-4 w-4 text-slate-400" />
-            <select
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
-            >
-              <option value="zh-CN">{t.languages['zh-CN']}</option>
-              <option value="en">{t.languages.en}</option>
-              <option value="ja">{t.languages.ja}</option>
-              <option value="ko">{t.languages.ko}</option>
-              <option value="fr">{t.languages.fr}</option>
-              <option value="de">{t.languages.de}</option>
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">{t.translation.engineSelect}:</span>
-            <select
-              value={engine}
-              onChange={(e) => setEngine(e.target.value)}
-              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
-            >
-              <option value="google">{t.translation.engineGoogle}</option>
-              <option value="deepl">{t.translation.engineDeepl}</option>
-              <option value="deepseek">{t.translation.engineDeepseek}</option>
-              <option value="openai">{t.translation.engineOpenai}</option>
-            </select>
-          </div>
-
-          {capabilities && (
-            <div className="text-[10px] text-slate-400">
-              {capabilities.name}
-              {capabilities.supports_batch &&
-                ` · ${t.translation.maxBatch}${capabilities.max_batch_size}`}
-              {capabilities.requires_api_key && ` · ${t.translation.apiKeyRequired}`}
-            </div>
-          )}
+        {/* 顶层 Tab：翻译工作区 / 翻译历史 */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setActiveTab('translate')}
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              activeTab === 'translate'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {t.history.tabTranslate}
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              activeTab === 'history'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {t.history.tabHistory}
+          </button>
         </div>
 
-        <div className="grid flex-1 grid-cols-2 gap-4">
-          <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm focus-within:border-indigo-500">
-            <textarea
-              value={sourceText}
-              onChange={(e) => {
-                const v = e.target.value
-                setSourceText(v)
-                // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
-                runner.run(v, { source: 'input', debounceMs: 500 })
-              }}
-              placeholder={t.translation.inputPlaceholder}
-              className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
-            />
-            {error && (
-              <div className="mt-1 flex flex-col gap-1 text-xs">
-                <div className="flex items-start gap-2">
-                  <span className="text-rose-500">{t.error[error.kind]}</span>
-                  {canRetry(state, error) && (
+        {activeTab === 'translate' && (
+          <>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-medium text-slate-500">
+                  {t.translation.autoDetect}
+                </span>
+                <ArrowRight className="h-4 w-4 text-slate-400" />
+                <select
+                  value={targetLang}
+                  onChange={(e) => setTargetLang(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+                >
+                  <option value="zh-CN">{t.languages['zh-CN']}</option>
+                  <option value="en">{t.languages.en}</option>
+                  <option value="ja">{t.languages.ja}</option>
+                  <option value="ko">{t.languages.ko}</option>
+                  <option value="fr">{t.languages.fr}</option>
+                  <option value="de">{t.languages.de}</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">{t.translation.engineSelect}:</span>
+                <select
+                  value={engine}
+                  onChange={(e) => setEngine(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+                >
+                  <option value="google">{t.translation.engineGoogle}</option>
+                  <option value="deepl">{t.translation.engineDeepl}</option>
+                  <option value="deepseek">{t.translation.engineDeepseek}</option>
+                  <option value="openai">{t.translation.engineOpenai}</option>
+                </select>
+              </div>
+
+              {capabilities && (
+                <div className="text-[10px] text-slate-400">
+                  {capabilities.name}
+                  {capabilities.supports_batch &&
+                    ` · ${t.translation.maxBatch}${capabilities.max_batch_size}`}
+                  {capabilities.requires_api_key && ` · ${t.translation.apiKeyRequired}`}
+                </div>
+              )}
+            </div>
+
+            <div className="grid flex-1 grid-cols-2 gap-4">
+              <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm focus-within:border-indigo-500">
+                <textarea
+                  value={sourceText}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setSourceText(v)
+                    // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
+                    runner.run(v, { source: 'input', debounceMs: 500 })
+                  }}
+                  placeholder={t.translation.inputPlaceholder}
+                  className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
+                />
+                {error && (
+                  <div className="mt-1 flex flex-col gap-1 text-xs">
+                    <div className="flex items-start gap-2">
+                      <span className="text-rose-500">{t.error[error.kind]}</span>
+                      {canRetry(state, error) && (
+                        <button
+                          onClick={runner.retry}
+                          className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 font-medium text-rose-600 hover:bg-rose-100"
+                        >
+                          {t.task.btnRetry}
+                        </button>
+                      )}
+                    </div>
+                    {showNetworkEngineHint && (
+                      <span className="text-amber-600">{t.error.networkHintGoogle}</span>
+                    )}
+                  </div>
+                )}
+                {ocrError && (
+                  <div className="mt-1 flex items-center justify-between rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">
+                    <span>{ocrError}</span>
                     <button
-                      onClick={runner.retry}
-                      className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 font-medium text-rose-600 hover:bg-rose-100"
+                      onClick={() => setOcrError(null)}
+                      className="text-slate-400 hover:text-slate-600 ml-2"
+                      title={t.translation.btnClose}
                     >
-                      {t.task.btnRetry}
+                      ✕
                     </button>
+                  </div>
+                )}
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOcrClipboard}
+                    disabled={ocrLoading || isTranslating}
+                    className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+                    title={t.translation.btnOcrPaste}
+                  >
+                    <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
+                    <span>{ocrLoading ? t.translation.ocrRunning : t.translation.btnOcrPaste}</span>
+                  </button>
+                  <div className="flex items-center gap-2">
+                    {isTranslating && (
+                      <button
+                        onClick={runner.cancel}
+                        className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                      >
+                        {t.task.btnCancel}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => runner.run(sourceText, { source: 'input' })}
+                      disabled={isTranslating || !sourceText.trim()}
+                      className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {isTranslating ? t.translation.translating : t.translation.btnTranslate}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex-1 overflow-auto text-sm text-slate-800">
+                  {translatedText || (
+                    <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
                   )}
                 </div>
-                {showNetworkEngineHint && (
-                  <span className="text-amber-600">{t.error.networkHintGoogle}</span>
-                )}
-              </div>
-            )}
-            {ocrError && (
-              <div className="mt-1 flex items-center justify-between rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">
-                <span>{ocrError}</span>
-                <button
-                  onClick={() => setOcrError(null)}
-                  className="text-slate-400 hover:text-slate-600 ml-2"
-                  title={t.translation.btnClose}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={handleOcrClipboard}
-                disabled={ocrLoading || isTranslating}
-                className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
-                title={t.translation.btnOcrPaste}
-              >
-                <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
-                <span>{ocrLoading ? t.translation.ocrRunning : t.translation.btnOcrPaste}</span>
-              </button>
-              <div className="flex items-center gap-2">
-                {isTranslating && (
-                  <button
-                    onClick={runner.cancel}
-                    className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                  >
-                    {t.task.btnCancel}
-                  </button>
-                )}
-                <button
-                  onClick={() => runner.run(sourceText, { source: 'input' })}
-                  disabled={isTranslating || !sourceText.trim()}
-                  className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  {isTranslating ? t.translation.translating : t.translation.btnTranslate}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="flex-1 overflow-auto text-sm text-slate-800">
-              {translatedText || (
-                <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
-              )}
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              {usedEngine && (
-                <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
-              )}
-              {translatedText && (
-                <div className="flex justify-end">
-                  <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                  >
-                    {copied ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
-                    <span>{copied ? t.translation.copied : t.translation.copy}</span>
-                  </button>
+                <div className="mt-2 flex items-center justify-between">
+                  {usedEngine && (
+                    <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
+                  )}
+                  {translatedText && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={handleCopy}
+                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                      >
+                        {copied ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                        <span>{copied ? t.translation.copied : t.translation.copy}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
+
+        {activeTab === 'history' && <HistoryPanel t={t} locale={locale} />}
       </main>
       {/* 设置与密钥配置模态框 */}
       {showSettings && (

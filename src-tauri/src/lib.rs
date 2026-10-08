@@ -39,6 +39,8 @@ macro_rules! app_command_builder {
             $crate::commands::get_glossary_terms,
             $crate::commands::delete_glossary_term,
             $crate::commands::clear_cache,
+            $crate::commands::get_translation_history,
+            $crate::commands::delete_history_entry,
             $crate::commands::set_cache_enabled,
             $crate::commands::get_cache_enabled,
             $crate::commands::ocr_clipboard_image,

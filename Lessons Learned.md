@@ -73,3 +73,32 @@
 ### 经验与规程
 1. **缓存查询策略感知降级链**：在查询缓存时，若主引擎自身具备降级能力且未命中，允许进一步匹配降级引擎的历史缓存记录，并在返回时准确标注 `used_engine`。
 2. **写回与查存契约必须对称**：任何包含主备切换的缓存设计，必须在单测中专门针对降级路径覆盖“降级成功 $\to$ 写入缓存 $\to$ 二次调用 $\to$ 缓存命中”的完整往返测试。
+
+---
+
+## 6. 同步 `#[tauri::command]` 在主线程执行阻塞 I/O
+
+### 现象与问题
+- `tauri::command` 的默认执行上下文是 **Blocking（主线程）**；只有 `async fn` 才会被投递到 async runtime。官方文档原话：`async` 选项“Runs the command on the async runtime instead of blocking the main thread”，且“`async fn` commands are always executed asynchronously”。
+- 同步命令里调用 `keyring`（Windows Credential Manager / macOS Keychain）或 SQLite 长事务，会直接卡住事件循环。
+- 最隐蔽的是**启动路径**：前端挂载时的 `useEffect` 常会串行触发多次 `isApiKeyConfigured` + `getServerToken` + `getClipboardMonitor`，每次都是一次冷凭据存储读取（数百毫秒量级），叠加起来就是可感知的白屏。
+- 本项目第 4 条已记录过 `EnginePool` 在锁内做阻塞 I/O，但那只修了引擎池，**IPC 入口层整体漏掉了**。
+
+### 经验与规程
+1. **凡命令体内出现 keyring、SQLite、文件系统、平台原生 API，一律写 `async fn`**，并用 `tokio::task::spawn_blocking` 包裹同步调用，绝不在 async 上下文直接阻塞。
+2. **审计方法**：直接 grep `pub fn` + `#[tauri::command]` 的组合。同步命令必须逐个给出“为什么它不会阻塞”的理由（纯内存运算 / 纯原子操作），否则改 `async`。
+3. `spawn_blocking` 的 `JoinError` 与内部 `Result` 是两层错误，需分别 `map_err`，否则会丢失“任务调度失败”与“业务失败”的区分。
+
+---
+
+## 7. 集成测试误用生产默认引擎导致真实外呼
+
+### 现象与问题
+- 服务端集成测试用 `EnginePool::new()` 构造引擎池，其默认引擎是 `GoogleWebEngine`。
+- 只要测试用例的缓存未命中（例如刚关闭缓存、或使用了从未写入的新文本），就会向 `translate.googleapis.com` 发起**真实网络请求**。
+- 更糟的是断言写的是 `StatusCode::OK`，而服务端在引擎失败时也返回 200（逐项标记 `Failed`）。于是**测试无论网络通断都通过**，既污染 CI 外呼，又不提供任何回归信号。
+
+### 经验与规程
+1. **测试必须注入零网络引擎桩**：为引擎池提供 `#[cfg(test)]` 的构造入口（如 `with_default_engine`），配合 `testing::StubEngine`。
+2. **警惕“恒真断言”**：断言 `200 OK` 前先确认失败路径**不会**也返回 200。对支持部分失败的结构化响应，必须断言 `items` 内的具体状态。
+3. **凡是要读写宿主环境的测试（keyring、凭据库、真实网络、用户目录），默认不执行**，通过显式环境变量（如 `TRANSLY_KEYRING_TEST=1`）开启；把可验证的逻辑抽成纯函数做无副作用断言（如 `generate_token()`）。

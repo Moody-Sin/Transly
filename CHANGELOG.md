@@ -5,6 +5,25 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 修复
+- **同步 Tauri command 阻塞主线程 (P0)**：`is_api_key_configured`、`get_clipboard_monitor`、`get_server_token`、`set_clipboard_monitor`、`set_cache_enabled`、`get_glossary_terms`、`clear_cache` 共 7 个命令此前为同步 `fn`，会按 `tauri::command` 语义在**主线程**执行 keyring 与 SQLite 阻塞 I/O。启动时前端 `useEffect` 会串行触发 5 次 Windows 凭据管理器读取，缓存膨胀时 `DELETE` 全表会让 UI 硬卡。现全部改为 `async fn` 并下沉至 `spawn_blocking`。
+- **测试真调外部 API (P0)**：`src-tauri` 服务端集成测试此前使用 `EnginePool::new()`，其默认引擎为 `GoogleWebEngine`，缓存未命中时会真实外呼 `translate.googleapis.com`，且引擎失败仍返回 200 使用例恒通过、零信号。新增 `EnginePool::with_default_engine` 与 `testing::StubEngine`，测试不再触网。
+- **测试读写真实系统凭据库 (P0)**：`secrets.rs` 单测此前直接读写开发者与 CI 机器的 Windows Credential Manager / macOS Keychain。现拆出纯函数 `generate_token()` 做无副作用断言，真实往返测试改为需显式设 `TRANSLY_KEYRING_TEST=1` 才执行。
+- **扩展增量翻译持续闪烁徽标且进度永不收敛 (P1)**：任务终态（`TRANSLATION_FINISHED` / `_PARTIAL_FAILED` / `_FAILED`）此前在 `translateEntries` 内部广播，而动态增量监听会为每个 pending root 各调一次该函数，无限滚动页面下徽标反复闪烁、`currentTaskTotal` 只增不减导致百分比不收敛。现终态统一上提至任务级入口广播一次，并在上报后清空失败集，避免污染下一轮“部分失败”判定与“重试失败项”按钮可用性。
+- **扩展 payload 翻倍 (P2)**：`TRANSLATE_BATCH` 同时发送 `items` 与 `texts`，而服务端只消费 `items`。现仅发送 `items`（服务端保留 `texts` 兼容分支供旧版客户端）。
+- **popup 死代码降级分支 (P2)**：`chrome.tabs.query({})` 在未申请 `tabs` 权限时不会返回 `url`，原“查找最近网页标签”回退分支永远命中不了，已移除。
+- **Bearer Token 非恒定时间比较 (P2)**：本地 HTTP 服务鉴权由 `==` 字符串比较改为 `subtle::ConstantTimeEq`，消除计时侧信道；抽出 `bearer_matches` 并补齐单元测试。
+- **EnginePool 失效归一化不对称 (P2)**：`invalidate` 使用 `to_lowercase()` 而 `get_engine` 使用 `trim().to_lowercase()`，会漏删带空白输入的缓存条目导致旧密钥被继续复用。
+- **英文界面残留中文文案 (P1)**：`App.tsx` 中密钥管理、引擎选项、语言选项、状态提示等 20 余处硬编码中文（违反项目规则「禁止硬编码文案」），已全部收敛至 `src/i18n/`。
+- **安装包含未替换脚手架占位符 (P1)**：`tauri.conf.json` 的 `bundle.icon` 引用了模板变量替换失败留下的 `icons/128x128@2x.png`，已从配置与仓库中移除。
+- **扩展全站常驻注入 (P2)**：移除 `content_scripts` 的 `<all_urls>` 常驻声明，改为用户点击翻译时经 `chrome.scripting.executeScript` **主动注入**，与 `PRIVACY_POLICY.md` 中「仅在主动触发时提取 DOM 文本」的承诺对齐，同时收敛权限面（新增 `scripting`，不再需要全站宿主权限）。
+
+### 变更
+- **移除零使用契约与死代码 (P2)**：删除从未被构造的 `Error::UnsupportedLanguage` 与 `Error::Timeout`（连带 `ErrorKind::Timeout`，其重试语义已由 `ErrorKind::Network` 与 `Engine` 覆盖）、无生产消费者的 `TaskState::is_terminal` / `is_active`、无人消费的 `TranslateOutcomeDto::cached` / `detected_source_lang` 与 `EngineCapabilities::supports_streaming`（无任何流式实现）、以及未被调用的 `useTaskRunner.reset`。
+- **文档与目录事实对齐 (P2)**：`PROJECT_RULES.md` 目录结构此前描述了不存在的 `src/components`、`src/pages`、`src/hooks`、`src/stores`、`src-tauri/src/platform`、`src-tauri/src/error.rs`，已按实际文件重写；新增 `docs/README.md`、`src/task/README.md`、`extension/src/README.md`，并为 `docs/architecture-state-machines.md` 建立索引（此前全仓库无任何引用）。
+
 ## [0.2.0] - 2026-10-06
 
 ### 新增

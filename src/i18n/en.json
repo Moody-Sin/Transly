@@ -40,7 +40,7 @@
     "delete": "Delete",
     "loadFailed": "Failed to load translation history",
     "deleteFailed": "Failed to delete",
-    "entryCount": "{n} entries"
+    "entryCount": "{n} loaded"
   },
   "ocrError": {
     "no_image": "No image in clipboard. Copy or take a screenshot first.",

@@ -40,7 +40,7 @@
     "delete": "删除",
     "loadFailed": "读取翻译历史失败",
     "deleteFailed": "删除失败",
-    "entryCount": "共 {n} 条"
+    "entryCount": "已加载 {n} 条"
   },
   "ocrError": {
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",

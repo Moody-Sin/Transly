@@ -8,6 +8,9 @@
 ## [未发布]
 
 ### 修复
+- **扩展在途批次绕过代际闸门，「还原原文」后译文被重新写回 (P1)**：`sendBatchWithSplit` 收到响应后立即调用 `applyBatchResponse`，而 `translateEntries` 的「响应写回前安全拦截」要等其返回后才执行；`applyBatchResponse` 的 `items` 主契约分支（当前唯一路径）内部**没有**代际判定，只有旧版 `translations` 兼容分支有。用户点击「还原原文」（`currentGeneration += 1`）或取消后，只要仍有批次在途，译文就会被原地写回页面——用户看到的是「还原失败」，与代码注释宣称的「严禁写入 DOM」直接矛盾。现把代际闸门下沉进 `applyBatchResponse` 入口统一判定，并对 `markBatchFailed` 的两处调用点加同样守卫，避免还原后失败集被污染导致「重试失败项」按钮凭空出现。
+- **设置面板「立即清空」缓存无任何错误处理 (P3)**：`App.tsx` 的 `clearCache` 按钮只处理成功分支，既无 `else` 也无 `catch`，与同面板其他操作（保存密钥、轮换 Token、术语增删）的防御性写法不一致。IPC 抛错或返回 `error` 时用户点击后**毫无反馈**并产生未处理的 Promise 拒绝。现补齐 `error` 分支与 `catch`，并新增 `statusCacheClearFailed` 文案（中英同步）。
+- **保存密钥 / 轮换 Token 等操作吞掉后端具体错误 (P3)**：`handleSaveKeys`、`handleRotateToken`、`handleDeleteKey`、`handleAddGlossary`、`handleDeleteGlossary` 的 `catch` 分支只写通用文案，丢弃后端返回的 `res.error`（如「API 密钥长度超出限制」「写入系统安全凭据失败」）。现统一优先透传后端原始消息，仅在其缺失时回落通用文案，与 `setCacheEnabled` 的既有行为对齐。
 - **扩展批量上限与服务端量纲错配导致整批静默失败 (P0)**：扩展端按「项数 30」切批，服务端按「字符总量 50000」拒绝——两者量纲不同。30 个平均 1667 字的正文节点字符总量即越过上限，服务端返回 413，该批**全部**节点被标为失败且页面无任何提示。现把 `MAX_BATCH_ITEMS` / `MAX_BATCH_TOTAL_CHARS` / `MAX_ITEM_CHARS` 收敛到 `transly-core` 单一来源，服务端在 `/health` 公开，扩展端新增 `shared/batchPlan.ts` 的 `planBatchRanges` 按双上限切批；并加 413 对半拆批兜底（服务端收紧上限时无需两端同时升级）。新增 5 项 Rust 回归测试（含「项数未超但总量超限必须 413」的核心用例）与 6 项 TS 单测。
 - **浮窗并发请求被覆盖丢失 (P0)**：`PendingFloatRequest` 是单槽 `Option`，而划词（快捷键）与剪贴板监听是两条独立链路共用同一槽位，后到的请求直接覆盖先到的。浮窗 JS 未就绪时（首次呼出、WebView 重建）先到的请求永久丢失，用户表现为「第一次划词没反应」。现改为有界 FIFO 队列 `PendingFloatRequests`（容量 16，溢出丢弃最旧项并打印告警），前端循环排空队列而非只拉一次。新增 2 项单测锁定 FIFO 顺序与容量边界。
 - **构建期绑定导出路径越界 (P1)**：`main.rs` 在 `debug_assertions` 下执行 `.export(Typescript::default(), "../src/bindings.ts")`，相对路径被按**进程 cwd** 解析。从仓库根执行 `cargo test` / `cargo run` 时会在仓库外（实测 `D:/Project/src/bindings.ts`）凭空生成文件。现改为相对 `CARGO_MANIFEST_DIR` 解析，与 `bin/export_bindings.rs` 的写法对齐，并已实测确认仓库外不再生成。

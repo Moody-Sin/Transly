@@ -101,6 +101,7 @@
     "serverStatusRunning": "● Running",
     "serverStatusStarting": "Starting...",
     "serverStatusFailed": "▲ Failed to start",
-    "statusCacheCleared": "Cleared {n} cached entries"
+    "statusCacheCleared": "Cleared {n} cached entries",
+    "statusCacheClearFailed": "Failed to clear cache; please retry"
   }
 }

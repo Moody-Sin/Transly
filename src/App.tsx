@@ -200,8 +200,11 @@ export default function App() {
       } else {
         setSaveStatus(res.error)
       }
-    } catch {
-      setSaveStatus(t.settings.statusTokenRotateFailed)
+    } catch (err) {
+      // 保留后端具体原因（如凭据管理器不可用），仅在其缺失时回落通用文案
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusTokenRotateFailed,
+      )
     }
   }
 
@@ -233,8 +236,9 @@ export default function App() {
       checkConfiguredKeys()
       setSaveStatus(t.settings.statusKeysSaved)
       setTimeout(() => setSaveStatus(null), 2500)
-    } catch {
-      setSaveStatus(t.settings.statusSaveFailed)
+    } catch (err) {
+      // 透传后端校验原因（如「API 密钥长度超出限制」），避免退化为无法自查的通用文案
+      setSaveStatus(err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed)
     }
   }
 
@@ -245,8 +249,10 @@ export default function App() {
       checkConfiguredKeys()
       setSaveStatus(t.settings.statusKeyDeleted)
       setTimeout(() => setSaveStatus(null), 2000)
-    } catch {
-      setSaveStatus(t.settings.statusKeyDeleteFailed)
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusKeyDeleteFailed,
+      )
     }
   }
 
@@ -260,8 +266,10 @@ export default function App() {
       loadGlossaryList()
       setSaveStatus(t.settings.statusGlossaryAdded)
       setTimeout(() => setSaveStatus(null), 2000)
-    } catch {
-      setSaveStatus(t.settings.statusGlossaryFailed)
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusGlossaryFailed,
+      )
     }
   }
 
@@ -270,8 +278,10 @@ export default function App() {
       const res = await commands.deleteGlossaryTerm(source)
       if (res.status === 'error') throw new Error(res.error)
       loadGlossaryList()
-    } catch {
-      setSaveStatus(t.settings.statusGlossaryFailed)
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusGlossaryFailed,
+      )
     }
   }
 
@@ -762,13 +772,24 @@ export default function App() {
                   </div>
                   <button
                     onClick={async () => {
-                      const res = await commands.clearCache()
-                      if (res.status === 'ok') {
+                      // 与设置面板其他操作一致：失败必须可见，不得静默无反馈
+                      try {
+                        const res = await commands.clearCache()
+                        if (res.status === 'ok') {
+                          setSaveStatus(
+                            t.settings.statusCacheCleared.replace('{n}', String(res.data)),
+                          )
+                        } else {
+                          setSaveStatus(res.error)
+                        }
+                      } catch (err) {
                         setSaveStatus(
-                          t.settings.statusCacheCleared.replace('{n}', String(res.data)),
+                          err instanceof Error && err.message
+                            ? err.message
+                            : t.settings.statusCacheClearFailed,
                         )
-                        setTimeout(() => setSaveStatus(null), 2000)
                       }
+                      setTimeout(() => setSaveStatus(null), 2000)
                     }}
                     className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
                   >

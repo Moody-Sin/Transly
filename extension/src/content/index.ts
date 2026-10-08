@@ -354,11 +354,11 @@ async function sendBatchWithSplit(
       return { failedBatches: failed }
     }
     // 单项仍超限：该项自身过长，交服务端逐项报错
-    markBatchFailed(batch, 'payload_too_large')
+    if (expectedGen === currentGeneration) markBatchFailed(batch, 'payload_too_large')
     return { failedBatches: 1 }
   }
 
-  markBatchFailed(batch, 'network')
+  if (expectedGen === currentGeneration) markBatchFailed(batch, 'network')
   return { failedBatches: 1 }
 }
 
@@ -414,7 +414,7 @@ async function translateEntries(
       }
     } catch (err) {
       failedBatches += 1
-      markBatchFailed(batch, 'network')
+      if (expectedGen === currentGeneration) markBatchFailed(batch, 'network')
       console.warn('[Transly] 批量翻译出错:', err)
     }
 
@@ -451,6 +451,11 @@ function applyBatchResponse(
 ) {
   if (!resData) return
 
+  // 代际闸门：还原原文 / 取消 / 新任务后到达的响应一律丢弃，严禁写回 DOM。
+  // `items` 主契约分支此前没有这道判定（只有旧版 `translations` 分支有），
+  // 导致「还原原文」后仍在途的批次把译文重新写回页面 —— 用户看到的是还原失败。
+  if (expectedGen !== currentGeneration) return
+
   if (resData.items && resData.items.length > 0) {
     // 优先消费结构化 items 契约：精准映射 ID
     const itemMap = new Map(resData.items.map((it) => [it.id, it]))
@@ -471,7 +476,7 @@ function applyBatchResponse(
   } else if (resData.translations) {
     // 兼容旧版 translations
     resData.translations.forEach((translated, idx) => {
-      if (batch[idx] && expectedGen === currentGeneration) {
+      if (batch[idx]) {
         if (translated && translated !== batch[idx].text) {
           replaceTextNode(batch[idx].node, translated)
           failedItemsMap.delete(batch[idx].id)

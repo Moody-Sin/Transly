@@ -101,6 +101,7 @@
     "serverStatusRunning": "● 运行中",
     "serverStatusStarting": "启动中...",
     "serverStatusFailed": "▲ 启动失败",
-    "statusCacheCleared": "已清理 {n} 条缓存记录"
+    "statusCacheCleared": "已清理 {n} 条缓存记录",
+    "statusCacheClearFailed": "清空缓存失败，请重试"
   }
 }

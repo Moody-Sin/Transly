@@ -236,7 +236,11 @@ fn main() {
 
             let _tray = TrayIconBuilder::new()
                 .tooltip("Transly 桌面翻译")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(
+                    app.default_window_icon()
+                        .expect("Tauri 上下文必须内置默认窗口图标")
+                        .clone(),
+                )
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {

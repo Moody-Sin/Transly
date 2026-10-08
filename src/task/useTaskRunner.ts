@@ -53,6 +53,10 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   engineRef.current = engine
   langRef.current = targetLang
 
+  // 浮窗判定：只有浮窗订阅宿主广播的 float-translate 事件，
+  // 主窗口若也订阅，划词/剪贴板文本会被两个窗口各翻译一次
+  const isFloatWindow = typeof window !== 'undefined' && window.location.hash === '#float'
+
   const clearDebounce = useCallback(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current)
@@ -136,6 +140,7 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   // 浮窗首次显示前页面 JS 尚未就绪，emit 的事件会永久丢失；
   // 因此宿主会暂存最近一次请求，浮窗就绪后主动拉取一次兜底。
   useEffect(() => {
+    if (!isFloatWindow) return
     let unlisten: (() => void) | undefined
     const handle = (payload: FloatRequest | null) => {
       if (!payload?.text?.trim()) return
@@ -160,14 +165,13 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       })
     }).catch(() => {})
     return () => { if (unlisten) unlisten() }
-  }, [run])
+  }, [run, isFloatWindow])
 
   // 组件卸载时作废全部在途代际
   useEffect(() => () => { genRef.current += 1 }, [])
 
   // 翻译中/错误态时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
   // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
-  const isFloatWindow = typeof window !== 'undefined' && window.location.hash === '#float'
   const needsSticky = isFloatWindow && (
     snapshot.state === 'running' || snapshot.error !== null
   )

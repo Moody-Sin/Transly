@@ -48,6 +48,7 @@
     "input": "输入无效，请检查文本与语言选择",
     "auth": "尚未配置 API 密钥，请在设置中填写",
     "network": "网络连接失败，请检查网络后重试",
+    "networkHintGoogle": "默认 Google 引擎在部分网络下不可达，请在设置中配置 DeepL / DeepSeek 密钥后切换引擎",
     "engine": "翻译引擎出错，可重试或切换引擎",
     "internal": "内部错误，请重试"
   },

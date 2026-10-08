@@ -1,0 +1,89 @@
+{
+  "extName": {
+    "message": "Transly Immersive Page Translation"
+  },
+  "extDescription": {
+    "message": "Minimal, layout-preserving full-page translation (translation only), powered by the Transly desktop app."
+  },
+  "connChecking": {
+    "message": "Checking connection..."
+  },
+  "connServerDown": {
+    "message": "○ Desktop app not running"
+  },
+  "connTokenExpired": {
+    "message": "▲ Token expired; pair again"
+  },
+  "connUnpaired": {
+    "message": "▲ Token not paired"
+  },
+  "connPaired": {
+    "message": "● Connected and paired"
+  },
+  "engineGoogle": {
+    "message": "Google web translate"
+  },
+  "btnTranslate": {
+    "message": "Translate this page (translation only)"
+  },
+  "btnCancel": {
+    "message": "Cancel translation"
+  },
+  "btnRetry": {
+    "message": "Retry failed items"
+  },
+  "btnRestore": {
+    "message": "Restore original"
+  },
+  "tokenPlaceholder": {
+    "message": "Paste the desktop pairing token"
+  },
+  "btnSaveToken": {
+    "message": "Save pairing token"
+  },
+  "btnSavedToken": {
+    "message": "Saved ✓"
+  },
+  "progressPreparing": {
+    "message": "Preparing..."
+  },
+  "progressAnalyzing": {
+    "message": "Analyzing page..."
+  },
+  "progressTranslating": {
+    "message": "Translating..."
+  },
+  "progressFinished": {
+    "message": "Done ✓"
+  },
+  "progressCancelled": {
+    "message": "Cancelled"
+  },
+  "progressCancelledRetryable": {
+    "message": "Cancelled; $COUNT$ items can be retried",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "progressPartiallyFailed": {
+    "message": "Partly done; $COUNT$ items failed",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "progressFailed": {
+    "message": "Translation failed; $COUNT$ items can be retried",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "cannotAccessPage": {
+    "message": "Cannot access this page; try a regular web page"
+  }
+}

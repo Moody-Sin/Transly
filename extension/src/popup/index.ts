@@ -1,3 +1,5 @@
+import { applyStaticTranslations, t } from '../i18n'
+
 const statusEl = document.getElementById('conn-status') as HTMLElement
 const btnTranslate = document.getElementById('btn-translate') as HTMLButtonElement
 const btnCancel = document.getElementById('btn-cancel') as HTMLButtonElement
@@ -11,6 +13,9 @@ const progressBox = document.getElementById('progress-box') as HTMLElement
 const progressText = document.getElementById('progress-text') as HTMLElement
 const progressCount = document.getElementById('progress-count') as HTMLElement
 const progressBar = document.getElementById('progress-bar') as HTMLElement
+
+// 静态文案（按钮、占位符、状态位）统一由 _locales 注入，代码内不硬编码文案
+applyStaticTranslations()
 
 // 回显已保存的配置
 chrome.storage.local.get(['transly_server_token', 'transly_engine', 'transly_target_lang'], (res) => {
@@ -39,9 +44,9 @@ if (selectLang) {
 btnSaveToken.addEventListener('click', () => {
   const token = inputToken.value.trim()
   chrome.storage.local.set({ transly_server_token: token }, () => {
-    btnSaveToken.textContent = '已保存 ✓'
+    btnSaveToken.textContent = t('btnSavedToken')
     setTimeout(() => {
-      btnSaveToken.textContent = '保存配对 Token'
+      btnSaveToken.textContent = t('btnSaveToken')
     }, 1500)
     checkConnection()
   })
@@ -50,22 +55,22 @@ btnSaveToken.addEventListener('click', () => {
 function checkConnection() {
   chrome.runtime.sendMessage({ type: 'CHECK_DESKTOP_SERVER' }, (response) => {
     if (!response || !response.serverRunning) {
-      statusEl.textContent = '○ 桌面端未运行'
+      statusEl.textContent = t('connServerDown')
       statusEl.style.color = '#ef4444'
       btnTranslate.disabled = true
       return
     }
 
     if (response.tokenExpired) {
-      statusEl.textContent = '▲ Token 已失效，请重新配对'
+      statusEl.textContent = t('connTokenExpired')
       statusEl.style.color = '#f59e0b'
       btnTranslate.disabled = true
     } else if (!response.paired) {
-      statusEl.textContent = '▲ 未配对 Token'
+      statusEl.textContent = t('connUnpaired')
       statusEl.style.color = '#f59e0b'
       btnTranslate.disabled = true
     } else {
-      statusEl.textContent = '● 已连接且配对有效'
+      statusEl.textContent = t('connPaired')
       statusEl.style.color = '#10b981'
       btnTranslate.disabled = false
     }
@@ -91,15 +96,16 @@ function renderProgressState(state: {
   btnRetry.style.display = failedCount > 0 && state.status !== 'translating' ? 'block' : 'none'
 
   if (state.status === 'cancelled') {
-    progressText.textContent = `已取消${failedCount > 0 ? `，${failedCount} 项可重试` : ''}`
+    progressText.textContent =
+      failedCount > 0 ? t('progressCancelledRetryable', [String(failedCount)]) : t('progressCancelled')
   } else if (state.status === 'partially_failed') {
-    progressText.textContent = `部分完成，${failedCount} 项失败`
+    progressText.textContent = t('progressPartiallyFailed', [String(failedCount)])
   } else if (state.status === 'finished') {
-    progressText.textContent = '翻译完成 ✓'
+    progressText.textContent = t('progressFinished')
   } else if (state.status === 'failed') {
-    progressText.textContent = `翻译失败，${failedCount || state.failedBatches} 项可重试`
+    progressText.textContent = t('progressFailed', [String(failedCount || state.failedBatches)])
   } else {
-    progressText.textContent = '正在翻译...'
+    progressText.textContent = t('progressTranslating')
   }
 }
 
@@ -206,12 +212,12 @@ btnTranslate.addEventListener('click', async () => {
   if (!tab?.id) return
 
   progressBox.style.display = 'block'
-  progressText.textContent = '分析页面...'
+  progressText.textContent = t('progressAnalyzing')
   progressBar.style.width = '10%'
 
   // 首次使用该页面时先注入 content script（主动注入，非常驻）
   if (!(await ensureInjected(tab.id))) {
-    progressText.textContent = '无法访问当前页面，请改用普通网页重试'
+    progressText.textContent = t('cannotAccessPage')
     return
   }
 

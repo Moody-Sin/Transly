@@ -102,3 +102,18 @@
 1. **测试必须注入零网络引擎桩**：为引擎池提供 `#[cfg(test)]` 的构造入口（如 `with_default_engine`），配合 `testing::StubEngine`。
 2. **警惕“恒真断言”**：断言 `200 OK` 前先确认失败路径**不会**也返回 200。对支持部分失败的结构化响应，必须断言 `items` 内的具体状态。
 3. **凡是要读写宿主环境的测试（keyring、凭据库、真实网络、用户目录），默认不执行**，通过显式环境变量（如 `TRANSLY_KEYRING_TEST=1`）开启；把可验证的逻辑抽成纯函数做无副作用断言（如 `generate_token()`）。
+
+---
+
+## 8. Tauri 2 ACL：应用自有命令的宽松掩盖了插件命令的静默拒绝
+
+### 现象与问题
+- 项目从未声明任何 capability（`src-tauri/capabilities/` 不存在），运行时 ACL 为空。
+- 应用自有 command（`#[tauri::command]`）在“无 app ACL 且本地 origin”时被 Tauri 无条件放行，因此主窗口翻译、设置中心、扩展本地 HTTP 服务全部正常，**反向掩盖了**插件命令已被拒绝的事实。
+- 前端 `@tauri-apps/api/event` 的 `listen` 走的是插件命令 `plugin:event|listen`，被运行时 ACL 拒绝（`event.listen not allowed. Permissions associated with this command: core:event:allow-listen, core:event:default`）；调用处 `.catch(() => {})` 把异常吞掉，浮窗表现为“弹出即空白”，全程无任何报错。
+
+### 经验与规程
+1. **前端只要用到 `@tauri-apps/api` 的非自有命令 API（event / window / webview / path / app ...），就必须在 `src-tauri/capabilities/*.json` 中显式放行**，并按窗口收敛到最小权限集。
+2. **禁止用 `.catch(() => {})` 吞掉 IPC 注册类调用**（`listen` 等），至少 `console.warn` 暴露；否则 ACL、权限、平台差异三层会同时静默。
+3. 离线快速核对：`grep -a "plugin:event|listen" <二进制>` 命中才代表该命令已被 ACL 放行（构建期 `Resolved` 会将以被放行的命令名写入产物字符串）。
+4. 运行时核对：以 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动应用，用 CDP `Runtime.evaluate` 调 `window.__TAURI_INTERNALS__.invoke(...)`，可一眼区分“ACL 拒绝”与“命令内部错误”。

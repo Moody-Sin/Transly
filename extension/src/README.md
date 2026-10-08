@@ -18,6 +18,7 @@
 - **background/index.ts**：Service Worker。转发翻译请求到本地 HTTP 服务、维护每 Tab 的进度快照、驱动工具栏徽标（Badge）。
 - **content/index.ts**：Content Script。整页文本节点收集、批量打包、原地 DOM 替换与还原、`MutationObserver` 动态增量监听。持有任务代际 `currentGeneration`。
 - **popup/index.ts**：Popup UI 逻辑。连接探测、Token 配对、引擎/语言选择、进度回显与操作按钮。
+- **i18n/index.ts**：`chrome.i18n` 文案查询封装与静态节点注入（`data-i18n` / `data-i18n-placeholder` / `data-i18n-title`）。
 
 ## 消息契约
 
@@ -38,7 +39,7 @@ Content Script 与 Service Worker 之间使用以下消息类型（`type` 字段
 pnpm build        # 在 extension/ 目录下
 ```
 
-产物输出到 `extension/dist`，`manifest.json` 与 `popup.html` 由 `scripts/postbuild.mjs` 复制。
+产物输出到 `extension/dist`，`manifest.json`、`popup.html` 与 `_locales/` 由 `scripts/postbuild.mjs` 复制。
 
 ## 许可证
 

@@ -77,6 +77,96 @@ impl GoogleWebEngine {
     }
 }
 
+/// 单次 GET 请求 `q` 参数编码后的长度上限。
+///
+/// `urlencoding` 会把每个非 ASCII 字节编码为 `%XX`（UTF-8 中文 3 字节 → 9 字符），
+/// 因此仅按“字符数”切块会让中文长段落生成数万字符的超长 URL 并直接请求失败。
+const MAX_ENCODED_QUERY_CHARS: usize = 4_000;
+
+/// 单个切块的最大字符数（西文按空白边界切分时的上限）
+const MAX_CHUNK_CHARS: usize = 800;
+
+/// 估算片段经 urlencoding 后的长度：ASCII 记 1，其余按最坏情况 9 计
+fn encoded_len(s: &str) -> usize {
+    s.chars().map(|c| if c.is_ascii() { 1 } else { 9 }).sum()
+}
+
+/// 将单个段落切成可安全放入 GET URL 的片段。
+///
+/// 策略：
+/// 1. 优先按空白边界聚合，避免切断西文单词；
+/// 2. 无空白的长片段（中文长段落、长 URL、Base64 串）按字符窗口硬切；
+/// 3. 双重上限：字符数与编码后长度，取先到者。
+fn chunk_paragraph(paragraph: &str) -> Vec<String> {
+    fn flush(chunks: &mut Vec<String>, current: &mut String) {
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            chunks.push(trimmed.to_string());
+        }
+        current.clear();
+    }
+
+    /// 按字符窗口硬切超长片段（无空白可切时）
+    fn hard_split(word: &str, chunks: &mut Vec<String>) {
+        let mut buf = String::new();
+        let mut buf_chars = 0usize;
+        let mut buf_encoded = 0usize;
+        for ch in word.chars() {
+            let ch_encoded = if ch.is_ascii() { 1 } else { 9 };
+            if buf_chars >= MAX_CHUNK_CHARS || buf_encoded + ch_encoded > MAX_ENCODED_QUERY_CHARS {
+                chunks.push(std::mem::take(&mut buf));
+                buf_chars = 0;
+                buf_encoded = 0;
+            }
+            buf.push(ch);
+            buf_chars += 1;
+            buf_encoded += ch_encoded;
+        }
+        if !buf.is_empty() {
+            chunks.push(buf);
+        }
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    let mut current_encoded = 0usize;
+
+    for word in paragraph.split_whitespace() {
+        let word_chars = word.chars().count();
+        let word_encoded = encoded_len(word);
+
+        // 自身就超限的片段（无空白可切）先落盘当前块，再硬切
+        if word_chars > MAX_CHUNK_CHARS || word_encoded > MAX_ENCODED_QUERY_CHARS {
+            flush(&mut chunks, &mut current);
+            current_chars = 0;
+            current_encoded = 0;
+            hard_split(word, &mut chunks);
+            continue;
+        }
+
+        let separator = usize::from(current_chars > 0);
+        if current_chars > 0
+            && (current_chars + separator + word_chars > MAX_CHUNK_CHARS
+                || current_encoded + separator + word_encoded > MAX_ENCODED_QUERY_CHARS)
+        {
+            flush(&mut chunks, &mut current);
+            current_chars = 0;
+            current_encoded = 0;
+        }
+        if current_chars > 0 {
+            current.push(' ');
+            current_chars += 1;
+            current_encoded += 1;
+        }
+        current.push_str(word);
+        current_chars += word_chars;
+        current_encoded += word_encoded;
+    }
+    flush(&mut chunks, &mut current);
+    chunks
+}
+
 impl Default for GoogleWebEngine {
     fn default() -> Self {
         Self::new()
@@ -116,27 +206,8 @@ impl TranslateEngine for GoogleWebEngine {
                     continue;
                 }
 
-                // 若单段仍超出 800 字符，按单词/空格边界切块（避免切断西文单词）
-                let mut chunks: Vec<String> = Vec::new();
-                let mut current_chunk = String::new();
-
-                for word in paragraph.split_whitespace() {
-                    if current_chunk.chars().count() + word.chars().count() + 1 > 800
-                        && !current_chunk.is_empty()
-                    {
-                        chunks.push(current_chunk.trim().to_string());
-                        current_chunk = String::new();
-                    }
-                    if !current_chunk.is_empty() {
-                        current_chunk.push(' ');
-                    }
-                    current_chunk.push_str(word);
-                }
-                if !current_chunk.trim().is_empty() {
-                    chunks.push(current_chunk.trim().to_string());
-                }
-
-                for chunk_str in chunks {
+                // 段落内再按空白边界与字符窗口双重上限切块（含无空格的中文长段落）
+                for chunk_str in chunk_paragraph(paragraph) {
                     let res = self
                         .translate_single_chunk(&chunk_str, &req.source_lang, &req.target_lang)
                         .await?;
@@ -144,7 +215,13 @@ impl TranslateEngine for GoogleWebEngine {
                         detected_lang = res.detected_source_lang;
                     }
                     full_translated.push_str(&res.text);
-                    if !res.text.ends_with(' ') {
+                    // 仅在西文块之间补空格；中文等无空格语言补空格会在句中断字
+                    let ascii_tail = chunk_str
+                        .chars()
+                        .next_back()
+                        .map(|c| c.is_ascii())
+                        .unwrap_or(false);
+                    if ascii_tail && !res.text.ends_with(' ') {
                         full_translated.push(' ');
                     }
                 }
@@ -227,6 +304,53 @@ mod tests {
         assert_eq!(res.text, "你好，世界");
         assert_eq!(res.detected_source_lang, Some("en".to_string()));
         assert_eq!(res.engine, "google_web");
+    }
+
+    #[test]
+    fn test_chunk_paragraph_splits_cjk_without_whitespace() {
+        // 无空格中文长段落：按字符窗口硬切，且必须遵守编码长度上限
+        let text = "中".repeat(2_000);
+        let chunks = chunk_paragraph(&text);
+        assert!(
+            chunks.len() >= 5,
+            "中文长段落必须切成多块，实际块数 {}",
+            chunks.len()
+        );
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= MAX_CHUNK_CHARS);
+            assert!(encoded_len(chunk) <= MAX_ENCODED_QUERY_CHARS);
+        }
+        assert_eq!(chunks.concat(), text, "硬切不得丢失任何字符");
+    }
+
+    #[test]
+    fn test_chunk_paragraph_prefers_whitespace_boundaries() {
+        let text = std::iter::repeat_n("word", 500)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let chunks = chunk_paragraph(&text);
+        assert!(chunks.len() > 1, "超长西文段落必须分块");
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= MAX_CHUNK_CHARS);
+            assert!(!chunk.starts_with(' ') && !chunk.ends_with(' '));
+        }
+        assert_eq!(chunks.join(" "), text, "按空白切分不得丢词或改词");
+    }
+
+    #[test]
+    fn test_chunk_paragraph_hard_splits_long_single_token() {
+        // 长 URL / Base64 串这类无空白片段同样不得生成超长 URL
+        let token = "x".repeat(2_500);
+        let chunks = chunk_paragraph(&token);
+        assert!(chunks.len() >= 4);
+        assert!(chunks.iter().all(|c| c.chars().count() <= MAX_CHUNK_CHARS));
+        assert_eq!(chunks.concat(), token);
+    }
+
+    #[test]
+    fn test_chunk_paragraph_short_text_single_chunk() {
+        let chunks = chunk_paragraph("hello 世界");
+        assert_eq!(chunks, vec!["hello 世界".to_string()]);
     }
 
     #[test]

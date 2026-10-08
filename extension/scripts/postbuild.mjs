@@ -18,4 +18,11 @@ fs.copyFileSync(
   path.join(distDir, 'popup.html')
 )
 
-console.log('[Extension Build] manifest.json and popup.html successfully copied to dist/')
+// Chrome 原生 i18n 文案目录必须随产物一起分发
+fs.cpSync(
+  path.join(rootDir, '_locales'),
+  path.join(distDir, '_locales'),
+  { recursive: true }
+)
+
+console.log('[Extension Build] manifest.json, popup.html and _locales/ successfully copied to dist/')

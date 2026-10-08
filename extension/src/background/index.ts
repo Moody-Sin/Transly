@@ -44,13 +44,26 @@ interface TaskProgressState {
 // 每个 Tab 独立维护翻译进度快照
 const tabProgressMap = new Map<number, TaskProgressState>()
 
+/**
+ * 写入徽标。
+ *
+ * 必须带 tabId：不传 tabId 会写全局徽标，多个标签页同时翻译时互相覆盖。
+ * sender.tab 缺失（理论上不会发生）时退化为全局徽标。
+ */
+function setBadge(tabId: number | undefined, text: string, color?: string) {
+  const target = tabId === undefined ? {} : { tabId }
+  chrome.action.setBadgeText({ text, ...target })
+  if (color) {
+    chrome.action.setBadgeBackgroundColor({ color, ...target })
+  }
+}
+
 // 监听翻译进度事件更新浏览器扩展徽标 Badge 并持久化在内存供 Popup 回显
 chrome.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab?.id
 
   if (message.type === 'TRANSLATION_STARTED') {
-    chrome.action.setBadgeText({ text: '0%' })
-    chrome.action.setBadgeBackgroundColor({ color: '#4f46e5' })
+    setBadge(tabId, '0%', '#4f46e5')
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
@@ -62,8 +75,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }
   } else if (message.type === 'TRANSLATION_PROGRESS') {
     const pct = message.total > 0 ? Math.round((message.completed / message.total) * 100) : 0
-    chrome.action.setBadgeText({ text: `${pct}%` })
-    chrome.action.setBadgeBackgroundColor({ color: message.failedBatches > 0 ? '#f59e0b' : '#4f46e5' })
+    setBadge(tabId, `${pct}%`, message.failedBatches > 0 ? '#f59e0b' : '#4f46e5')
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
@@ -75,8 +87,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }
   } else if (message.type === 'TRANSLATION_FINISHED' || message.type === 'TRANSLATION_PARTIAL_FAILED') {
     const partial = message.type === 'TRANSLATION_PARTIAL_FAILED'
-    chrome.action.setBadgeText({ text: partial ? 'WARN' : 'DONE' })
-    chrome.action.setBadgeBackgroundColor({ color: partial ? '#f59e0b' : '#10b981' })
+    setBadge(tabId, partial ? 'WARN' : 'DONE', partial ? '#f59e0b' : '#10b981')
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
@@ -88,10 +99,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       })
     }
     setTimeout(() => {
-      chrome.action.setBadgeText({ text: '' })
+      setBadge(tabId, '')
     }, 3000)
   } else if (message.type === 'TRANSLATION_CANCELLED') {
-    chrome.action.setBadgeText({ text: '' })
+    setBadge(tabId, '')
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
@@ -103,7 +114,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       })
     }
   } else if (message.type === 'TRANSLATION_RESTORED') {
-    chrome.action.setBadgeText({ text: '' })
+    setBadge(tabId, '')
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
@@ -115,8 +126,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       })
     }
   } else if (message.type === 'TRANSLATION_FAILED') {
-    chrome.action.setBadgeText({ text: 'ERR' })
-    chrome.action.setBadgeBackgroundColor({ color: '#ef4444' })
+    setBadge(tabId, 'ERR', '#ef4444')
     if (tabId) {
       tabProgressMap.set(tabId, {
         generation: message.generation,
@@ -127,7 +137,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       })
     }
     setTimeout(() => {
-      chrome.action.setBadgeText({ text: '' })
+      setBadge(tabId, '')
     }, 4000)
   }
 })

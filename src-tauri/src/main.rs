@@ -17,6 +17,42 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::RwLock;
 use transly_core::{AppConfig, Glossary, TranslationCache};
 
+/// 将浮窗移动到光标附近，并夹取到光标所在显示器的可视范围内。
+///
+/// 划词与剪贴板翻译的交互预期是「译文出现在选区附近」，不能沿用系统默认坐标；
+/// 光标或显示器信息不可用时保持系统默认位置，不阻断浮窗展示。
+fn place_float_near_cursor(win: &tauri::WebviewWindow) {
+    let (Ok(cursor), Ok(size)) = (win.cursor_position(), win.outer_size()) else {
+        return;
+    };
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+
+    let (min_x, min_y, max_x, max_y) = match monitor {
+        Some(m) => {
+            let pos = m.position();
+            let monitor_size = m.size();
+            (
+                pos.x as f64,
+                pos.y as f64,
+                pos.x as f64 + monitor_size.width as f64,
+                pos.y as f64 + monitor_size.height as f64,
+            )
+        }
+        None => (0.0, 0.0, f64::MAX, f64::MAX),
+    };
+
+    let width = size.width as f64;
+    let height = size.height as f64;
+    // 水平居中对齐光标，垂直放在光标下方，避开正在阅读的选区
+    let x = (cursor.x - width / 2.0).clamp(min_x, (max_x - width).max(min_x));
+    let y = (cursor.y + 20.0).clamp(min_y, (max_y - height).max(min_y));
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 fn main() {
     let config = AppConfig::default();
 
@@ -167,9 +203,12 @@ fn main() {
                                         *slot = Some(req.clone());
                                     }
                                     if let Some(float_win) = handle.get_webview_window("float") {
+                                        place_float_near_cursor(&float_win);
                                         let _ = float_win.show();
                                         let _ = float_win.set_focus();
-                                        let _ = float_win.emit("float-translate", req);
+                                        // 必须 emit_to：Emitter::emit 会广播给所有窗口，
+                                        // 主窗口连带翻译一次并将划词结果写进主窗口输出区
+                                        let _ = float_win.emit_to("float", "float-translate", req);
                                     }
                                 }
 
@@ -222,9 +261,11 @@ fn main() {
                         *slot = Some(req.clone());
                     }
                     if let Some(float_win) = clip_handle.get_webview_window("float") {
+                        place_float_near_cursor(&float_win);
                         let _ = float_win.show();
                         let _ = float_win.set_focus();
-                        let _ = float_win.emit("float-translate", req);
+                        // 同上：仅投递给浮窗，避免主窗口重复翻译
+                        let _ = float_win.emit_to("float", "float-translate", req);
                     }
                 }
             });

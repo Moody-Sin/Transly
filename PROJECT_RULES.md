@@ -112,6 +112,7 @@ transly/
 │   │   ├── clipboard_gate.rs  # 剪贴板去重与划词抑制判定（纯函数）
 │   │   ├── ocr.rs             # 平台原生 OCR（Windows WinRT，其余平台返回未支持）
 │   │   └── secrets.rs         # 密钥读写（系统凭据管理器）
+│   ├── capabilities/          # Tauri 2 ACL 能力声明（前端插件命令最小放行白名单）
 │   ├── bin/export_bindings.rs # 导出 tauri-specta 强类型绑定
 │   ├── Cargo.toml
 │   └── tauri.conf.json
@@ -126,7 +127,9 @@ transly/
 │   ├── src/
 │   │   ├── background/        # 后台通信（负责与桌面端 127.0.0.1 HTTP 通信）
 │   │   ├── content/           # 页面 DOM 原地提取与替换
+│   │   ├── i18n/              # chrome.i18n 查询封装与静态文案注入
 │   │   └── popup/             # 插件工具栏弹窗 UI
+│   ├── _locales/              # Chrome 原生 i18n 文案（zh_CN / en）
 │   ├── manifest.json
 │   └── package.json
 │

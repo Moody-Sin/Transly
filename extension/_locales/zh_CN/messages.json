@@ -1,0 +1,89 @@
+{
+  "extName": {
+    "message": "Transly 沉浸式网页翻译"
+  },
+  "extDescription": {
+    "message": "极简保真整页网页翻译（仅译文模式），由 Transly 桌面端强力驱动。"
+  },
+  "connChecking": {
+    "message": "检测连接中..."
+  },
+  "connServerDown": {
+    "message": "○ 桌面端未运行"
+  },
+  "connTokenExpired": {
+    "message": "▲ Token 已失效，请重新配对"
+  },
+  "connUnpaired": {
+    "message": "▲ 未配对 Token"
+  },
+  "connPaired": {
+    "message": "● 已连接且配对有效"
+  },
+  "engineGoogle": {
+    "message": "Google 网页翻译"
+  },
+  "btnTranslate": {
+    "message": "翻译此网页 (仅译文)"
+  },
+  "btnCancel": {
+    "message": "取消翻译"
+  },
+  "btnRetry": {
+    "message": "重试失败项"
+  },
+  "btnRestore": {
+    "message": "还原原文"
+  },
+  "tokenPlaceholder": {
+    "message": "粘贴桌面端配对 Token"
+  },
+  "btnSaveToken": {
+    "message": "保存配对 Token"
+  },
+  "btnSavedToken": {
+    "message": "已保存 ✓"
+  },
+  "progressPreparing": {
+    "message": "准备翻译..."
+  },
+  "progressAnalyzing": {
+    "message": "分析页面..."
+  },
+  "progressTranslating": {
+    "message": "正在翻译..."
+  },
+  "progressFinished": {
+    "message": "翻译完成 ✓"
+  },
+  "progressCancelled": {
+    "message": "已取消"
+  },
+  "progressCancelledRetryable": {
+    "message": "已取消，$COUNT$ 项可重试",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "progressPartiallyFailed": {
+    "message": "部分完成，$COUNT$ 项失败",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "progressFailed": {
+    "message": "翻译失败，$COUNT$ 项可重试",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "cannotAccessPage": {
+    "message": "无法访问当前页面，请改用普通网页重试"
+  }
+}

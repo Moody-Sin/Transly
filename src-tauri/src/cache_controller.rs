@@ -40,7 +40,9 @@ impl CacheController {
     where
         F: FnOnce() -> Result<()>,
     {
-        let _guard = self.sync_gate.lock().unwrap();
+        // 门禁锁不守护任何数据（仅 () ），因此即使上一次持锁过程 panic 导致中毒，
+        // 直接取回内部值也是安全的，避免一次 panic 永久瘫痪整个缓存写入路径。
+        let _guard = self.sync_gate.lock().unwrap_or_else(|e| e.into_inner());
         if self.enabled.load(Ordering::Relaxed)
             && self.generation.load(Ordering::Relaxed) == start_gen
         {
@@ -52,7 +54,7 @@ impl CacheController {
 
     /// 原子关闭缓存并执行清空操作：在同一同步门禁内递增 generation、切换状态并清空磁盘缓存
     pub fn disable_and_clear(&self, cache: &TranslationCache) -> Result<usize> {
-        let _guard = self.sync_gate.lock().unwrap();
+        let _guard = self.sync_gate.lock().unwrap_or_else(|e| e.into_inner());
         self.enabled.store(false, Ordering::Relaxed);
         self.generation.fetch_add(1, Ordering::SeqCst);
         cache.clear_all_cache()
@@ -60,7 +62,7 @@ impl CacheController {
 
     /// 启用缓存并原子递增 generation
     pub fn enable(&self) {
-        let _guard = self.sync_gate.lock().unwrap();
+        let _guard = self.sync_gate.lock().unwrap_or_else(|e| e.into_inner());
         self.enabled.store(true, Ordering::Relaxed);
         self.generation.fetch_add(1, Ordering::SeqCst);
     }

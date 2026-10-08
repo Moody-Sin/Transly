@@ -198,7 +198,9 @@ export function startDynamicObserver(
         }
         if (batchEntries.length === 0 || generation !== currentGeneration) return
 
-        currentTaskEntries.push(...batchEntries)
+        // 增量批次是独立任务：用当前批次整体替换而不是追加。
+        // 追加会让无限滚动页面持续增长该数组，并强引用已脱离文档的 Text 节点。
+        currentTaskEntries = batchEntries
         currentTaskTotal = batchEntries.length
         currentTaskCompleted = 0
         failedItemsMap.clear()

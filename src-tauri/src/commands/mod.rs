@@ -145,8 +145,12 @@ pub async fn add_glossary_term(
     cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
-    cache
-        .set_glossary_term(&source, &target)
+    // SQLite 写入为同步阻塞 I/O，禁止占用 async 运行时工作线程
+    let cache_ref = cache.inner().clone();
+    let (write_source, write_target) = (source.clone(), target.clone());
+    tokio::task::spawn_blocking(move || cache_ref.set_glossary_term(&write_source, &write_target))
+        .await
+        .map_err(|e| format!("术语写入任务调度异常: {e}"))?
         .map_err(|e| e.to_string())?;
     let mut g = glossary.write().await;
     g.insert(source, target);
@@ -176,11 +180,21 @@ pub async fn delete_glossary_term(
     cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
-    cache
-        .delete_glossary_term(&source)
-        .map_err(|e| e.to_string())?;
+    // SQLite 删除与全表回读均为同步阻塞 I/O，统一下沉到阻塞线程池
+    let cache_ref = cache.inner().clone();
+    let deleted_key = source.clone();
+    let terms = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>, String> {
+        cache_ref
+            .delete_glossary_term(&deleted_key)
+            .map_err(|e| e.to_string())?;
+        cache_ref
+            .get_all_glossary_terms()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("术语删除任务调度异常: {e}"))??;
+
     // 重新构建内存术语库
-    let terms = cache.get_all_glossary_terms().map_err(|e| e.to_string())?;
     let mut g = glossary.write().await;
     *g = Glossary::new();
     for (src, tgt) in terms {
@@ -368,7 +382,11 @@ pub async fn get_server_token() -> Result<String, String> {
 pub async fn rotate_server_token(
     current_token: tauri::State<'_, Arc<RwLock<String>>>,
 ) -> Result<String, String> {
-    let new_token = crate::secrets::rotate_server_token().map_err(|e| e.to_string())?;
+    // keyring 写入为同步阻塞 I/O，禁止占用 async 运行时工作线程
+    let new_token = tokio::task::spawn_blocking(crate::secrets::rotate_server_token)
+        .await
+        .map_err(|e| format!("Token 轮换任务调度异常: {e}"))?
+        .map_err(|e| e.to_string())?;
     let mut lock = current_token.write().await;
     *lock = new_token.clone();
     Ok(new_token)

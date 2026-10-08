@@ -42,6 +42,11 @@ export default function App() {
   const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
   const isTranslating = state === 'running'
 
+  // 默认 Google 引擎在部分网络（如中国大陆）不可达：
+  // 命中网络类错误时必须给出可执行的替代方案，而不是只报「检查网络」
+  const showNetworkEngineHint =
+    error?.kind === 'network' && (engine === 'google' || engine === 'google_web')
+
   const loadGlossaryList = () => {
     commands.getGlossaryTerms().then((res) => {
       if (res.status === 'ok') {
@@ -265,6 +270,11 @@ export default function App() {
                   {t.task.btnRetry}
                 </button>
               )}
+              {showNetworkEngineHint && (
+                <span className="text-[10px] leading-snug text-amber-600">
+                  {t.error.networkHintGoogle}
+                </span>
+              )}
             </div>
           ) : (
             translatedText || <span className="text-slate-400">{t.float.placeholder}</span>
@@ -388,15 +398,20 @@ export default function App() {
               className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
             />
             {error && (
-              <div className="mt-1 flex items-start gap-2 text-xs">
-                <span className="text-rose-500">{t.error[error.kind]}</span>
-                {canRetry(state, error) && (
-                  <button
-                    onClick={runner.retry}
-                    className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 font-medium text-rose-600 hover:bg-rose-100"
-                  >
-                    {t.task.btnRetry}
-                  </button>
+              <div className="mt-1 flex flex-col gap-1 text-xs">
+                <div className="flex items-start gap-2">
+                  <span className="text-rose-500">{t.error[error.kind]}</span>
+                  {canRetry(state, error) && (
+                    <button
+                      onClick={runner.retry}
+                      className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 font-medium text-rose-600 hover:bg-rose-100"
+                    >
+                      {t.task.btnRetry}
+                    </button>
+                  )}
+                </div>
+                {showNetworkEngineHint && (
+                  <span className="text-amber-600">{t.error.networkHintGoogle}</span>
                 )}
               </div>
             )}

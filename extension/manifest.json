@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Transly 沉浸式网页翻译",
+  "name": "__MSG_extName__",
+  "default_locale": "zh_CN",
   "version": "0.2.0",
-  "description": "极简保真整页网页翻译（仅译文模式），由 Transly 桌面端强力驱动。",
+  "description": "__MSG_extDescription__",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["http://127.0.0.1:39281/*"],
   "background": {

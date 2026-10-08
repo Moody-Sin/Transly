@@ -70,8 +70,12 @@ impl TranslationCache {
         let cache = dirs_cache_path()
             .and_then(|p| Self::new(p).ok())
             .or_else(|| Self::in_memory().ok())
+            // 最后兜底：仅当系统内存耗尽致 sqlite 无法分配连接时才会失败。
+            // 此时进程已无法提供翻译服务，用 expect 显式暴露启动期故障，优于静默降级。
             .unwrap_or_else(|| Self {
-                conn: Mutex::new(Connection::open_in_memory().unwrap()),
+                conn: Mutex::new(
+                    Connection::open_in_memory().expect("内存耗尽，无法建立内存缓存连接"),
+                ),
             });
         Arc::new(cache)
     }

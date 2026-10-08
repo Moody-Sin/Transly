@@ -48,6 +48,7 @@
     "input": "Invalid input; check the text and language selection",
     "auth": "API key not configured; add it in Settings",
     "network": "Network failed; check your connection and retry",
+    "networkHintGoogle": "The default Google engine is unreachable on some networks. Add a DeepL / DeepSeek key in Settings, then switch engine.",
     "engine": "Engine error; retry or switch engines",
     "internal": "Internal error; please retry"
   },

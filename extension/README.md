@@ -25,13 +25,18 @@
 - **增量监听 (MutationObserver)**：自适应 SPA 页面动态加载与瀑布流内容。
 - **主动注入（非常驻）**：不声明 `content_scripts` 常驻注入，也不申请 `<all_urls>` 宿主权限。仅在用户点击「翻译此网页」时通过 `chrome.scripting.executeScript` 注入，与 `PRIVACY_POLICY.md` 的「仅在主动触发时提取 DOM 文本」承诺一致。
 - **终态广播一次**：任务级终态（完成 / 部分失败 / 失败）由首屏任务、重试或增量批次组在单组结束后广播一次，不在批次函数内广播，否则动态增量监听会导致徽标持续闪烁。
-
 ## 构建与调试
 
 ```sh
 cd extension
 pnpm build
 ```
+
+产物输出到 `extension/dist`：`manifest.json`、`popup.html` 与 `_locales/` 由 `scripts/postbuild.mjs` 复制。
+
+### 文案国际化
+
+所有 UI 文案存放在 `_locales/zh_CN|en/messages.json`（Chrome 原生 i18n），代码与 HTML 只用 `t()` 或 `data-i18n*` 引用，禁止硬编码文案；`manifest.json` 的名称与描述通过 `__MSG_*__` 引用，随浏览器语言自动切换。
 
 在 Chrome 或 Edge 扩展管理界面中开启开发者模式，点击“加载已解压的扩展程序”，选择 `extension/dist` 即可。
 

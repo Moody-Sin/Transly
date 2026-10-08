@@ -130,10 +130,14 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
 
   const retry = useCallback(() => {
     const last = lastRunRef.current
-    // 守卫：仅失败态且错误可重试时才允许重跑，与 UI 的 canRetry 判定一致
-    if (!canRetryExecution(snapshotRef.current.state, snapshotRef.current.error, last !== null))
+    // 从未发起过请求时无可重跑内容；静默返回会让按钮看起来失效，因此记录一次
+    if (!last) {
+      console.warn('[Transly] 重试被忽略：尚无历史请求')
       return
-    void execute(last!.text, last!.source)
+    }
+    // 守卫：仅失败态且错误可重试时才允许重跑，与 UI 的 canRetry 判定一致
+    if (!canRetryExecution(snapshotRef.current.state, snapshotRef.current.error, true)) return
+    void execute(last.text, last.source)
   }, [execute])
 
   // 订阅划词 / 剪贴板事件：按 request_id 去重，同一段文本只翻译一次。
@@ -161,20 +165,23 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       .catch((err) => {
         console.warn('[Transly] float-translate 事件订阅失败：', err)
       })
-    // 兜底：拉取宿主暂存的请求（浮窗首次就绪前的 emit 会丢失）
-    commands
-      .takePendingFloatRequest()
-      .then((res) => {
-        if (res.status !== 'ok' || !res.data.has_request) return
-        handle({
-          text: res.data.text,
-          source: res.data.source as FloatRequest['source'],
-          request_id: res.data.request_id,
-        })
-      })
-      .catch((err) => {
+    // 兜底：循环排空宿主暂存的请求队列（浮窗首次就绪前的 emit 会丢失，
+    // 且划词与剪贴板两条链路可能各积压一条，只拉一次会漏掉其余）
+    void (async () => {
+      try {
+        for (;;) {
+          const res = await commands.takePendingFloatRequest()
+          if (res.status !== 'ok' || !res.data.has_request) break
+          handle({
+            text: res.data.text,
+            source: res.data.source as FloatRequest['source'],
+            request_id: res.data.request_id,
+          })
+        }
+      } catch (err) {
         console.warn('[Transly] 拉取待处理浮窗请求失败：', err)
-      })
+      }
+    })()
     return () => {
       if (unlisten) unlisten()
     }
@@ -193,7 +200,9 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   const needsSticky = isFloatWindow && (snapshot.state === 'running' || snapshot.error !== null)
   useEffect(() => {
     if (!isFloatWindow) return
-    commands.setFloatSticky(needsSticky).catch(() => {})
+    commands.setFloatSticky(needsSticky).catch((err) => {
+      console.warn('[Transly] 设置浮窗粘滞失败：', err)
+    })
   }, [needsSticky, isFloatWindow])
 
   return { snapshot, run, cancel, retry }

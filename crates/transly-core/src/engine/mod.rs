@@ -27,14 +27,12 @@ pub struct TranslationResponse {
 }
 
 impl TranslationResponse {
+    /// 实际产出译文的引擎标识（剥离 `(fallback)` 后缀）。
+    /// 缓存写入必须用它，否则降级路径会与查询侧的 key 不对称而永久 Miss。
     pub fn actual_engine(&self) -> &str {
         self.engine
             .strip_suffix("(fallback)")
             .unwrap_or(&self.engine)
-    }
-
-    pub fn is_fallback(&self) -> bool {
-        self.engine.ends_with("(fallback)")
     }
 }
 
@@ -67,17 +65,6 @@ impl BatchItemResult {
         match self {
             BatchItemResult::Success { id, .. } => id,
             BatchItemResult::Failed { id, .. } => id,
-        }
-    }
-
-    pub fn is_success(&self) -> bool {
-        matches!(self, BatchItemResult::Success { .. })
-    }
-
-    pub fn engine(&self) -> Option<&str> {
-        match self {
-            BatchItemResult::Success { engine, .. } => Some(engine.as_str()),
-            BatchItemResult::Failed { .. } => None,
         }
     }
 }
@@ -124,6 +111,61 @@ pub trait TranslateEngine: Send + Sync {
     }
 }
 
+/// 单次批量请求的硬上限（项数）。
+///
+/// 三处必须共用同一常量：引擎契约（`EngineCapabilities::max_batch_size` 上限）、
+/// 本地 HTTP 服务入口校验、扩展端切批大小。任一处各写一个数字必然漂移。
+pub const MAX_BATCH_ITEMS: usize = 30;
+
+/// 单次批量请求的字符总量上限。
+///
+/// 扩展端按「项数」切批，服务端按「字符总量」拒绝，两者量纲不同：
+/// 30 项 × 平均 1667 字即触及此上限，整批被 413 拒绝。
+/// 因此切批必须同时满足两个上限，由 [`plan_batch_ranges`] 统一决定。
+pub const MAX_BATCH_TOTAL_CHARS: usize = 50_000;
+
+/// 单条文本的字符上限（与 `validate_translation_input` 一致）。
+pub const MAX_ITEM_CHARS: usize = 10_000;
+
+/// 将一批文本按项数与字符总量双上限切成连续区间的下标。
+///
+/// 返回 `Vec<(start, end)>`（左闭右开），保证：
+/// - 每个区间内字符总量不超过 `MAX_BATCH_TOTAL_CHARS`；
+/// - 每个区间内项数不超过 `MAX_BATCH_ITEMS`；
+/// - 单条文本自身超限时不静默丢弃，独占一个区间，交由服务端逐项报错。
+pub fn plan_batch_ranges<I, S>(texts: I) -> Vec<(usize, usize)>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let lens: Vec<usize> = texts
+        .into_iter()
+        .map(|t| t.as_ref().chars().count())
+        .collect();
+
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    let mut acc = 0usize;
+
+    for (idx, len) in lens.iter().enumerate() {
+        let count = idx - start;
+        let over_chars = acc + len > MAX_BATCH_TOTAL_CHARS;
+        let over_items = count >= MAX_BATCH_ITEMS;
+
+        if count > 0 && (over_chars || over_items) {
+            ranges.push((start, idx));
+            start = idx;
+            acc = 0;
+        }
+        acc += len;
+    }
+
+    if start < lens.len() {
+        ranges.push((start, lens.len()));
+    }
+    ranges
+}
+
 /// 统一的带 Fallback 降级感知的缓存查询纯函数（杜绝在 IPC 与 HTTP Server 两处重复造轮子与字符串嗅探）
 pub fn lookup_cache_with_fallback(
     cache: &crate::TranslationCache,
@@ -152,6 +194,63 @@ pub fn lookup_cache_with_fallback(
 mod tests {
     use super::*;
 
+    fn ranges_of(texts: &[String]) -> Vec<(usize, usize)> {
+        plan_batch_ranges(texts.iter())
+    }
+
+    #[test]
+    fn test_plan_batch_ranges_splits_on_char_total() {
+        // 回归：扩展端按项数切批（30 项），服务端按字符总量拒绝（50000），
+        // 量纲错配导致 30×2000 字的批次被整批 413 拒绝。
+        let texts = vec!["a".repeat(2_000); 30];
+        let ranges = ranges_of(&texts);
+        assert!(ranges.len() > 1, "超出字符总量上限必须切成多批");
+        for (start, end) in &ranges {
+            let total: usize = texts[*start..*end].iter().map(|t| t.chars().count()).sum();
+            assert!(
+                total <= MAX_BATCH_TOTAL_CHARS,
+                "每批字符总量不得超限，实际 {total}"
+            );
+            assert!(
+                end - start <= MAX_BATCH_ITEMS,
+                "每批项数不得超限，实际 {}",
+                end - start
+            );
+        }
+        // 区间必须连续且完整覆盖，不得丢项或重复
+        assert_eq!(ranges.first().map(|r| r.0), Some(0));
+        assert_eq!(ranges.last().map(|r| r.1), Some(texts.len()));
+        for pair in ranges.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "区间必须连续");
+        }
+    }
+
+    #[test]
+    fn test_plan_batch_ranges_splits_on_item_count() {
+        // 短文本时由项数上限主导
+        let texts = vec!["hi".to_string(); 100];
+        let ranges = ranges_of(&texts);
+        assert_eq!(ranges, vec![(0, 30), (30, 60), (60, 90), (90, 100)]);
+    }
+
+    #[test]
+    fn test_plan_batch_ranges_single_oversized_item_isolated() {
+        // 单条自身超限：不静默丢弃，独占一批交由服务端逐项报错
+        let texts = vec!["a".repeat(60_000), "b".to_string(), "c".to_string()];
+        let ranges = ranges_of(&texts);
+        assert_eq!(ranges[0], (0, 1), "超长项必须独占一批");
+        assert_eq!(ranges[1], (1, 3), "其余项正常成批");
+    }
+
+    #[test]
+    fn test_plan_batch_ranges_edge_cases() {
+        assert!(ranges_of(&[]).is_empty(), "空输入不得产出区间");
+        assert_eq!(ranges_of(&["x".to_string()]), vec![(0, 1)]);
+        // 恰好等于上限时不分批
+        let exact = vec!["a".repeat(MAX_BATCH_TOTAL_CHARS / 2); 2];
+        assert_eq!(ranges_of(&exact), vec![(0, 2)]);
+    }
+
     #[test]
     fn test_batch_item_contracts() {
         let success_item = BatchItemResult::Success {
@@ -166,12 +265,6 @@ mod tests {
             error_kind: ErrorKind::Engine,
             message: "请求超时".to_string(),
         };
-
-        assert_eq!(success_item.id(), "node_1");
-        assert!(success_item.is_success());
-
-        assert_eq!(failed_item.id(), "node_2");
-        assert!(!failed_item.is_success());
 
         // 验证序列化格式
         let json_success = serde_json::to_string(&success_item).unwrap();

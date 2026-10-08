@@ -8,6 +8,23 @@
 ## [未发布]
 
 ### 修复
+- **扩展批量上限与服务端量纲错配导致整批静默失败 (P0)**：扩展端按「项数 30」切批，服务端按「字符总量 50000」拒绝——两者量纲不同。30 个平均 1667 字的正文节点字符总量即越过上限，服务端返回 413，该批**全部**节点被标为失败且页面无任何提示。现把 `MAX_BATCH_ITEMS` / `MAX_BATCH_TOTAL_CHARS` / `MAX_ITEM_CHARS` 收敛到 `transly-core` 单一来源，服务端在 `/health` 公开，扩展端新增 `shared/batchPlan.ts` 的 `planBatchRanges` 按双上限切批；并加 413 对半拆批兜底（服务端收紧上限时无需两端同时升级）。新增 5 项 Rust 回归测试（含「项数未超但总量超限必须 413」的核心用例）与 6 项 TS 单测。
+- **浮窗并发请求被覆盖丢失 (P0)**：`PendingFloatRequest` 是单槽 `Option`，而划词（快捷键）与剪贴板监听是两条独立链路共用同一槽位，后到的请求直接覆盖先到的。浮窗 JS 未就绪时（首次呼出、WebView 重建）先到的请求永久丢失，用户表现为「第一次划词没反应」。现改为有界 FIFO 队列 `PendingFloatRequests`（容量 16，溢出丢弃最旧项并打印告警），前端循环排空队列而非只拉一次。新增 2 项单测锁定 FIFO 顺序与容量边界。
+- **构建期绑定导出路径越界 (P1)**：`main.rs` 在 `debug_assertions` 下执行 `.export(Typescript::default(), "../src/bindings.ts")`，相对路径被按**进程 cwd** 解析。从仓库根执行 `cargo test` / `cargo run` 时会在仓库外（实测 `D:/Project/src/bindings.ts`）凭空生成文件。现改为相对 `CARGO_MANIFEST_DIR` 解析，与 `bin/export_bindings.rs` 的写法对齐，并已实测确认仓库外不再生成。
+- **校验错误构造路径不统一 (P2)**：`translate` 命令内有 3 处手工拼装 `TranslateErrorDto { kind: ErrorKind::Input, retryable: false }`，绕过 `classify_error`。新增校验项时极易漏改某一条。现 `validate_translation_input` / `validate_language_pair` 统一返回 `Error::Input`，调用方一律走 `TranslateErrorDto::from_error`；HTTP 侧语言校验也改为复用同一函数，消除「不支持该语言」的两份判定。
+- **扩展 `failedItemsMap` 无界增长 (P2)**：强引用 Map 随 SPA 导航与多次还原无限增长，并钉住已脱离文档的 Text 节点。现容量封顶 2000，超出丢弃最旧项（新增 `rememberFailed`）。
+- **扩展动态监听持有陈旧代际 (P2)**：`startDynamicObserver` 接收调用方传入的 `generation` 并在闭包内比较。但该监听是单例（重复调用直接 return），重试或新任务后监听器仍持旧代际，导致增量节点永久不再收集。现改为闭包内读取模块级 `currentGeneration`。
+- **扩展进度快照不清理 (P3)**：`tabProgressMap` 按 tabId 累积且无清理路径，Service Worker 长生命周期下持续增长。现接入 `chrome.tabs.onRemoved` 与 `onUpdated(loading)`。
+- **空 `catch` 吞掉可诊断错误 (P2)**：`App.tsx` 5 处 `.catch(() => {})` 改为 `console.warn`（读取术语库、3 个引擎密钥状态、引擎能力）；`useTaskRunner` 的 `setFloatSticky` 同样暴露。`Lessons Learned` 第 8 条已写明该规程（ACL 拒绝曾被静默数月），但本轮之前只落实了事件订阅一处。
+- **`useTaskRunner.retry` 无历史请求时静默失效 (P3)**：`retry` 在 `lastRunRef` 为空时直接 `return`，按钮看起来失灵且无任何提示。现加 `console.warn` 说明原因。
+
+### 变更
+- **lefthook 提交门禁真正生效 (P2)**：`PROJECT_RULES.md` 声称「提交前通过 lefthook 自动校验」，但 lefthook 既不在依赖、也无 `prepare` 脚本，`.git/hooks` 只有 `.sample`——该规则从未生效。现新增 `lefthook` 依赖与 `prepare: lefthook install`，并在 `pnpm-workspace.yaml` 的 `allowBuilds` 放行其 postinstall（需下载平台二进制）。
+- **文档与实现对齐 (P2)**：`PROJECT_RULES.md`、`extension/README.md`、`PRIVACY_POLICY.md` 中「聚合**可视区域**文本块」的表述与实现不符（实为全量 `document.body` 遍历，不做可视裁剪），已如实改写；隐私政策同时补明提取范围排除脚本/样式/代码块/输入控件/可编辑区域。`PROJECT_RULES.md` 新增「批量请求上限（单一契约来源）」一节。
+- **清理死代码 (P3)**：移除仅被自身单测调用的 `TranslationResponse::is_fallback`、`BatchItemResult::is_success` / `engine`（改由测试直接匹配枚举变体）、`AppConfig::new`（只被单测调用）；`MIN_CLIPBOARD_CHARS` 收窄为模块私有。
+- **`test:task` 覆盖扩展端纯函数 (P3)**：根 `test:task` 增加 `extension/src/shared/*.test.ts`；扩展 `tsconfig.json` 排除测试文件（其 `node:test` 依赖不在扩展运行时类型集内）。
+
+### 修复（上一轮）
 - **中文 445~1000 字段落仍绕过切块上限 (P1)**：上一轮为 `GoogleWebEngine` 引入的 `chunk_paragraph` 上限是「编码后长度 4000」，但**是否进入分块**的判定写的是 `chars().count() > 1000`——量纲错配。`urlencoding` 将中文 1 字膨胀为 9 字符，因此 445~1000 字的中文段落字符数未超 1000（不进分块）、编码后却达 4005~9000（越过自身上限），直连生成超长 URL。危险的是该区间当时能侥幸返回 200，既无测试失败也无线上报错。现改为 `needs_chunking()` 按编码长度判定，与分块上限同量纲，并新增 2 项回归测试（含“用例必须落在旧门槛盲区内”的自校验断言）。
 - **SVG 文本被翻译导致图表/地图标注破版 (P2)**：`IGNORED_TAGS` 黑名单含 `'SVG'`，但 HTML 元素的 `tagName` 返回大写、SVG 命名空间元素返回小写，`has('SVG')` 恒为 false；同处的 `closest()` 选择器也未含 `svg`，两道防线同时失效。现统一 `toUpperCase()` 后比较，并在选择器补 `svg`。
 - **隐私政策声称“加密 SQLite 缓存”与事实不符 (P1)**：`PRIVACY_POLICY.md` 写「建立加密/受保护的 SQLite 缓存」，实测 `cache.db` 为明文 SQLite（文件头 `SQLite format 3`，可直接读出中文原文），无 sqlcipher 亦无字段加密。这对 Chrome 商店审核与用户构成不实陈述。现改为如实描述「本地 SQLite 文件，受操作系统账户权限保护，未做额外加密」。

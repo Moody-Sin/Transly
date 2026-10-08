@@ -65,24 +65,28 @@ export default function App() {
       .then((res) => {
         if (res.status === 'ok') {
           setGlossaryList(res.data)
+        } else {
+          console.warn('[Transly] 读取术语库失败：', res.error)
         }
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.warn('[Transly] 读取术语库失败：', err)
+      })
   }
 
   const checkConfiguredKeys = () => {
     commands
       .isApiKeyConfigured('deepl')
       .then(setDeeplConfigured)
-      .catch(() => {})
+      .catch((err) => console.warn('[Transly] 读取 DeepL 密钥状态失败：', err))
     commands
       .isApiKeyConfigured('deepseek')
       .then(setDeepseekConfigured)
-      .catch(() => {})
+      .catch((err) => console.warn('[Transly] 读取 DeepSeek 密钥状态失败：', err))
     commands
       .isApiKeyConfigured('openai')
       .then(setOpenaiConfigured)
-      .catch(() => {})
+      .catch((err) => console.warn('[Transly] 读取 OpenAI 密钥状态失败：', err))
   }
 
   useEffect(() => {
@@ -156,7 +160,9 @@ export default function App() {
       .then((res) => {
         if (!cancelled && res.status === 'ok') setCapabilities(res.data)
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.warn('[Transly] 读取引擎能力失败：', err)
+      })
     return () => {
       cancelled = true
     }

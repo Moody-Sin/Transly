@@ -2,8 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
-#[cfg(debug_assertions)]
-use specta_typescript::Typescript;
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -111,11 +109,11 @@ fn main() {
 
     let builder = src_tauri::app_command_builder!();
 
+    // 开发期自动刷新绑定。导出逻辑与路径基准统一在 `src_tauri::export_bindings`，
+    // 不在此处再写一遍路径（相对路径会被按进程 cwd 解析，
+    // 从仓库根执行 `cargo test` / `cargo run` 时会在仓库外凭空生成文件）。
     #[cfg(debug_assertions)]
-    builder
-        .export(Typescript::default(), "../src/bindings.ts")
-        .expect("Failed to export typescript bindings");
-
+    src_tauri::export_bindings().expect("Failed to export typescript bindings");
     // 剪贴板监听开关（从持久化凭据库加载状态，默认关闭）
     let initial_monitor = secrets::get_secret("clipboard_monitor_enabled")
         .map(|v| v == "true")
@@ -154,13 +152,13 @@ fn main() {
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
         .manage(Arc::new(commands::FloatSticky::default()))
-        .manage(Arc::new(commands::PendingFloatRequest::default()))
+        .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             let pending_slot = app
-                .state::<Arc<commands::PendingFloatRequest>>()
+                .state::<Arc<commands::PendingFloatRequests>>()
                 .inner()
                 .clone();
             let status_slot = app
@@ -244,8 +242,8 @@ fn main() {
                                         request_id: rid,
                                     };
                                     // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
-                                    if let Ok(mut slot) = pending_slot.0.lock() {
-                                        *slot = Some(req.clone());
+                                    if pending_slot.push(req.clone()) {
+                                        eprintln!("浮窗请求队列已满，丢弃最旧请求");
                                     }
                                     if let Some(float_win) = handle.get_webview_window("float") {
                                         place_float_near_cursor(&float_win);
@@ -274,7 +272,7 @@ fn main() {
             let clip_sel_flag = selection_flag.clone();
             let clip_counter = request_counter.clone();
             let clip_pending = app
-                .state::<Arc<commands::PendingFloatRequest>>()
+                .state::<Arc<commands::PendingFloatRequests>>()
                 .inner()
                 .clone();
             tauri::async_runtime::spawn(async move {
@@ -302,8 +300,8 @@ fn main() {
                         request_id: rid,
                     };
                     // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
-                    if let Ok(mut slot) = clip_pending.0.lock() {
-                        *slot = Some(req.clone());
+                    if clip_pending.push(req.clone()) {
+                        eprintln!("浮窗请求队列已满，丢弃最旧请求");
                     }
                     if let Some(float_win) = clip_handle.get_webview_window("float") {
                         place_float_near_cursor(&float_win);

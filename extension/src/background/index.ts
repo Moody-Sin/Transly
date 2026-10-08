@@ -1,6 +1,50 @@
 const LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
 
 /**
+ * 服务端批量上限（由 `/health` 公开）。
+ *
+ * 扩展端原先按「项数 30」切批，而服务端按「字符总量 50000」拒绝：
+ * 两者量纲不同，30 个平均 1667 字的节点即触发整批 413，
+ * 该批所有节点被标为失败，页面静默无译文。因此上限必须运行时向服务端索取，
+ * 不得在本端另写一份常量。
+ */
+export interface BatchLimits {
+  maxBatchItems: number
+  maxBatchTotalChars: number
+  maxItemChars: number
+}
+
+/** 保守默认值：仅在服务端为旧版本（`/health` 未返回上限）时使用 */
+const FALLBACK_LIMITS: BatchLimits = {
+  maxBatchItems: 30,
+  maxBatchTotalChars: 50_000,
+  maxItemChars: 10_000,
+}
+
+let cachedLimits: BatchLimits | null = null
+
+async function getBatchLimits(): Promise<BatchLimits> {
+  if (cachedLimits) return cachedLimits
+  try {
+    const res = await fetch(`${LOCAL_SERVER_URL}/health`)
+    const data = (await res.json()) as Partial<{
+      max_batch_items: number
+      max_batch_total_chars: number
+      max_item_chars: number
+    }>
+    cachedLimits = {
+      maxBatchItems: data.max_batch_items ?? FALLBACK_LIMITS.maxBatchItems,
+      maxBatchTotalChars: data.max_batch_total_chars ?? FALLBACK_LIMITS.maxBatchTotalChars,
+      maxItemChars: data.max_item_chars ?? FALLBACK_LIMITS.maxItemChars,
+    }
+  } catch {
+    // 服务端未就绪时用保守值；下一次调用会重试，不永久缓存失败结果
+    return FALLBACK_LIMITS
+  }
+  return cachedLimits
+}
+
+/**
  * 注入整页翻译脚本。
  *
  * 采用**主动注入**而非 `content_scripts` 常驻声明：
@@ -42,8 +86,21 @@ interface TaskProgressState {
   failedCount?: number
 }
 
-// 每个 Tab 独立维护翻译进度快照
+// 每个 Tab 独立维护翻译进度快照。
+// 标签页关闭时必须清理：Service Worker 生命周期很长，不清理会随使用时长累积。
 const tabProgressMap = new Map<number, TaskProgressState>()
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabProgressMap.delete(tabId)
+})
+
+// 导航到新页面时旧页面的进度已无意义，一并丢弃（`tabs` 权限未申请，
+// 因此只拿得到 tabId 与 changeInfo，不做 url 判断）
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    tabProgressMap.delete(tabId)
+  }
+})
 
 /**
  * 写入徽标。
@@ -191,6 +248,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 
+  if (message.type === 'GET_BATCH_LIMITS') {
+    getBatchLimits()
+      .then((limits) => sendResponse({ ok: true, limits }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }))
+    return true
+  }
+
   if (message.type === 'ENSURE_CONTENT_SCRIPT') {
     const tabId = message.tabId
     if (typeof tabId !== 'number') {
@@ -220,12 +284,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })
         .then((res) => {
           if (!res.ok) {
-            throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+            const err = new Error(`HTTP ${res.status}: ${res.statusText}`)
+            // 413 是「批次超限」，与网络故障不同：带上状态码供调用方区分处理
+            ;(err as Error & { status?: number }).status = res.status
+            throw err
           }
           return res.json()
         })
         .then((data) => sendResponse({ ok: true, data }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }))
+        .catch((err) =>
+          sendResponse({
+            ok: false,
+            error: err.message,
+            status: (err as Error & { status?: number }).status,
+          }),
+        )
     })
     return true
   }

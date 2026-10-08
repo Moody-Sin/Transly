@@ -139,7 +139,7 @@ mod tests {
         let res = engine.translate(&req).await.unwrap();
         assert_eq!(res.text, "backup:hello");
         assert_eq!(res.engine, "backup(fallback)");
-        assert!(res.is_fallback());
+        // 缓存写入用的是剥离后缀的 actual_engine，否则降级路径缓存永久 Miss
         assert_eq!(res.actual_engine(), "backup");
     }
 

@@ -13,19 +13,13 @@ impl Default for AppConfig {
     }
 }
 
-impl AppConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_app_config_default() {
-        let cfg = AppConfig::new();
+        let cfg = AppConfig::default();
         assert_eq!(cfg.local_server_port, 39281);
     }
 }

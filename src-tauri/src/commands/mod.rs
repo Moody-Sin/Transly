@@ -45,22 +45,16 @@ pub async fn translate(
 ) -> Result<TranslateOutcomeDto, TranslateErrorDto> {
     let sl = source_lang.unwrap_or_else(|| "auto".to_string());
 
-    // 统一输入参数防线校验：参数非法属于不可重试的 Input 类
-    transly_core::validate_translation_input(&text, &sl, &target_lang).map_err(|e| {
-        TranslateErrorDto {
-            kind: ErrorKind::Input,
-            message: e.to_string(),
-            retryable: false,
-        }
-    })?;
+    // 统一输入参数防线校验：全部走同一个错误构造路径，
+    // 避免手工拼 DTO 与 classify_error 的重试语义漂移
+    transly_core::validate_translation_input(&text, &sl, &target_lang)
+        .map_err(|e| TranslateErrorDto::from_error(&e))?;
 
     if let Some(ref eng) = engine_name {
         if !transly_core::validate_engine_id(eng) {
-            return Err(TranslateErrorDto {
-                kind: ErrorKind::Input,
-                message: format!("不支持或未知的翻译引擎: {eng}"),
-                retryable: false,
-            });
+            return Err(TranslateErrorDto::from_error(&Error::Input(format!(
+                "不支持或未知的翻译引擎: {eng}"
+            ))));
         }
     }
 
@@ -300,13 +294,36 @@ pub struct FloatRequest {
     pub request_id: u64,
 }
 
-/// 暂存最近一次浮窗请求。
+/// 暂存待处理的浮窗请求队列。
 ///
 /// 浮窗 `visible: false` 时 Tauri 仍创建 webview，但页面 JS 尚未加载完成；
 /// 此时 `emit` 的事件无人接收且不会重放。因此宿主先暂存，浮窗就绪后主动拉取，
 /// 从根上消除 emit 时序竞态。
+///
+/// 必须是**队列**而不是单槽：划词（快捷键）与剪贴板监听是两条独立链路，
+/// 共用单槽时先到的请求会被后到的覆盖，用户表现为“第一次划词没反应”。
+/// 容量设上限并在超出时丢弃最旧项，防止浮窗长期不可用时无界增长。
 #[derive(Default)]
-pub struct PendingFloatRequest(pub std::sync::Mutex<Option<FloatRequest>>);
+pub struct PendingFloatRequests(pub std::sync::Mutex<std::collections::VecDeque<FloatRequest>>);
+
+/// 待处理队列容量上限。正常交互下浮窗会在毫秒级就绪，超出此值说明浮窗已不可用。
+const PENDING_FLOAT_CAPACITY: usize = 16;
+
+impl PendingFloatRequests {
+    /// 入队一条请求；超出容量时丢弃最旧项并返回 true 表示发生了丢弃。
+    pub fn push(&self, req: FloatRequest) -> bool {
+        let Ok(mut queue) = self.0.lock() else {
+            return false;
+        };
+        let mut dropped = false;
+        while queue.len() >= PENDING_FLOAT_CAPACITY {
+            queue.pop_front();
+            dropped = true;
+        }
+        queue.push_back(req);
+        dropped
+    }
+}
 
 /// 浮窗粘滞标志。必须用独立新类型：Tauri 按 TypeId 存 state，
 /// 若与 `clipboard_monitor_enabled` 同为 `Arc<AtomicBool>` 会 panic（重复 manage）
@@ -330,13 +347,13 @@ pub fn set_float_sticky(
 #[tauri::command]
 #[specta::specta]
 pub fn take_pending_float_request(
-    pending: tauri::State<'_, Arc<PendingFloatRequest>>,
+    pending: tauri::State<'_, Arc<PendingFloatRequests>>,
 ) -> Result<PendingFloatResponse, String> {
-    let mut slot = pending
+    let mut queue = pending
         .0
         .lock()
         .map_err(|e| format!("读取待处理浮窗请求失败: {e}"))?;
-    Ok(match slot.take() {
+    Ok(match queue.pop_front() {
         Some(req) => PendingFloatResponse {
             has_request: true,
             text: req.text,
@@ -522,6 +539,43 @@ pub async fn get_engine_capabilities(
 mod tests {
     use super::*;
     use transly_core::{Error, ErrorKind};
+
+    fn req(text: &str, source: &'static str, id: u64) -> FloatRequest {
+        FloatRequest {
+            text: text.to_string(),
+            source,
+            request_id: id,
+        }
+    }
+
+    #[test]
+    fn test_pending_float_requests_are_fifo_not_overwritten() {
+        // 回归：单槽实现下，划词与剪贴板两条链路的请求会互相覆盖，
+        // 先到的请求静默丢失，用户表现为“第一次划词没反应”。
+        let pending = PendingFloatRequests::default();
+        assert!(!pending.push(req("first", "selection", 1)));
+        assert!(!pending.push(req("second", "clipboard", 2)));
+
+        let queue = pending.0.lock().unwrap();
+        assert_eq!(queue.len(), 2, "两条请求都必须保留");
+        assert_eq!(queue[0].text, "first", "必须保持先进先出顺序");
+        assert_eq!(queue[1].text, "second");
+    }
+
+    #[test]
+    fn test_pending_float_requests_bounded_capacity_drops_oldest() {
+        let pending = PendingFloatRequests::default();
+        for i in 0..PENDING_FLOAT_CAPACITY {
+            assert!(!pending.push(req(&format!("t{i}"), "clipboard", i as u64)));
+        }
+        // 第 CAPACITY+1 条：应丢弃最旧项并上报丢弃
+        assert!(pending.push(req("overflow", "clipboard", 999)));
+
+        let queue = pending.0.lock().unwrap();
+        assert_eq!(queue.len(), PENDING_FLOAT_CAPACITY, "容量必须有界");
+        assert_eq!(queue.front().unwrap().text, "t1", "丢弃的是最旧项");
+        assert_eq!(queue.back().unwrap().text, "overflow");
+    }
 
     #[test]
     fn test_translate_error_dto_serializes_structured_kind() {

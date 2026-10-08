@@ -100,7 +100,9 @@ impl TranslateEngine for DeepLEngine {
         super::EngineCapabilities {
             id: self.id().to_string(),
             name: self.name().to_string(),
-            max_batch_size: 50,
+            // 与本地服务入口上限同源：服务端只接受 MAX_BATCH_ITEMS 项，
+            // 此处声明更大值只会让分片逻辑成为永不执行的四路。
+            max_batch_size: crate::MAX_BATCH_ITEMS,
             supports_batch: true,
             requires_api_key: true,
             fallback_engine: None,
@@ -182,7 +184,9 @@ impl TranslateEngine for DeepLEngine {
 
         let target_lang = Self::normalize_target_lang(first_target);
         let source_lang = Self::normalize_source_lang(first_source);
-        let chunks: Vec<&[TranslationRequest]> = requests.chunks(50).collect();
+        // 分片大小取自自身能力声明，不再写死数字（写死 50 会让该分片永不触发）
+        let chunk_size = self.capabilities().max_batch_size.max(1);
+        let chunks: Vec<&[TranslationRequest]> = requests.chunks(chunk_size).collect();
         let mut all_responses = Vec::with_capacity(requests.len());
 
         for chunk in chunks {
@@ -246,7 +250,8 @@ mod tests {
         let engine = DeepLEngine::new("test");
         let caps = engine.capabilities();
         assert_eq!(caps.id, "deepl");
-        assert_eq!(caps.max_batch_size, 50);
+        // 必须与服务端入口上限同源，否则声明的批量能力大于服务端实际放行的项数
+        assert_eq!(caps.max_batch_size, crate::MAX_BATCH_ITEMS);
         assert!(caps.supports_batch);
         assert!(caps.requires_api_key);
     }

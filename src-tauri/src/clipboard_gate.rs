@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// 剪贴板内容最短触发字符数：过短内容（换行残留、单字符）不打扰用户
-pub const MIN_CLIPBOARD_CHARS: usize = 2;
+const MIN_CLIPBOARD_CHARS: usize = 2;
 
 /// 剪贴板去重：与上次内容相同则不重复触发翻译
 pub fn should_emit(last: &Mutex<String>, current: &str) -> bool {

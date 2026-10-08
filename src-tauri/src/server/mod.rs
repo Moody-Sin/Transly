@@ -21,6 +21,12 @@ use transly_core::{
 pub struct StatusResponse {
     pub status: &'static str,
     pub version: &'static str,
+    /// 批量上限由服务端在 `/health` 公开，供扩展端切批时读取。
+    /// 扩展端按「项数」切批、服务端按「字符总量」拒绝，两者量纲不同，
+    /// 客户端只有拿到真实上限才能保证发出的每一批都必然被接受。
+    pub max_batch_items: usize,
+    pub max_batch_total_chars: usize,
+    pub max_item_chars: usize,
 }
 
 #[derive(Deserialize)]
@@ -208,17 +214,21 @@ mod auth_tests {
 }
 
 async fn health_handler() -> Json<StatusResponse> {
-    Json(StatusResponse {
-        status: "ok",
-        version: env!("CARGO_PKG_VERSION"),
-    })
+    Json(status_response())
 }
 
 async fn verify_token_handler() -> Json<StatusResponse> {
-    Json(StatusResponse {
+    Json(status_response())
+}
+
+fn status_response() -> StatusResponse {
+    StatusResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
-    })
+        max_batch_items: transly_core::MAX_BATCH_ITEMS,
+        max_batch_total_chars: transly_core::MAX_BATCH_TOTAL_CHARS,
+        max_item_chars: transly_core::MAX_ITEM_CHARS,
+    }
 }
 
 async fn translate_batch_handler(
@@ -240,16 +250,17 @@ async fn translate_batch_handler(
             .collect()
     };
 
-    // 限制单次批量文本数量与总字符数，防御 DoS 与过载攻击（上限收敛至 50 项，与各引擎能力契约保持一致）
-    if unified_items.is_empty() || unified_items.len() > 50 {
+    // 限制单次批量文本数量与总字符数，防御 DoS 与过载攻击（上限与 transly-core 共享同一常量，
+    // 并由 `/health` 公开给客户端，扩展端据此切批，不再各写一个数字）
+    if unified_items.is_empty() || unified_items.len() > transly_core::MAX_BATCH_ITEMS {
         return Err(StatusCode::BAD_REQUEST);
     }
     let total_chars: usize = unified_items.iter().map(|t| t.text.chars().count()).sum();
-    if total_chars > 50_000 {
+    if total_chars > transly_core::MAX_BATCH_TOTAL_CHARS {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     for t in &unified_items {
-        if t.text.chars().count() > 10_000 {
+        if t.text.chars().count() > transly_core::MAX_ITEM_CHARS {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
     }
@@ -257,11 +268,9 @@ async fn translate_batch_handler(
     let target = payload.target_lang;
     let source = payload.source_lang.unwrap_or_else(|| "auto".to_string());
 
-    // 强校验语言参数代码，拒绝异常或恶意超长代码
-    if !transly_core::validate_language_code(&target)
-        || target.eq_ignore_ascii_case("auto")
-        || (!source.is_empty() && !transly_core::validate_language_code(&source))
-    {
+    // 与 IPC 侧共用同一个语言对校验："不支持该语言"只允许有一个判定来源，
+    // 两处各写一份必然漂移。HTTP 侧只负责把失败映射为状态码。
+    if transly_core::validate_language_pair(&source, &target).is_err() {
         return Err(StatusCode::BAD_REQUEST);
     }
 

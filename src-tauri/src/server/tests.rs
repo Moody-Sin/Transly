@@ -415,8 +415,13 @@ async fn test_translate_structured_batch_items() {
     let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(resp.translations, vec!["已缓存译文"]);
     assert_eq!(resp.items.len(), 1);
-    assert_eq!(resp.items[0].id(), "node-1");
-    assert!(resp.items[0].is_success());
+    match &resp.items[0] {
+        BatchItemResult::Success { id, text, .. } => {
+            assert_eq!(id, "node-1");
+            assert_eq!(text, "已缓存译文");
+        }
+        BatchItemResult::Failed { message, .. } => panic!("命中缓存却返回失败项: {message}"),
+    }
 }
 
 #[tokio::test]
@@ -481,5 +486,149 @@ async fn test_fallback_cache_hit_on_secondary() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(resp.translations, vec!["降级译文"]);
-    assert_eq!(resp.items[0].engine(), Some("google_web(fallback)"));
+    match &resp.items[0] {
+        BatchItemResult::Success { engine, .. } => {
+            assert_eq!(engine, "google_web(fallback)")
+        }
+        BatchItemResult::Failed { message, .. } => panic!("降级缓存未命中: {message}"),
+    }
+}
+
+/// 构建一个仅挂载 `/translate` 的测试应用（含鉴权中间件）。
+fn translate_app(
+    cache: Arc<TranslationCache>,
+    pool: Arc<crate::engine_pool::EnginePool>,
+) -> Router {
+    let state = ServerState {
+        token: Arc::new(RwLock::new("valid-token".to_string())),
+        pool,
+        cache,
+        glossary: Arc::new(RwLock::new(Glossary::new())),
+        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
+        cache_controller: Arc::new(crate::cache_controller::CacheController::new(true)),
+    };
+    Router::new()
+        .route(
+            "/translate",
+            post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            )),
+        )
+        .with_state(state)
+}
+
+fn post_translate(body: String) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/translate")
+        .header(header::AUTHORIZATION, "Bearer valid-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_health_exposes_batch_limits_matching_core_constants() {
+    // 回归：扩展端按「项数」切批、服务端按「字符总量」拒绝，两者量纲不同。
+    // 客户端只有从 /health 拿到真实上限才能保证发出的每一批都被接受。
+    let cache = Arc::new(TranslationCache::in_memory().unwrap());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let token = Arc::new(RwLock::new("test-token".to_string()));
+    let app = create_router(
+        token,
+        cache,
+        pool,
+        Arc::new(RwLock::new(Glossary::new())),
+        Arc::new(crate::cache_controller::CacheController::new(true)),
+    );
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    // 用 Value 而非 StatusResponse：后者含 `&'static str` 字段，无法从借用数据反序列化
+    let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // 必须是 core 常量的真实值，不得在服务端另写一份数字
+    let max_items = status["max_batch_items"].as_u64().unwrap() as usize;
+    let max_total = status["max_batch_total_chars"].as_u64().unwrap() as usize;
+    let max_item = status["max_item_chars"].as_u64().unwrap() as usize;
+    assert_eq!(max_items, transly_core::MAX_BATCH_ITEMS);
+    assert_eq!(max_total, transly_core::MAX_BATCH_TOTAL_CHARS);
+    assert_eq!(max_item, transly_core::MAX_ITEM_CHARS);
+    assert!(max_items > 0 && max_total > 0);
+}
+
+#[tokio::test]
+async fn test_batch_over_char_total_is_rejected_while_under_item_limit() {
+    // 回归的核心用例：项数未超上限，但字符总量超限 → 必须 413。
+    // 这正是旧扩展端「30 项一批」被整批拒绝的形态。
+    let cache = Arc::new(TranslationCache::in_memory().unwrap());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let app = translate_app(cache, pool);
+
+    // 项数远低于 MAX_BATCH_ITEMS，但每项够长以致总量越过上限
+    let per_item = (transly_core::MAX_BATCH_TOTAL_CHARS / 4) + 1;
+    let items: Vec<_> = (0..4)
+        .map(|i| serde_json::json!({ "id": format!("n{i}"), "text": "a".repeat(per_item) }))
+        .collect();
+    assert!(
+        items.len() < transly_core::MAX_BATCH_ITEMS,
+        "项数必须未超限"
+    );
+
+    let payload = serde_json::json!({ "items": items, "target_lang": "zh-CN" });
+    let res = app
+        .clone()
+        .oneshot(post_translate(payload.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "字符总量超限必须拒绝，否则引擎侧会生成超长请求"
+    );
+
+    // 对照组：同样项数但总量在上限内 → 必须放行
+    let small: Vec<_> = (0..4)
+        .map(|i| serde_json::json!({ "id": format!("n{i}"), "text": "a".repeat(10) }))
+        .collect();
+    let payload = serde_json::json!({ "items": small, "target_lang": "zh-CN" });
+    let res = app
+        .oneshot(post_translate(payload.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "总量在上限内必须放行");
+}
+
+#[tokio::test]
+async fn test_batch_item_count_over_limit_is_rejected() {
+    let cache = Arc::new(TranslationCache::in_memory().unwrap());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let app = translate_app(cache, pool);
+
+    let items: Vec<_> = (0..=transly_core::MAX_BATCH_ITEMS)
+        .map(|i| serde_json::json!({ "id": format!("n{i}"), "text": "hi" }))
+        .collect();
+    let payload = serde_json::json!({ "items": items, "target_lang": "zh-CN" });
+    let res = app
+        .oneshot(post_translate(payload.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }

@@ -3,3 +3,5 @@ packages:
   - 'extension'
 allowBuilds:
   esbuild: true
+  # lefthook 的 postinstall 用于下载平台原生二进制，pre-commit 钩子依赖它
+  lefthook: true

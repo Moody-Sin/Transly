@@ -7,6 +7,21 @@ pub mod secrets;
 pub mod server;
 pub mod storage;
 
+/// 生成 tauri-specta 强类型绑定并写入仓库内的 `src/bindings.ts`。
+///
+/// 路径基准必须是 `CARGO_MANIFEST_DIR`（即 `src-tauri/`），不能用相对路径：
+/// 相对路径会被按**进程 cwd** 解析，从仓库根执行 `cargo test` / `cargo run` 时
+/// 会在仓库外凭空生成文件。
+///
+/// 本函数是导出绑定的**唯一实现**，`main.rs` 与 `bin/export_bindings.rs` 共用，
+/// 避免两处各写一遍路径而基准不一致。
+pub fn export_bindings() -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts");
+    app_command_builder!().export(specta_typescript::Typescript::default(), &output)?;
+    println!("TypeScript 绑定已生成至 {output:?}");
+    Ok(())
+}
+
 #[macro_export]
 macro_rules! app_command_builder {
     () => {

@@ -46,25 +46,38 @@ pub fn validate_engine_id(engine: &str) -> bool {
     )
 }
 
-/// 验证翻译请求参数合法性
+/// 验证翻译语言对合法性（源语言 + 目标语言）。
+///
+/// IPC 与本地 HTTP 服务共用此函数："不支持该语言"只允许有一个判定来源，
+/// 两处各写一份必然漂移。调用方自行把失败映射为本层的错误形态。
+pub fn validate_language_pair(source_lang: &str, target_lang: &str) -> crate::Result<()> {
+    if !source_lang.is_empty() && !validate_language_code(source_lang) {
+        return Err(crate::Error::Input("无效或不受支持的源语言代码".into()));
+    }
+    if !validate_language_code(target_lang) || target_lang.eq_ignore_ascii_case("auto") {
+        return Err(crate::Error::Input("无效或不受支持的目标语言代码".into()));
+    }
+    Ok(())
+}
+
+/// 验证翻译请求参数合法性。
+///
+/// 返回 `Error::Input` 而非裸字符串：调用方（IPC / HTTP）统一经 `classify_error`
+/// 分类，不各自拼装错误 DTO，避免新增校验项时漏改某一条路径。
 pub fn validate_translation_input(
     text: &str,
     source_lang: &str,
     target_lang: &str,
-) -> Result<(), &'static str> {
+) -> crate::Result<()> {
     if text.is_empty() {
-        return Err("翻译文本不能为空");
+        return Err(crate::Error::Input("翻译文本不能为空".into()));
     }
     if text.chars().count() > 10_000 {
-        return Err("翻译文本过长 (单次最大限制 10,000 字符)");
+        return Err(crate::Error::Input(
+            "翻译文本过长 (单次最大限制 10,000 字符)".into(),
+        ));
     }
-    if !source_lang.is_empty() && !validate_language_code(source_lang) {
-        return Err("无效或不受支持的源语言代码");
-    }
-    if !validate_language_code(target_lang) || target_lang.eq_ignore_ascii_case("auto") {
-        return Err("无效或不受支持的目标语言代码");
-    }
-    Ok(())
+    validate_language_pair(source_lang, target_lang)
 }
 
 #[cfg(test)]
@@ -105,5 +118,22 @@ mod tests {
         assert!(validate_translation_input("", "auto", "zh-CN").is_err());
         assert!(validate_translation_input("Hello", "auto", "auto").is_err());
         assert!(validate_translation_input("Hello", "invalid#lang", "zh-CN").is_err());
+        // 校验失败必须是 Input 类：调用方据此判定不可重试
+        assert_eq!(
+            validate_translation_input("", "auto", "zh-CN")
+                .unwrap_err()
+                .kind(),
+            crate::ErrorKind::Input
+        );
+    }
+
+    #[test]
+    fn test_language_pair_shared_by_ipc_and_http() {
+        // 只校验语言对，不涉及文本：HTTP 批量入口据此拒绝非法语言参数
+        assert!(validate_language_pair("auto", "zh-CN").is_ok());
+        assert!(validate_language_pair("en", "ja").is_ok());
+        assert!(validate_language_pair("auto", "auto").is_err());
+        assert!(validate_language_pair("invalid#lang", "zh-CN").is_err());
+        assert!(validate_language_pair("auto", "zh<script>").is_err());
     }
 }

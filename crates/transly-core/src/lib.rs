@@ -10,9 +10,10 @@ pub mod validation;
 pub use cache::TranslationCache;
 pub use config::AppConfig;
 pub use engine::{
-    lookup_cache_with_fallback, BatchItemRequest, BatchItemResult, DeepLEngine, EngineCapabilities,
-    FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine, TranslationRequest,
-    TranslationResponse,
+    lookup_cache_with_fallback, plan_batch_ranges, BatchItemRequest, BatchItemResult, DeepLEngine,
+    EngineCapabilities, FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine,
+    TranslationRequest, TranslationResponse, MAX_BATCH_ITEMS, MAX_BATCH_TOTAL_CHARS,
+    MAX_ITEM_CHARS,
 };
 pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;
@@ -20,4 +21,6 @@ pub use ocr::{
     build_candidate_languages, clamp_dimensions, rgba_to_bgra_in_place, OcrErrorDto, OcrErrorKind,
 };
 pub use task::{classify_error, TaskError};
-pub use validation::{validate_engine_id, validate_language_code, validate_translation_input};
+pub use validation::{
+    validate_engine_id, validate_language_code, validate_language_pair, validate_translation_input,
+};

@@ -1,17 +1,7 @@
-use specta_typescript::Typescript;
+//! 导出 tauri-specta 强类型绑定（供 CI 与开发者手动刷新 `src/bindings.ts`）。
+//!
+//! 路径与写入逻辑统一在 `src_tauri::export_bindings`，本入口不重复实现。
 
 fn main() {
-    let builder = src_tauri::app_command_builder!();
-
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-    let output_path = std::path::Path::new(&manifest_dir).join("../src/bindings.ts");
-
-    builder
-        .export(Typescript::default(), &output_path)
-        .expect("Failed to export typescript bindings");
-
-    println!(
-        "TypeScript bindings successfully generated at {:?}",
-        output_path
-    );
+    src_tauri::export_bindings().expect("导出 TypeScript 绑定失败");
 }

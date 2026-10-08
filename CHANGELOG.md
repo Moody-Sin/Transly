@@ -10,6 +10,7 @@
 ## [0.2.1] - 2026-10-08
 
 ### 修复
+- **CI 首次真正运行暴露 Linux 平台专属编译失败 (P1)**：仓库 GitHub Actions 权限长期处于卡死状态，`push` / `tag` 事件从未触发任何工作流（CI 历史运行数为 0），导致 `.github/workflows/ci.yml` 实际上从未校验过任何提交。重置仓库 Actions 权限开关后 CI 首次运行，立即在 Linux 作业上暴露 `src-tauri/src/ocr.rs` 的缺陷：Windows 专属 import（`ClipboardExt` 与 `clamp_dimensions` / `rgba_to_bgra_in_place` / `build_candidate_languages`）被写在文件顶层，非 Windows 平台下这些符号不被任何代码使用，在 `cargo clippy -- -D warnings` 下直接以 `unused_imports` 编译失败。Windows 本地 clippy 恒通过，故该缺陷此前从未被发现。现将上述 import 用 `#[cfg(target_os = "windows")]` 门控，仅保留跨平台共用的 `OcrErrorDto`。
 - **扩展在途批次绕过代际闸门，「还原原文」后译文被重新写回 (P1)**：`sendBatchWithSplit` 收到响应后立即调用 `applyBatchResponse`，而 `translateEntries` 的「响应写回前安全拦截」要等其返回后才执行；`applyBatchResponse` 的 `items` 主契约分支（当前唯一路径）内部**没有**代际判定，只有旧版 `translations` 兼容分支有。用户点击「还原原文」（`currentGeneration += 1`）或取消后，只要仍有批次在途，译文就会被原地写回页面——用户看到的是「还原失败」，与代码注释宣称的「严禁写入 DOM」直接矛盾。现把代际闸门下沉进 `applyBatchResponse` 入口统一判定，并对 `markBatchFailed` 的两处调用点加同样守卫，避免还原后失败集被污染导致「重试失败项」按钮凭空出现。
 - **设置面板「立即清空」缓存无任何错误处理 (P3)**：`App.tsx` 的 `clearCache` 按钮只处理成功分支，既无 `else` 也无 `catch`，与同面板其他操作（保存密钥、轮换 Token、术语增删）的防御性写法不一致。IPC 抛错或返回 `error` 时用户点击后**毫无反馈**并产生未处理的 Promise 拒绝。现补齐 `error` 分支与 `catch`，并新增 `statusCacheClearFailed` 文案（中英同步）。
 - **保存密钥 / 轮换 Token 等操作吞掉后端具体错误 (P3)**：`handleSaveKeys`、`handleRotateToken`、`handleDeleteKey`、`handleAddGlossary`、`handleDeleteGlossary` 的 `catch` 分支只写通用文案，丢弃后端返回的 `res.error`（如「API 密钥长度超出限制」「写入系统安全凭据失败」）。现统一优先透传后端原始消息，仅在其缺失时回落通用文案，与 `setCacheEnabled` 的既有行为对齐。

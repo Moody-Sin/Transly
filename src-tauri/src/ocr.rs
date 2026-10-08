@@ -1,7 +1,10 @@
+// 以下 Windows 专属符号仅用于 `#[cfg(target_os = "windows")]` 分支，
+// 必须同样加 cfg 门控：否则非 Windows 平台在 `-D warnings` 下会因 unused import 编译失败。
+#[cfg(target_os = "windows")]
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use transly_core::{
-    build_candidate_languages, clamp_dimensions, rgba_to_bgra_in_place, OcrErrorDto,
-};
+use transly_core::OcrErrorDto;
+#[cfg(target_os = "windows")]
+use transly_core::{build_candidate_languages, clamp_dimensions, rgba_to_bgra_in_place};
 
 #[cfg(not(target_os = "windows"))]
 pub async fn recognize_clipboard_image(

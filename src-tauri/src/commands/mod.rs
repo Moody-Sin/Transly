@@ -4,13 +4,11 @@ use tokio::sync::RwLock;
 use transly_core::task::classify_error;
 use transly_core::{Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
 
-/// 翻译成功结果：携带实际执行引擎与缓存命中标记，供 UI 展示与降级识别
+/// 翻译成功结果：携带实际执行引擎，供 UI 展示与降级识别
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct TranslateOutcomeDto {
     pub text: String,
     pub engine: String,
-    pub cached: bool,
-    pub detected_source_lang: Option<String>,
 }
 
 /// 结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口
@@ -109,8 +107,6 @@ pub async fn translate(
             return Ok(TranslateOutcomeDto {
                 text: applied,
                 engine: used_engine,
-                cached: true,
-                detected_source_lang: None,
             });
         }
     }
@@ -135,8 +131,6 @@ pub async fn translate(
             Ok(TranslateOutcomeDto {
                 text: g.apply(&res.text),
                 engine: res.engine,
-                cached: false,
-                detected_source_lang: res.detected_source_lang,
             })
         }
         Err(e) => Err(TranslateErrorDto::from_error(&e)),
@@ -400,7 +394,6 @@ pub struct EngineCapabilitiesDto {
     pub id: String,
     pub name: String,
     pub max_batch_size: u32,
-    pub supports_streaming: bool,
     pub supports_batch: bool,
     pub requires_api_key: bool,
 }
@@ -420,7 +413,6 @@ pub async fn get_engine_capabilities(
         id: caps.id,
         name: caps.name,
         max_batch_size: caps.max_batch_size as u32,
-        supports_streaming: caps.supports_streaming,
         supports_batch: caps.supports_batch,
         requires_api_key: caps.requires_api_key,
     })

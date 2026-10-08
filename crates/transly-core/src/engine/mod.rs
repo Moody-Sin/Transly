@@ -88,7 +88,6 @@ pub struct EngineCapabilities {
     pub id: String,
     pub name: String,
     pub max_batch_size: usize,
-    pub supports_streaming: bool,
     pub supports_batch: bool,
     pub requires_api_key: bool,
     #[serde(default)]
@@ -105,7 +104,6 @@ pub trait TranslateEngine: Send + Sync {
             id: self.id().to_string(),
             name: self.name().to_string(),
             max_batch_size: 100,
-            supports_streaming: false,
             supports_batch: true,
             requires_api_key: false,
             fallback_engine: None,
@@ -165,7 +163,7 @@ mod tests {
 
         let failed_item = BatchItemResult::Failed {
             id: "node_2".to_string(),
-            error_kind: ErrorKind::Timeout,
+            error_kind: ErrorKind::Engine,
             message: "请求超时".to_string(),
         };
 
@@ -182,6 +180,6 @@ mod tests {
 
         let json_failed = serde_json::to_string(&failed_item).unwrap();
         assert!(json_failed.contains(r#""status":"failed""#));
-        assert!(json_failed.contains(r#""error_kind":"timeout""#));
+        assert!(json_failed.contains(r#""error_kind":"engine""#));
     }
 }

@@ -37,12 +37,17 @@ export type EngineCapabilitiesDto = {
 	id: string,
 	name: string,
 	max_batch_size: number,
-	supports_streaming: boolean,
 	supports_batch: boolean,
 	requires_api_key: boolean,
 };
 
-export type ErrorKind = "input" | "auth" | "network" | "engine" | "timeout" | "internal";
+/**
+ *  错误分类。
+ * 
+ *  分类集合与前端 `ErrorKind` 字面量联合一一对应（经 specta 导出）；
+ *  每个变体都必须有真实构造路径，否则应随构造方一并删除。
+ */
+export type ErrorKind = "input" | "auth" | "network" | "engine" | "internal";
 
 export type OcrErrorDto = {
 	kind: OcrErrorKind,
@@ -66,12 +71,10 @@ export type TranslateErrorDto = {
 	retryable: boolean,
 };
 
-/**  翻译成功结果：携带实际执行引擎与缓存命中标记，供 UI 展示与降级识别 */
+/**  翻译成功结果：携带实际执行引擎，供 UI 展示与降级识别 */
 export type TranslateOutcomeDto = {
 	text: string,
 	engine: string,
-	cached: boolean,
-	detected_source_lang: string | null,
 };
 
 /* Tauri Specta runtime */

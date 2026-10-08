@@ -94,7 +94,6 @@ impl TranslateEngine for OpenAIEngine {
             id: self.id().to_string(),
             name: self.name().to_string(),
             max_batch_size: 1,
-            supports_streaming: true,
             supports_batch: false,
             requires_api_key: true,
             fallback_engine: None,

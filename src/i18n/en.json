@@ -41,7 +41,6 @@
     "auth": "API key not configured; add it in Settings",
     "network": "Network failed; check your connection and retry",
     "engine": "Engine error; retry or switch engines",
-    "timeout": "Request timed out; you can retry",
     "internal": "Internal error; please retry"
   },
   "languages": {

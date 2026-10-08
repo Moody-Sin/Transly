@@ -16,7 +16,6 @@ test('终态不被 cancel 覆盖', () => {
 
 test('取消后新提交可重新运行', () => {
   assert.equal(nextState('cancelled', 'submit'), 'running')
-  assert.equal(nextState('cancelled', 'reset'), 'idle')
 })
 
 test('终态判定', () => {
@@ -28,7 +27,7 @@ test('终态判定', () => {
 })
 
 test('仅可重试错误才显示重试入口', () => {
-  const retryable: TaskError = { kind: 'timeout', message: 'x', retryable: true }
+  const retryable: TaskError = { kind: 'network', message: 'x', retryable: true }
   const notRetryable: TaskError = { kind: 'auth', message: 'x', retryable: false }
   assert.equal(canRetry('failed', retryable), true)
   assert.equal(canRetry('failed', notRetryable), false, '缺密钥重试无意义')

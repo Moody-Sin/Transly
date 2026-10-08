@@ -101,7 +101,6 @@ impl TranslateEngine for DeepLEngine {
             id: self.id().to_string(),
             name: self.name().to_string(),
             max_batch_size: 50,
-            supports_streaming: false,
             supports_batch: true,
             requires_api_key: true,
             fallback_engine: None,

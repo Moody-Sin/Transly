@@ -24,7 +24,6 @@ export interface TaskRunner {
   run: (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => void
   cancel: () => void
   retry: () => void
-  reset: () => void
 }
 
 interface FloatRequest {
@@ -133,13 +132,6 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     void execute(last!.text, last!.source)
   }, [execute])
 
-  const reset = useCallback(() => {
-    clearDebounce()
-    genRef.current += 1
-    lastRunRef.current = null
-    setSnapshot(EMPTY)
-  }, [clearDebounce])
-
   // 订阅划词 / 剪贴板事件：按 request_id 去重，同一段文本只翻译一次。
   // 浮窗首次显示前页面 JS 尚未就绪，emit 的事件会永久丢失；
   // 因此宿主会暂存最近一次请求，浮窗就绪后主动拉取一次兜底。
@@ -184,5 +176,5 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     commands.setFloatSticky(needsSticky).catch(() => {})
   }, [needsSticky, isFloatWindow])
 
-  return { snapshot, run, cancel, retry, reset }
+  return { snapshot, run, cancel, retry }
 }

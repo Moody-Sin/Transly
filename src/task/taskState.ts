@@ -6,6 +6,11 @@ export type { ErrorKind }
 export type TaskState =
   | 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
+/**
+ * 任务是否处于终态（不再接受旧结果回流）。
+ * 与后端 `TaskState` 的终态集合保持一致；后端该枚举已无生产消费者，
+ * 因此不在 core 保留镜像判定函数，避免两份定义漂移。
+ */
 export interface TaskError {
   kind: ErrorKind
   message: string

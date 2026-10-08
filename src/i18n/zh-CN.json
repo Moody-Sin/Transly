@@ -97,6 +97,10 @@
     "statusKeyDeleteFailed": "删除密钥失败",
     "statusTokenRotated": "Token 已重新生成，旧插件配对已自动失效！",
     "statusTokenRotateFailed": "重新生成 Token 失败",
+    "serverStatusTitle": "本地扩展服务",
+    "serverStatusRunning": "● 运行中",
+    "serverStatusStarting": "启动中...",
+    "serverStatusFailed": "▲ 启动失败",
     "statusCacheCleared": "已清理 {n} 条缓存记录"
   }
 }

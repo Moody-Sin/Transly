@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { commands } from '../bindings'
-import {
-  canRetryExecution, nextState,
-  type TaskError, type TaskState,
-} from './taskState'
+import { canRetryExecution, nextState, type TaskError, type TaskState } from './taskState'
 import { applyIfCurrent } from './generation'
 import { toFailureOutcome } from './outcome'
 
@@ -33,7 +30,12 @@ interface FloatRequest {
 }
 
 const EMPTY: RunnerSnapshot = {
-  state: 'idle', text: '', engine: null, error: null, source: null, sourceText: '',
+  state: 'idle',
+  text: '',
+  engine: null,
+  error: null,
+  source: null,
+  sourceText: '',
 }
 
 export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
@@ -71,7 +73,8 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
 
     // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
     // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
-    const res = await commands.translate(text, 'auto', langRef.current, engineRef.current)
+    const res = await commands
+      .translate(text, 'auto', langRef.current, engineRef.current)
       .catch(toFailureOutcome)
     // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
     if (applyIfCurrent(gen, genRef.current, true) !== true) return
@@ -97,42 +100,39 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     }
   }, [])
 
-  const run = useCallback((
-    text: string,
-    opts?: { source?: RunnerSnapshot['source']; debounceMs?: number },
-  ) => {
-    if (!text.trim()) return
-    // 新输入立即作废上一代：清掉待触发的防抖，并让在途响应失效
-    clearDebounce()
-    genRef.current += 1
-    const source = opts?.source ?? 'input'
-    const delay = opts?.debounceMs ?? 0
-    if (delay > 0) {
-      const gen = genRef.current
-      debounceRef.current = setTimeout(() => {
-        if (gen !== genRef.current) return
+  const run = useCallback(
+    (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => {
+      if (!text.trim()) return
+      // 新输入立即作废上一代：清掉待触发的防抖，并让在途响应失效
+      clearDebounce()
+      genRef.current += 1
+      const source = opts?.source ?? 'input'
+      const delay = opts?.debounceMs ?? 0
+      if (delay > 0) {
+        const gen = genRef.current
+        debounceRef.current = setTimeout(() => {
+          if (gen !== genRef.current) return
+          void execute(text, source)
+        }, delay)
+      } else {
         void execute(text, source)
-      }, delay)
-    } else {
-      void execute(text, source)
-    }
-  }, [clearDebounce, execute])
+      }
+    },
+    [clearDebounce, execute],
+  )
 
   const cancel = useCallback(() => {
     clearDebounce()
     // 递增代际使全部在途响应失效；已应用的译文保持（取消 ≠ 还原）
     genRef.current += 1
-    setSnapshot((s) => (
-      s.state === 'running'
-        ? { ...s, state: nextState(s.state, 'cancel') }
-        : s
-    ))
+    setSnapshot((s) => (s.state === 'running' ? { ...s, state: nextState(s.state, 'cancel') } : s))
   }, [clearDebounce])
 
   const retry = useCallback(() => {
     const last = lastRunRef.current
     // 守卫：仅失败态且错误可重试时才允许重跑，与 UI 的 canRetry 判定一致
-    if (!canRetryExecution(snapshotRef.current.state, snapshotRef.current.error, last !== null)) return
+    if (!canRetryExecution(snapshotRef.current.state, snapshotRef.current.error, last !== null))
+      return
     void execute(last!.text, last!.source)
   }, [execute])
 
@@ -152,29 +152,45 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       }
       run(payload.text, { source: payload.source })
     }
+    // 注册失败必须暴露：此处空 catch 曾让 ACL 拒绝静默数月，浮窗永远空白
+    // （见 Lessons Learned 第 8 条）。只降噪，不吞错。
     listen<FloatRequest>('float-translate', (event) => handle(event.payload))
-      .then((fn) => { unlisten = fn })
-      .catch(() => {})
-    // 兜底：拉取宿主暂存的请求（浮窗首次就绪前的 emit 会丢失）
-    commands.takePendingFloatRequest().then((res) => {
-      if (res.status !== 'ok' || !res.data.has_request) return
-      handle({
-        text: res.data.text,
-        source: res.data.source as FloatRequest['source'],
-        request_id: res.data.request_id,
+      .then((fn) => {
+        unlisten = fn
       })
-    }).catch(() => {})
-    return () => { if (unlisten) unlisten() }
+      .catch((err) => {
+        console.warn('[Transly] float-translate 事件订阅失败：', err)
+      })
+    // 兜底：拉取宿主暂存的请求（浮窗首次就绪前的 emit 会丢失）
+    commands
+      .takePendingFloatRequest()
+      .then((res) => {
+        if (res.status !== 'ok' || !res.data.has_request) return
+        handle({
+          text: res.data.text,
+          source: res.data.source as FloatRequest['source'],
+          request_id: res.data.request_id,
+        })
+      })
+      .catch((err) => {
+        console.warn('[Transly] 拉取待处理浮窗请求失败：', err)
+      })
+    return () => {
+      if (unlisten) unlisten()
+    }
   }, [run, isFloatWindow])
 
   // 组件卸载时作废全部在途代际
-  useEffect(() => () => { genRef.current += 1 }, [])
+  useEffect(
+    () => () => {
+      genRef.current += 1
+    },
+    [],
+  )
 
   // 翻译中/错误态时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
   // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
-  const needsSticky = isFloatWindow && (
-    snapshot.state === 'running' || snapshot.error !== null
-  )
+  const needsSticky = isFloatWindow && (snapshot.state === 'running' || snapshot.error !== null)
   useEffect(() => {
     if (!isFloatWindow) return
     commands.setFloatSticky(needsSticky).catch(() => {})

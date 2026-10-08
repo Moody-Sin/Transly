@@ -30,6 +30,7 @@ export const commands = {
 	ocrClipboardImage: (targetLang: string) => typedError<string, OcrErrorDto>(__TAURI_INVOKE("ocr_clipboard_image", { targetLang })),
 	setClipboardMonitor: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_clipboard_monitor", { enabled })),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
+	getServerStatus: () => __TAURI_INVOKE<ServerStatus>("get_server_status"),
 };
 
 /* Types */
@@ -63,6 +64,20 @@ export type PendingFloatResponse = {
 	/**  u32 而非 u64：specta 禁止导出 BigInt 类型以避免 JS 精度丢失 */
 	request_id: number,
 };
+
+/**
+ *  本地 HTTP 服务（供浏览器插件调用）的运行状态。
+ * 
+ *  服务在后台异步启动，失败只进 stderr 的话用户完全无感：
+ *  扩展端会显示“桌面端未运行”，而桌面端毫无提示。此处把状态暴露给前端。
+ */
+export type ServerStatus = 
+/**  尚未启动完成（setup 中的异步任务还在进行） */
+{ state: "starting" } | 
+/**  已就绪 */
+{ state: "running" } | 
+/**  未能启动，附原因（如端口被占用、系统凭据不可用） */
+{ state: "failed"; reason: string };
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */
 export type TranslateErrorDto = {

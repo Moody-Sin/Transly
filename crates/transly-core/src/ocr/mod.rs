@@ -68,13 +68,6 @@ pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
     list
 }
 
-/// 将 RGBA8 像素切片转换为 Windows SoftwareBitmap 所需的 BGRA8 字节序
-pub fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
-    let mut bgra = rgba.to_vec();
-    rgba_to_bgra_in_place(&mut bgra);
-    bgra
-}
-
 /// 原地将 RGBA8 像素切片转换为 BGRA8 字节序，避免额外全量堆分配与内存放大
 pub fn rgba_to_bgra_in_place(buf: &mut [u8]) {
     for chunk in buf.as_chunks_mut::<4>().0 {
@@ -134,10 +127,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rgba_to_bgra_swizzle() {
-        let rgba = vec![10, 20, 30, 255, 40, 50, 60, 200];
-        let bgra = rgba_to_bgra(&rgba);
-        assert_eq!(bgra, vec![30, 20, 10, 255, 60, 50, 40, 200]);
+    fn test_rgba_to_bgra_in_place_swizzle() {
+        let mut buf = vec![10, 20, 30, 255, 40, 50, 60, 200];
+        rgba_to_bgra_in_place(&mut buf);
+        assert_eq!(buf, vec![30, 20, 10, 255, 60, 50, 40, 200]);
     }
 
     #[test]

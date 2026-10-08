@@ -66,13 +66,16 @@ impl TranslationCache {
         })
     }
 
-    pub fn default_shared() -> Arc<Self> {
-        let cache = dirs_cache_path()
-            .and_then(|p| Self::new(p).ok())
-            .or_else(|| Self::in_memory().ok())
+    /// 在指定应用数据目录下打开持久化缓存，失败时依次回退到内存缓存。
+    ///
+    /// 目录由调用方（平台适配层）提供：本 crate 不引入任何平台目录假设，
+    /// 以便被 CLI / WASM 等无文件系统或不同目录约定的宿主复用。
+    pub fn open_default(data_dir: impl AsRef<Path>) -> Arc<Self> {
+        let cache = Self::new(data_dir.as_ref().join("cache.db"))
+            .or_else(|_| Self::in_memory())
             // 最后兜底：仅当系统内存耗尽致 sqlite 无法分配连接时才会失败。
             // 此时进程已无法提供翻译服务，用 expect 显式暴露启动期故障，优于静默降级。
-            .unwrap_or_else(|| Self {
+            .unwrap_or_else(|_| Self {
                 conn: Mutex::new(
                     Connection::open_in_memory().expect("内存耗尽，无法建立内存缓存连接"),
                 ),
@@ -257,23 +260,6 @@ impl TranslationCache {
         let deleted = conn.execute("DELETE FROM translation_cache", [])?;
         Ok(deleted)
     }
-}
-
-fn dirs_cache_path() -> Option<std::path::PathBuf> {
-    // 优先读取用户应用数据目录
-    #[cfg(target_os = "windows")]
-    let base = std::env::var_os("APPDATA")?;
-    #[cfg(target_os = "macos")]
-    let base = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(h).join("Library/Application Support"))?;
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let base = std::env::var_os("XDG_DATA_HOME").or_else(|| {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
-    })?;
-
-    let dir = std::path::PathBuf::from(base).join("Transly");
-    let _ = std::fs::create_dir_all(&dir);
-    Some(dir.join("cache.db"))
 }
 
 #[cfg(test)]

@@ -3,8 +3,7 @@
 // 不会让 node:test 运行时去 import 依赖 @tauri-apps/api 的 bindings 模块。
 import type { ErrorKind } from '../bindings'
 export type { ErrorKind }
-export type TaskState =
-  | 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type TaskState = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 /**
  * 任务是否处于终态（不再接受旧结果回流）。
@@ -17,9 +16,7 @@ export interface TaskError {
   retryable: boolean
 }
 
-const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>([
-  'succeeded', 'failed', 'cancelled',
-])
+const TERMINAL: ReadonlySet<TaskState> = new Set<TaskState>(['succeeded', 'failed', 'cancelled'])
 
 export function isTerminal(state: TaskState): boolean {
   return TERMINAL.has(state)
@@ -54,9 +51,8 @@ export function nextState(
     case 'reject':
       return 'failed'
     case 'cancel':
-      return current === 'running' || current === 'idle'
-        ? 'cancelled'
-        : current
+      // 复用终态集合：终态不被取消覆盖（取消 ≠ 还原）
+      return isTerminal(current) ? current : 'cancelled'
     case 'reset':
       return 'idle'
   }

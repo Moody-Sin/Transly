@@ -53,11 +53,37 @@ fn place_float_near_cursor(win: &tauri::WebviewWindow) {
     let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
-fn main() {
-    let config = AppConfig::default();
+/// 解析应用数据目录，并一次性把旧版缓存迁移过来。
+///
+/// 目录用 Tauri 约定 `data_dir/<identifier>`，而非旧版手拼的 `%APPDATA%\Transly`：
+/// 后者与沙箱、清理、多用户策略都对不上，macOS 上也不符合平台惯例。
+/// 平台分支放在此层（平台适配层），`transly-core` 保持零平台假设。
+///
+/// 迁移是必须的：术语库与翻译缓存在同一个 SQLite 文件中，
+/// 不迁移就等于直接丢掉用户自建的术语。
+fn resolve_data_dir(identifier: &str) -> std::path::PathBuf {
+    let dir = src_tauri::storage::app_data_dir(identifier);
+    let _ = std::fs::create_dir_all(&dir);
+    match src_tauri::storage::migrate_legacy_cache(&dir) {
+        Ok(true) => println!("已将旧版缓存迁移至 {dir:?}"),
+        Ok(false) => {}
+        Err(e) => eprintln!("旧版缓存迁移失败（不影响启动）: {e}"),
+    }
+    dir
+}
 
-    // 初始化持久化翻译缓存
-    let cache = TranslationCache::default_shared();
+fn main() {
+    let context = tauri::generate_context!();
+
+    // 端口可通过环境变量覆盖，便于端口被占用时自救；默认值来自 AppConfig
+    let config = AppConfig::default();
+    let server_port = std::env::var("TRANSLY_SERVER_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(config.local_server_port);
+
+    // 初始化持久化翻译缓存（目录见 resolve_data_dir）
+    let cache = TranslationCache::open_default(resolve_data_dir(&context.config().identifier));
 
     // 启动时自动做轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）
     let _ = cache.cleanup_older_than_days(90);
@@ -117,7 +143,6 @@ fn main() {
     let server_cache = cache.clone();
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
-    let server_port = config.local_server_port;
     let server_cache_controller = cache_controller.clone();
 
     tauri::Builder::default()
@@ -130,6 +155,7 @@ fn main() {
         .manage(cache_controller)
         .manage(Arc::new(commands::FloatSticky::default()))
         .manage(Arc::new(commands::PendingFloatRequest::default()))
+        .manage(Arc::new(commands::ServerStatusSlot::default()))
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
@@ -137,22 +163,41 @@ fn main() {
                 .state::<Arc<commands::PendingFloatRequest>>()
                 .inner()
                 .clone();
+            let status_slot = app
+                .state::<Arc<commands::ServerStatusSlot>>()
+                .inner()
+                .clone();
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
-            if let Some(token_val) = server_token {
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = server::start_server(
-                        server_port,
-                        token_val,
-                        server_cache,
-                        server_pool,
-                        server_glossary,
-                        server_cache_controller,
-                    )
-                    .await
-                    {
-                        eprintln!("本地 HTTP 服务启动失败: {e}");
-                    }
-                });
+            match server_token {
+                Some(token_val) => {
+                    tauri::async_runtime::spawn(async move {
+                        // bind 成功即上报就绪：serve 正常只在出错时返回
+                        let listening_slot = status_slot.clone();
+                        let result = server::start_server(
+                            server_port,
+                            token_val,
+                            server_cache,
+                            server_pool,
+                            server_glossary,
+                            server_cache_controller,
+                            move || listening_slot.set(commands::ServerStatus::Running),
+                        )
+                        .await;
+                        if let Err(e) = result {
+                            // 端口被占用是最常见的失败原因，用户必须看得到，
+                            // 否则只能看到扩展端“桌面端未运行”而无法自查
+                            eprintln!("本地 HTTP 服务启动失败: {e}");
+                            status_slot.set(commands::ServerStatus::Failed {
+                                reason: format!("本地扩展服务未能启动（端口 {server_port}）：{e}"),
+                            });
+                        }
+                    });
+                }
+                None => {
+                    status_slot.set(commands::ServerStatus::Failed {
+                        reason: "系统安全凭据管理器不可用，已禁用本地扩展服务".to_string(),
+                    });
+                }
             }
 
             // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
@@ -331,6 +376,6 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

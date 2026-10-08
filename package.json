@@ -13,6 +13,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{ts,tsx,json,css}\" \"extension/src/**/*.ts\" \"extension/_locales/**/*.json\" extension/popup.html",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css}\" \"extension/src/**/*.ts\" \"extension/_locales/**/*.json\" extension/popup.html",
     "test:task": "node --experimental-strip-types --test \"src/task/*.test.ts\"",
     "build:extension": "pnpm --filter transly-extension run build"
   },
@@ -31,7 +33,9 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "postcss": "^8.5.1",
+    "prettier": "^3.9.9",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.71.0",

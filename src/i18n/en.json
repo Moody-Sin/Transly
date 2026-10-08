@@ -97,6 +97,10 @@
     "statusKeyDeleteFailed": "Failed to delete key",
     "statusTokenRotated": "Token regenerated — existing extension pairings are now invalid.",
     "statusTokenRotateFailed": "Failed to regenerate token",
+    "serverStatusTitle": "Local extension service",
+    "serverStatusRunning": "● Running",
+    "serverStatusStarting": "Starting...",
+    "serverStatusFailed": "▲ Failed to start",
     "statusCacheCleared": "Cleared {n} cached entries"
   }
 }

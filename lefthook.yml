@@ -13,5 +13,7 @@ pre-commit:
       run: pnpm --filter transly-extension exec tsc --noEmit
     frontend-lint:
       run: pnpm run lint
+    frontend-format:
+      run: pnpm run format:check
     frontend-test:
       run: pnpm run test:task

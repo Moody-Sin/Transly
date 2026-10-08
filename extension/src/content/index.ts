@@ -23,15 +23,19 @@ const IGNORED_TAGS = new Set([
 ])
 
 export function shouldTranslateElement(element: Element): boolean {
-  if (IGNORED_TAGS.has(element.tagName)) return false
+  // tagName 大小写取决于命名空间：HTML 元素返回大写，SVG 等返回小写，
+  // 归一化后比较，否则 IGNORED_TAGS 中的 'SVG' 永远不会命中。
+  if (IGNORED_TAGS.has(element.tagName.toUpperCase())) return false
   if (element.hasAttribute('data-no-translate')) return false
   if (element.classList.contains('notranslate')) return false
 
   // 沿祖先链深度检查是否有屏蔽标签或属性，防止嵌套在屏蔽区域内的文本节点被误翻；
-  // 遵循通用安全约定，默认跳过 contenteditable 区域以及 Monaco/CodeMirror 专用编辑器容器
+  // 遵循通用安全约定，默认跳过 contenteditable 区域以及 Monaco/CodeMirror 专用编辑器容器。
+  // svg 必须在此列出：SVG 命名空间下的 tagName 为小写（text / title / tspan），
+  // 单靠 IGNORED_TAGS 拦不住图表、地图标注等被翻译后破版的情况。
   if (
     element.closest(
-      '[data-no-translate], .notranslate, pre, code, textarea, input, script, style, [contenteditable]:not([contenteditable="false"]), .monaco-editor, .cm-editor',
+      '[data-no-translate], .notranslate, pre, code, textarea, input, script, style, svg, [contenteditable]:not([contenteditable="false"]), .monaco-editor, .cm-editor',
     )
   ) {
     return false
@@ -124,7 +128,6 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 
   return entries
 }
-
 
 let isObserving = false
 let currentObserver: MutationObserver | null = null
@@ -258,18 +261,20 @@ async function translateEntries(
   batchSize: number = 30,
   expectedGen: number = currentGeneration,
 ): Promise<number> {
-  const requestTotalNodes = entries.length
-  const totalBatches = Math.ceil(requestTotalNodes / batchSize)
   let failedBatches = 0
 
   for (let i = 0; i < entries.length; i += batchSize) {
     // 发送前检查：如果用户已经点击“取消”、“还原原文”或发起了新任务，直接阻断
     if (expectedGen !== currentGeneration) {
-      console.log(`[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`)
-      chrome.runtime.sendMessage({
-        type: 'TRANSLATION_CANCELLED',
-        generation: expectedGen,
-      }).catch(() => {})
+      console.log(
+        `[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`,
+      )
+      chrome.runtime
+        .sendMessage({
+          type: 'TRANSLATION_CANCELLED',
+          generation: expectedGen,
+        })
+        .catch(() => {})
       return failedBatches
     }
 
@@ -277,28 +282,34 @@ async function translateEntries(
     const items = batch.map((item) => ({ id: item.id, text: item.text }))
 
     try {
-      const response = await new Promise<{ ok: boolean; data?: BatchResponsePayload; error?: string }>(
-        (resolve) => {
-          chrome.runtime.sendMessage(
-            {
-              type: 'TRANSLATE_BATCH',
-              items,
-              source_lang: 'auto',
-              target_lang: targetLang,
-              engine,
-            },
-            resolve,
-          )
-        },
-      )
+      const response = await new Promise<{
+        ok: boolean
+        data?: BatchResponsePayload
+        error?: string
+      }>((resolve) => {
+        chrome.runtime.sendMessage(
+          {
+            type: 'TRANSLATE_BATCH',
+            items,
+            source_lang: 'auto',
+            target_lang: targetLang,
+            engine,
+          },
+          resolve,
+        )
+      })
 
       // 响应后强校验：如果请求在途期间用户触发了取消、还原或新任务，彻底丢弃响应，严禁写入 DOM
       if (expectedGen !== currentGeneration) {
-        console.log(`[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`)
-        chrome.runtime.sendMessage({
-          type: 'TRANSLATION_CANCELLED',
-          generation: expectedGen,
-        }).catch(() => {})
+        console.log(
+          `[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`,
+        )
+        chrome.runtime
+          .sendMessage({
+            type: 'TRANSLATION_CANCELLED',
+            generation: expectedGen,
+          })
+          .catch(() => {})
         return failedBatches
       }
 
@@ -351,15 +362,16 @@ async function translateEntries(
 
     // 广播进度给 Popup 与扩展徽标
     if (expectedGen === currentGeneration) {
-      chrome.runtime.sendMessage({
-        type: 'TRANSLATION_PROGRESS',
-        generation: expectedGen,
-        completed: currentTaskCompleted,
-        total: currentTaskTotal,
-        failedBatches,
-        totalBatches,
-        failedCount: failedItemsMap.size,
-      }).catch(() => {})
+      chrome.runtime
+        .sendMessage({
+          type: 'TRANSLATION_PROGRESS',
+          generation: expectedGen,
+          completed: currentTaskCompleted,
+          total: currentTaskTotal,
+          failedBatches,
+          failedCount: failedItemsMap.size,
+        })
+        .catch(() => {})
     }
   }
 
@@ -377,23 +389,28 @@ async function translateEntries(
 function broadcastTerminalState(expectedGen: number, failedBatches: number) {
   const isTotalFailed = currentTaskCompleted === 0 && currentTaskTotal > 0
   const isPartialFailed = failedItemsMap.size > 0 && currentTaskCompleted > 0
-  chrome.runtime.sendMessage({
-    type: isTotalFailed
-      ? 'TRANSLATION_FAILED'
-      : isPartialFailed
-        ? 'TRANSLATION_PARTIAL_FAILED'
-        : 'TRANSLATION_FINISHED',
-    generation: expectedGen,
-    completed: currentTaskCompleted,
-    total: currentTaskTotal,
-    failedBatches,
-    failedCount: failedItemsMap.size,
-  }).catch(() => {})
+  chrome.runtime
+    .sendMessage({
+      type: isTotalFailed
+        ? 'TRANSLATION_FAILED'
+        : isPartialFailed
+          ? 'TRANSLATION_PARTIAL_FAILED'
+          : 'TRANSLATION_FINISHED',
+      generation: expectedGen,
+      completed: currentTaskCompleted,
+      total: currentTaskTotal,
+      failedBatches,
+      failedCount: failedItemsMap.size,
+    })
+    .catch(() => {})
 }
 
-
 async function retryFailedTranslations() {
-  const entries = Array.from(failedItemsMap.values()).map(({ node, text, id }) => ({ node, text, id }))
+  const entries = Array.from(failedItemsMap.values()).map(({ node, text, id }) => ({
+    node,
+    text,
+    id,
+  }))
   if (entries.length === 0) return
 
   stopDynamicObserver()
@@ -405,7 +422,13 @@ async function retryFailedTranslations() {
   currentTaskCompleted = 0
   failedItemsMap.clear()
 
-  const failedBatches = await translateEntries(entries, currentTargetLang, currentEngine, 30, retryGeneration)
+  const failedBatches = await translateEntries(
+    entries,
+    currentTargetLang,
+    currentEngine,
+    30,
+    retryGeneration,
+  )
   if (retryGeneration === currentGeneration) {
     broadcastTerminalState(retryGeneration, failedBatches)
     startDynamicObserver(currentTargetLang, currentEngine, retryGeneration)
@@ -421,13 +444,15 @@ function cancelTranslation() {
   }
   currentGeneration += 1
   stopDynamicObserver()
-  chrome.runtime.sendMessage({
-    type: 'TRANSLATION_CANCELLED',
-    generation: currentGeneration,
-    completed: currentTaskCompleted,
-    total: currentTaskTotal,
-    failedCount: failedItemsMap.size,
-  }).catch(() => {})
+  chrome.runtime
+    .sendMessage({
+      type: 'TRANSLATION_CANCELLED',
+      generation: currentGeneration,
+      completed: currentTaskCompleted,
+      total: currentTaskTotal,
+      failedCount: failedItemsMap.size,
+    })
+    .catch(() => {})
 }
 
 /**
@@ -456,14 +481,24 @@ export async function translateFullPage(
     return
   }
 
-  chrome.runtime.sendMessage({
-    type: 'TRANSLATION_STARTED',
-    generation: taskGeneration,
-    total: entries.length,
-  }).catch(() => {})
+  chrome.runtime
+    .sendMessage({
+      type: 'TRANSLATION_STARTED',
+      generation: taskGeneration,
+      total: entries.length,
+    })
+    .catch(() => {})
 
-  console.log(`[Transly] 收集到 ${entries.length} 个文本节点，任务版本=${taskGeneration}，开始批量翻译...`)
-  const failedBatches = await translateEntries(entries, targetLang, engine, batchSize, taskGeneration)
+  console.log(
+    `[Transly] 收集到 ${entries.length} 个文本节点，任务版本=${taskGeneration}，开始批量翻译...`,
+  )
+  const failedBatches = await translateEntries(
+    entries,
+    targetLang,
+    engine,
+    batchSize,
+    taskGeneration,
+  )
 
   // 翻译结束时再次校验代际版本，避免中途已被还原后误开启动态监听
   if (taskGeneration === currentGeneration) {
@@ -511,12 +546,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     currentTaskCompleted = 0
     stopDynamicObserver()
     restoreOriginalText()
-    chrome.runtime.sendMessage({
-      type: 'TRANSLATION_RESTORED',
-      generation: currentGeneration,
-    }).catch(() => {})
+    chrome.runtime
+      .sendMessage({
+        type: 'TRANSLATION_RESTORED',
+        generation: currentGeneration,
+      })
+      .catch(() => {})
     sendResponse({ ok: true })
     return true
   }
 })
-

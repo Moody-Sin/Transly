@@ -34,7 +34,8 @@ chrome.runtime.onInstalled.addListener(() => {
 
 interface TaskProgressState {
   generation: number
-  status: 'idle' | 'translating' | 'finished' | 'partially_failed' | 'cancelled' | 'restored' | 'failed'
+  status:
+    'idle' | 'translating' | 'finished' | 'partially_failed' | 'cancelled' | 'restored' | 'failed'
   completed: number
   total: number
   failedBatches: number
@@ -85,7 +86,10 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         failedBatches: message.failedBatches,
       })
     }
-  } else if (message.type === 'TRANSLATION_FINISHED' || message.type === 'TRANSLATION_PARTIAL_FAILED') {
+  } else if (
+    message.type === 'TRANSLATION_FINISHED' ||
+    message.type === 'TRANSLATION_PARTIAL_FAILED'
+  ) {
     const partial = message.type === 'TRANSLATION_PARTIAL_FAILED'
     setBadge(tabId, partial ? 'WARN' : 'DONE', partial ? '#f59e0b' : '#10b981')
     if (tabId) {
@@ -225,6 +229,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
     return true
   }
-
 })
-

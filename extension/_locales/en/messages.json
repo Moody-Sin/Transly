@@ -56,6 +56,9 @@
   "progressFinished": {
     "message": "Done ✓"
   },
+  "progressNothingToTranslate": {
+    "message": "No translatable text on this page"
+  },
   "progressCancelled": {
     "message": "Cancelled"
   },

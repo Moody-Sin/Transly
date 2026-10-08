@@ -56,6 +56,9 @@
   "progressFinished": {
     "message": "翻译完成 ✓"
   },
+  "progressNothingToTranslate": {
+    "message": "本页未检测到可翻译文本"
+  },
   "progressCancelled": {
     "message": "已取消"
   },

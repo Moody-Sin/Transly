@@ -1,7 +1,18 @@
 import { useState, useEffect } from 'react'
-import { Languages, ArrowRight, Copy, Check, Key, Settings, X, Save, Globe, Image as ImageIcon } from 'lucide-react'
+import {
+  Languages,
+  ArrowRight,
+  Copy,
+  Check,
+  Key,
+  Settings,
+  X,
+  Save,
+  Globe,
+  Image as ImageIcon,
+} from 'lucide-react'
 import { commands } from './bindings'
-import type { EngineCapabilitiesDto } from './bindings'
+import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
 import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
@@ -34,6 +45,7 @@ export default function App() {
   const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrError, setOcrError] = useState<string | null>(null)
+  const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
 
   const isFloatWindow = window.location.hash === '#float'
 
@@ -48,47 +60,106 @@ export default function App() {
     error?.kind === 'network' && (engine === 'google' || engine === 'google_web')
 
   const loadGlossaryList = () => {
-    commands.getGlossaryTerms().then((res) => {
-      if (res.status === 'ok') {
-        setGlossaryList(res.data)
-      }
-    }).catch(() => {})
+    commands
+      .getGlossaryTerms()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setGlossaryList(res.data)
+        }
+      })
+      .catch(() => {})
   }
 
   const checkConfiguredKeys = () => {
-    commands.isApiKeyConfigured('deepl').then(setDeeplConfigured).catch(() => {})
-    commands.isApiKeyConfigured('deepseek').then(setDeepseekConfigured).catch(() => {})
-    commands.isApiKeyConfigured('openai').then(setOpenaiConfigured).catch(() => {})
+    commands
+      .isApiKeyConfigured('deepl')
+      .then(setDeeplConfigured)
+      .catch(() => {})
+    commands
+      .isApiKeyConfigured('deepseek')
+      .then(setDeepseekConfigured)
+      .catch(() => {})
+    commands
+      .isApiKeyConfigured('openai')
+      .then(setOpenaiConfigured)
+      .catch(() => {})
   }
 
   useEffect(() => {
     // 获取本地服务器 Token 供插件端授权配对
-    commands.getServerToken().then((res) => {
-      if (res.status === 'ok') {
-        setServerToken(res.data)
-      }
-    }).catch(() => {})
+    commands
+      .getServerToken()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setServerToken(res.data)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取配对 Token 失败：', err)
+      })
 
     checkConfiguredKeys()
 
-    commands.getClipboardMonitor().then((enabled) => {
-      setClipboardMonitor(enabled)
-    }).catch(() => {})
+    commands
+      .getClipboardMonitor()
+      .then((enabled) => {
+        setClipboardMonitor(enabled)
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取剪贴板监听状态失败：', err)
+      })
 
-    commands.getCacheEnabled().then((enabled) => {
-      setCacheEnabled(enabled)
-    }).catch(() => {})
+    commands
+      .getCacheEnabled()
+      .then((enabled) => {
+        setCacheEnabled(enabled)
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取缓存开关失败：', err)
+      })
 
     loadGlossaryList()
   }, [])
 
   useEffect(() => {
+    // 本地服务在后台异步启动，失败只进 stderr 时用户完全无感
+    // （扩展端会显示“桌面端未运行”，桌面端却毫无提示）。
+    // 启动需要时间，故轮询数次直到脱离 starting 态。
+    let cancelled = false
+    let attempts = 0
+    const poll = () => {
+      commands
+        .getServerStatus()
+        .then((status) => {
+          if (cancelled) return
+          setServerStatus(status)
+          attempts += 1
+          if (status.state === 'starting' && attempts < 10) {
+            setTimeout(poll, 500)
+          }
+        })
+        .catch((err) => {
+          console.warn('[Transly] 读取本地服务状态失败：', err)
+        })
+    }
+    poll()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     // 引擎能力与配置检查：展示批量上限、降级标记与密钥配置状态
     let cancelled = false
-    commands.getEngineCapabilities(engine).then((res) => {
-      if (!cancelled && res.status === 'ok') setCapabilities(res.data)
-    }).catch(() => {})
-    return () => { cancelled = true }
+    commands
+      .getEngineCapabilities(engine)
+      .then((res) => {
+        if (!cancelled && res.status === 'ok') setCapabilities(res.data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [engine])
 
   const handleToggleCacheEnabled = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -294,7 +365,11 @@ export default function App() {
               onClick={handleCopy}
               className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
             >
-              {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+              {copied ? (
+                <Check className="h-3 w-3 text-emerald-600" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
               <span>{copied ? t.translation.copied : t.translation.copy}</span>
             </button>
           )}
@@ -378,7 +453,8 @@ export default function App() {
           {capabilities && (
             <div className="text-[10px] text-slate-400">
               {capabilities.name}
-              {capabilities.supports_batch && ` · ${t.translation.maxBatch}${capabilities.max_batch_size}`}
+              {capabilities.supports_batch &&
+                ` · ${t.translation.maxBatch}${capabilities.max_batch_size}`}
               {capabilities.requires_api_key && ` · ${t.translation.apiKeyRequired}`}
             </div>
           )}
@@ -460,7 +536,9 @@ export default function App() {
 
           <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div className="flex-1 overflow-auto text-sm text-slate-800">
-              {translatedText || <span className="text-slate-400">{t.translation.outputPlaceholder}</span>}
+              {translatedText || (
+                <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
+              )}
             </div>
             <div className="mt-2 flex items-center justify-between">
               {usedEngine && (
@@ -472,7 +550,11 @@ export default function App() {
                     onClick={handleCopy}
                     className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
                   >
-                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
                     <span>{copied ? t.translation.copied : t.translation.copy}</span>
                   </button>
                 </div>
@@ -521,7 +603,11 @@ export default function App() {
                     type="password"
                     value={deeplKey}
                     onChange={(e) => setDeeplKey(e.target.value)}
-                    placeholder={deeplConfigured ? t.settings.keyPlaceholderOverwrite : t.settings.keyPlaceholderDeepl}
+                    placeholder={
+                      deeplConfigured
+                        ? t.settings.keyPlaceholderOverwrite
+                        : t.settings.keyPlaceholderDeepl
+                    }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -544,7 +630,11 @@ export default function App() {
                     type="password"
                     value={deepseekKey}
                     onChange={(e) => setDeepseekKey(e.target.value)}
-                    placeholder={deepseekConfigured ? t.settings.keyPlaceholderOverwrite : t.settings.keyPlaceholderDeepseek}
+                    placeholder={
+                      deepseekConfigured
+                        ? t.settings.keyPlaceholderOverwrite
+                        : t.settings.keyPlaceholderDeepseek
+                    }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -567,7 +657,11 @@ export default function App() {
                     type="password"
                     value={openaiKey}
                     onChange={(e) => setOpenaiKey(e.target.value)}
-                    placeholder={openaiConfigured ? t.settings.keyPlaceholderOverwrite : t.settings.keyPlaceholderOpenai}
+                    placeholder={
+                      openaiConfigured
+                        ? t.settings.keyPlaceholderOverwrite
+                        : t.settings.keyPlaceholderOpenai
+                    }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -585,8 +679,12 @@ export default function App() {
               {/* 剪贴板监听开关 */}
               <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
                 <div>
-                  <div className="font-medium text-slate-700">{t.settings.clipboardMonitorLabel}</div>
-                  <div className="text-[11px] text-slate-400">{t.settings.clipboardMonitorDesc}</div>
+                  <div className="font-medium text-slate-700">
+                    {t.settings.clipboardMonitorLabel}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {t.settings.clipboardMonitorDesc}
+                  </div>
                 </div>
                 <input
                   type="checkbox"
@@ -597,17 +695,44 @@ export default function App() {
               </div>
 
               {/* 插件通信 Token 轮换管理 */}
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <div>
-                  <div className="font-medium text-slate-700">{t.settings.tokenRotateTitle}</div>
-                  <div className="text-[11px] text-slate-400">{t.settings.tokenRotateDesc}</div>
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-slate-700">{t.settings.tokenRotateTitle}</div>
+                    <div className="text-[11px] text-slate-400">{t.settings.tokenRotateDesc}</div>
+                  </div>
+                  <button
+                    onClick={handleRotateToken}
+                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+                  >
+                    {t.settings.btnRotateToken}
+                  </button>
                 </div>
-                <button
-                  onClick={handleRotateToken}
-                  className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
-                >
-                  {t.settings.btnRotateToken}
-                </button>
+                {/* 本地扩展服务状态：启动失败（如端口被占）此前只进 stderr，
+                    用户只能看到扩展端“桌面端未运行”而无法自查 */}
+                <div className="flex items-center justify-between border-t border-slate-200 pt-2">
+                  <div className="text-[11px] text-slate-500">{t.settings.serverStatusTitle}</div>
+                  <span
+                    className={
+                      serverStatus?.state === 'running'
+                        ? 'text-[11px] font-medium text-emerald-600'
+                        : serverStatus?.state === 'failed'
+                          ? 'text-[11px] font-medium text-rose-600'
+                          : 'text-[11px] text-slate-400'
+                    }
+                  >
+                    {serverStatus?.state === 'running'
+                      ? t.settings.serverStatusRunning
+                      : serverStatus?.state === 'failed'
+                        ? t.settings.serverStatusFailed
+                        : t.settings.serverStatusStarting}
+                  </span>
+                </div>
+                {serverStatus?.state === 'failed' && (
+                  <div className="rounded bg-rose-50 border border-rose-200 px-2 py-1 text-[11px] leading-snug text-rose-600">
+                    {serverStatus.reason}
+                  </div>
+                )}
               </div>
 
               {/* 缓存数据管理 */}
@@ -633,7 +758,9 @@ export default function App() {
                     onClick={async () => {
                       const res = await commands.clearCache()
                       if (res.status === 'ok') {
-                        setSaveStatus(t.settings.statusCacheCleared.replace('{n}', String(res.data)))
+                        setSaveStatus(
+                          t.settings.statusCacheCleared.replace('{n}', String(res.data)),
+                        )
                         setTimeout(() => setSaveStatus(null), 2000)
                       }
                     }}

@@ -14,6 +14,8 @@ extension/dist/
 
 # Tauri
 src-tauri/target/
+# tauri-build 每次构建重新生成的 ACL schema 产物（Tauri 官方模板同样忽略）
+src-tauri/gen/schemas/
 
 # Logs
 logs/

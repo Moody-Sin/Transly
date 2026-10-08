@@ -18,17 +18,20 @@ const progressBar = document.getElementById('progress-bar') as HTMLElement
 applyStaticTranslations()
 
 // 回显已保存的配置
-chrome.storage.local.get(['transly_server_token', 'transly_engine', 'transly_target_lang'], (res) => {
-  if (res.transly_server_token) {
-    inputToken.value = res.transly_server_token
-  }
-  if (res.transly_engine) {
-    selectEngine.value = res.transly_engine
-  }
-  if (res.transly_target_lang && selectLang) {
-    selectLang.value = res.transly_target_lang
-  }
-})
+chrome.storage.local.get(
+  ['transly_server_token', 'transly_engine', 'transly_target_lang'],
+  (res) => {
+    if (res.transly_server_token) {
+      inputToken.value = res.transly_server_token
+    }
+    if (res.transly_engine) {
+      selectEngine.value = res.transly_engine
+    }
+    if (res.transly_target_lang && selectLang) {
+      selectLang.value = res.transly_target_lang
+    }
+  },
+)
 
 selectEngine.addEventListener('change', () => {
   chrome.storage.local.set({ transly_engine: selectEngine.value })
@@ -95,9 +98,21 @@ function renderProgressState(state: {
   btnCancel.style.display = state.status === 'translating' ? 'block' : 'none'
   btnRetry.style.display = failedCount > 0 && state.status !== 'translating' ? 'block' : 'none'
 
+  // 无节点可译时 content script 只广播终态、不发 STARTED（total=0）。
+  // 若按常规渲染，进度条会从点击时的 10% 回落为 0% 并显示“完成”，
+  // 用户观感是“点了没反应”；此处显式区分该终态。
+  if (state.status === 'finished' && state.total === 0) {
+    progressText.textContent = t('progressNothingToTranslate')
+    progressCount.textContent = ''
+    progressBar.style.width = '0%'
+    return
+  }
+
   if (state.status === 'cancelled') {
     progressText.textContent =
-      failedCount > 0 ? t('progressCancelledRetryable', [String(failedCount)]) : t('progressCancelled')
+      failedCount > 0
+        ? t('progressCancelledRetryable', [String(failedCount)])
+        : t('progressCancelled')
   } else if (state.status === 'partially_failed') {
     progressText.textContent = t('progressPartiallyFailed', [String(failedCount)])
   } else if (state.status === 'finished') {
@@ -108,7 +123,6 @@ function renderProgressState(state: {
     progressText.textContent = t('progressTranslating')
   }
 }
-
 
 async function restoreProgressState() {
   // 进度快照按 tabId 索引，Popup 始终关心当前活动标签页。
@@ -160,7 +174,12 @@ btnRetry.addEventListener('click', () => {
 // 监听来自 content script 的翻译进度广播
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'TRANSLATION_STARTED') {
-    renderProgressState({ status: 'translating', completed: 0, total: message.total, failedBatches: 0 })
+    renderProgressState({
+      status: 'translating',
+      completed: 0,
+      total: message.total,
+      failedBatches: 0,
+    })
   } else if (message.type === 'TRANSLATION_PROGRESS') {
     renderProgressState({
       status: 'translating',
@@ -169,7 +188,10 @@ chrome.runtime.onMessage.addListener((message) => {
       failedBatches: message.failedBatches,
       failedCount: message.failedCount,
     })
-  } else if (message.type === 'TRANSLATION_FINISHED' || message.type === 'TRANSLATION_PARTIAL_FAILED') {
+  } else if (
+    message.type === 'TRANSLATION_FINISHED' ||
+    message.type === 'TRANSLATION_PARTIAL_FAILED'
+  ) {
     renderProgressState({
       status: message.type === 'TRANSLATION_PARTIAL_FAILED' ? 'partially_failed' : 'finished',
       completed: message.completed,

@@ -5,6 +5,7 @@ pub mod engine_pool;
 pub mod ocr;
 pub mod secrets;
 pub mod server;
+pub mod storage;
 
 #[macro_export]
 macro_rules! app_command_builder {
@@ -27,7 +28,8 @@ macro_rules! app_command_builder {
             $crate::commands::get_cache_enabled,
             $crate::commands::ocr_clipboard_image,
             $crate::commands::set_clipboard_monitor,
-            $crate::commands::get_clipboard_monitor
+            $crate::commands::get_clipboard_monitor,
+            $crate::commands::get_server_status
         ])
     };
 }

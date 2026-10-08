@@ -91,6 +91,16 @@ fn encoded_len(s: &str) -> usize {
     s.chars().map(|c| if c.is_ascii() { 1 } else { 9 }).sum()
 }
 
+/// 是否需要先切块再发请求。
+///
+/// 判定必须与切块上限同量纲（编码后长度），不能按字符数：
+/// 中文 1 字编码后为 9 字符，445~1000 字的中文段落字符数看似不大，
+/// 编码后却已越过 `MAX_ENCODED_QUERY_CHARS`。按字符数判定会放这段文本
+/// 绕过 `chunk_paragraph` 直连，生成超出自身声明上限的 URL。
+fn needs_chunking(text: &str) -> bool {
+    encoded_len(text) > MAX_ENCODED_QUERY_CHARS
+}
+
 /// 将单个段落切成可安全放入 GET URL 的片段。
 ///
 /// 策略：
@@ -195,8 +205,9 @@ impl TranslateEngine for GoogleWebEngine {
     }
 
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
-        // 如果文本超过 1000 字符，按段落和固定长度双重切片，彻底防止超长单行溢出
-        if req.text.chars().count() > 1000 {
+        // 超限文本按段落与字符窗口双重切片，彻底防止超长单行溢出。
+        // 门槛按编码后长度判定，与 chunk_paragraph 内部上限保持同一量纲
+        if needs_chunking(&req.text) {
             let mut full_translated = String::new();
             let mut detected_lang = None;
 
@@ -319,6 +330,46 @@ mod tests {
         for chunk in &chunks {
             assert!(chunk.chars().count() <= MAX_CHUNK_CHARS);
             assert!(encoded_len(chunk) <= MAX_ENCODED_QUERY_CHARS);
+        }
+        assert_eq!(chunks.concat(), text, "硬切不得丢失任何字符");
+    }
+
+    #[test]
+    fn test_needs_chunking_uses_encoded_length_not_char_count() {
+        // 回归：门槛曾按字符数判定（>1000），导致 445~1000 字的中文段落
+        // 绕过 chunk_paragraph 直连，编码后长度（445×9=4005）已越过自身上限。
+        let cjk_500 = "中".repeat(500);
+        assert!(
+            cjk_500.chars().count() < 1000,
+            "该用例必须落在旧门槛的盲区内，否则测不到回归"
+        );
+        assert!(
+            encoded_len(&cjk_500) > MAX_ENCODED_QUERY_CHARS,
+            "中文 500 字编码后应超限"
+        );
+        assert!(needs_chunking(&cjk_500), "超限中文段落必须进切块分支");
+
+        // 边界：恰好等于上限不进切块，多一个非 ASCII 字符即进
+        let ascii_at_limit = "a".repeat(MAX_ENCODED_QUERY_CHARS);
+        assert!(!needs_chunking(&ascii_at_limit));
+        assert!(needs_chunking(&format!("{ascii_at_limit}中")));
+
+        // 短文本与西文长文不受影响
+        assert!(!needs_chunking("hello 世界"));
+        assert!(needs_chunking(&"a".repeat(MAX_ENCODED_QUERY_CHARS + 1)));
+    }
+
+    #[test]
+    fn test_every_chunk_respects_encoded_limit_for_former_blind_spot() {
+        // 旧盲区文本经 chunk_paragraph 后，每块都必须落在编码长度上限内
+        let text = "中".repeat(500);
+        let chunks = chunk_paragraph(&text);
+        assert!(chunks.len() > 1, "500 字中文必须切成多块");
+        for chunk in &chunks {
+            assert!(
+                encoded_len(chunk) <= MAX_ENCODED_QUERY_CHARS,
+                "切块后仍超出编码长度上限"
+            );
         }
         assert_eq!(chunks.concat(), text, "硬切不得丢失任何字符");
     }

@@ -17,6 +17,7 @@
 - **commands**: 对外暴露的 Tauri command 强类型调用接入层。
 - **secrets**: 封装 `keyring` 调用原生系统凭据管理器（Windows Credential Manager / macOS Keychain / Linux Secret Service）。
 - **server**: 基于 `axum` 搭建的轻量本地 HTTP 服务（严格监听 `127.0.0.1`），为浏览器插件提供无缝批量翻译接口。
+- **storage**: 应用数据目录解析（Tauri `identifier` 约定）与旧版缓存迁移。平台目录假设集中于此，`transly-core` 保持零平台假设。
 - **capabilities**: Tauri 2 ACL 能力声明。应用自有命令不受 ACL 约束，但**插件命令（`plugin:*`）必须在此显式放行**，否则前端调用会被运行时静默拒绝（当前仅放行 `core:event:default`，供浮窗 `listen` 事件通道使用）。
 
 ## 安全规则
@@ -30,7 +31,7 @@
 
 - **绑定生成**：运行 `pnpm run generate:bindings` 导出强类型接口。
 - **本地构建**：运行 `pnpm run tauri build` 生成 release 二进制与安装包。
-- **构建与调试**：本地开发用 `pnpm run tauri build`（或 `pnpm run tauri dev`）；发版必须走 CLI 或 CI —— 裸 `cargo build --release` 未启用 `custom-protocol` 特征，产物为 dev 风味，会去加载 devUrl 而非打包资源。
+- **构建与调试**：本地开发用 `pnpm run tauri dev`；发版必须走 CLI（`pnpm run tauri build`）或 CI —— 它负责注入打包所需配置。切勿裸跑 `cargo build --release`，产物不含前端资源，启动后会去加载 `devUrl`。
 - **单元与集成测试**：运行 `cargo test --workspace` 验证所有核心功能。
 
 ## 许可证

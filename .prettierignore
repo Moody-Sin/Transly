@@ -1,0 +1,8 @@
+# 自动生成或第三方产物，禁止格式化
+src/bindings.ts
+dist/
+node_modules/
+target/
+src-tauri/gen/
+pnpm-lock.yaml
+CHANGELOG.md

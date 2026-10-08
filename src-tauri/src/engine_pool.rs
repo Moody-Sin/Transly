@@ -23,6 +23,11 @@ impl EnginePool {
         }
     }
 
+    /// 测试专用：注入模拟凭据读取器，避免触碰开发者与 CI 的真实系统凭据库。
+    ///
+    /// 生产路径 `new()` 恒为 `None`（走 `crate::secrets::get_secret`），
+    /// 因此不对外暴露该注入点。
+    #[cfg(test)]
     pub fn with_secret_getter(getter: SecretGetter) -> Self {
         let google = Arc::new(GoogleWebEngine::new());
         Self {

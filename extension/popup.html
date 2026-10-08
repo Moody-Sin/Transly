@@ -1,120 +1,153 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <title>Transly</title>
-  <style>
-    body {
-      width: 230px;
-      margin: 0;
-      padding: 12px;
-      font-family: system-ui, -apple-system, sans-serif;
-      font-size: 13px;
-      color: #1e293b;
-      background: #f8fafc;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 12px;
-      font-weight: 600;
-    }
-    .status {
-      font-size: 11px;
-      color: #64748b;
-    }
-    .btn {
-      width: 100%;
-      padding: 7px 0;
-      margin-bottom: 8px;
-      border: none;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .btn-primary {
-      background: #4f46e5;
-      color: #ffffff;
-    }
-    .btn-primary:hover {
-      background: #4338ca;
-    }
-    .btn-secondary {
-      background: #e2e8f0;
-      color: #334155;
-    }
-    .btn-secondary:hover {
-      background: #cbd5e1;
-    }
-    .token-box {
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px dashed #cbd5e1;
-    }
-    .token-input {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 6px 8px;
-      font-size: 11px;
-      border: 1px solid #cbd5e1;
-      border-radius: 4px;
-      outline: none;
-      margin-bottom: 6px;
-      background: #ffffff;
-    }
-    .token-input:focus {
-      border-color: #4f46e5;
-    }
-    .btn-sm {
-      padding: 4px 0;
-      font-size: 11px;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <span>Transly</span>
-    <span id="conn-status" class="status" data-i18n="connChecking">检测连接中...</span>
-  </div>
-  <div class="engine-box" style="margin-bottom: 8px; display: flex; gap: 6px;">
-    <select id="select-engine" class="token-input" style="margin-bottom: 0; flex: 1.4;">
-      <option value="google" data-i18n="engineGoogle">Google 网页翻译</option>
-      <option value="deepl">DeepL</option>
-      <option value="deepseek">DeepSeek</option>
-      <option value="openai">OpenAI</option>
-    </select>
-    <select id="select-lang" class="token-input" style="margin-bottom: 0; flex: 1;">
-      <option value="zh-CN">简体中文</option>
-      <option value="en">English</option>
-      <option value="ja">日本語</option>
-      <option value="ko">한국어</option>
-      <option value="fr">Français</option>
-      <option value="de">Deutsch</option>
-    </select>
-  </div>
-  <button id="btn-translate" class="btn btn-primary" data-i18n="btnTranslate">翻译此网页 (仅译文)</button>
-  <button id="btn-cancel" class="btn btn-secondary" style="display: none;" data-i18n="btnCancel">取消翻译</button>
-  <button id="btn-retry" class="btn btn-secondary" style="display: none;" data-i18n="btnRetry">重试失败项</button>
-  <button id="btn-restore" class="btn btn-secondary" data-i18n="btnRestore">还原原文</button>
-
-  <div id="progress-box" style="display: none; margin-bottom: 8px; padding: 6px 8px; background: #e0e7ff; border-radius: 6px; font-size: 11px; color: #3730a3;">
-    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-      <span id="progress-text" data-i18n="progressPreparing">准备翻译...</span>
-      <span id="progress-count">0/0</span>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Transly</title>
+    <style>
+      body {
+        width: 230px;
+        margin: 0;
+        padding: 12px;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        font-size: 13px;
+        color: #1e293b;
+        background: #f8fafc;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+        font-weight: 600;
+      }
+      .status {
+        font-size: 11px;
+        color: #64748b;
+      }
+      .btn {
+        width: 100%;
+        padding: 7px 0;
+        margin-bottom: 8px;
+        border: none;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .btn-primary {
+        background: #4f46e5;
+        color: #ffffff;
+      }
+      .btn-primary:hover {
+        background: #4338ca;
+      }
+      .btn-secondary {
+        background: #e2e8f0;
+        color: #334155;
+      }
+      .btn-secondary:hover {
+        background: #cbd5e1;
+      }
+      .token-box {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px dashed #cbd5e1;
+      }
+      .token-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        font-size: 11px;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        outline: none;
+        margin-bottom: 6px;
+        background: #ffffff;
+      }
+      .token-input:focus {
+        border-color: #4f46e5;
+      }
+      .btn-sm {
+        padding: 4px 0;
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <span>Transly</span>
+      <span id="conn-status" class="status" data-i18n="connChecking">检测连接中...</span>
     </div>
-    <div style="width: 100%; height: 4px; background: #c7d2fe; border-radius: 2px; overflow: hidden;">
-      <div id="progress-bar" style="width: 0%; height: 100%; background: #4f46e5; transition: width 0.2s;"></div>
+    <div class="engine-box" style="margin-bottom: 8px; display: flex; gap: 6px">
+      <select id="select-engine" class="token-input" style="margin-bottom: 0; flex: 1.4">
+        <option value="google" data-i18n="engineGoogle">Google 网页翻译</option>
+        <option value="deepl">DeepL</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="openai">OpenAI</option>
+      </select>
+      <select id="select-lang" class="token-input" style="margin-bottom: 0; flex: 1">
+        <option value="zh-CN">简体中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+      </select>
     </div>
-  </div>
+    <button id="btn-translate" class="btn btn-primary" data-i18n="btnTranslate">
+      翻译此网页 (仅译文)
+    </button>
+    <button id="btn-cancel" class="btn btn-secondary" style="display: none" data-i18n="btnCancel">
+      取消翻译
+    </button>
+    <button id="btn-retry" class="btn btn-secondary" style="display: none" data-i18n="btnRetry">
+      重试失败项
+    </button>
+    <button id="btn-restore" class="btn btn-secondary" data-i18n="btnRestore">还原原文</button>
 
-  <div class="token-box">
-    <input type="password" id="input-token" class="token-input" placeholder="粘贴桌面端配对 Token" data-i18n-placeholder="tokenPlaceholder" />
-    <button id="btn-save-token" class="btn btn-secondary btn-sm" data-i18n="btnSaveToken">保存配对 Token</button>
-  </div>
+    <div
+      id="progress-box"
+      style="
+        display: none;
+        margin-bottom: 8px;
+        padding: 6px 8px;
+        background: #e0e7ff;
+        border-radius: 6px;
+        font-size: 11px;
+        color: #3730a3;
+      "
+    >
+      <div style="display: flex; justify-content: space-between; margin-bottom: 4px">
+        <span id="progress-text" data-i18n="progressPreparing">准备翻译...</span>
+        <span id="progress-count">0/0</span>
+      </div>
+      <div
+        style="width: 100%; height: 4px; background: #c7d2fe; border-radius: 2px; overflow: hidden"
+      >
+        <div
+          id="progress-bar"
+          style="width: 0%; height: 100%; background: #4f46e5; transition: width 0.2s"
+        ></div>
+      </div>
+    </div>
 
-  <script src="popup.js"></script>
-</body>
+    <div class="token-box">
+      <input
+        type="password"
+        id="input-token"
+        class="token-input"
+        placeholder="粘贴桌面端配对 Token"
+        data-i18n-placeholder="tokenPlaceholder"
+      />
+      <button id="btn-save-token" class="btn btn-secondary btn-sm" data-i18n="btnSaveToken">
+        保存配对 Token
+      </button>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
 </html>

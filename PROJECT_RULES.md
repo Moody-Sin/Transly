@@ -103,20 +103,22 @@ transly/
 │
 ├── src-tauri/                 # Tauri 桌面应用与平台集成
 │   ├── src/
-│   │   ├── main.rs
+│   │   ├── main.rs            # 应用入口：状态挂载、托盘、快捷键、剪贴板监听任务
+│   │   ├── lib.rs             # 模块声明与 app_command_builder! 命令注册宏
 │   │   ├── commands/          # Tauri command 入口（薄层）
-│   │   ├── platform/          # 快捷键、剪贴板监听、截图、系统托盘
-│   │   ├── server/            # 本地 HTTP 服务（供浏览器插件调用）
-│   │   ├── secrets.rs         # 密钥读写（系统凭据管理器）
-│   │   └── error.rs
+│   │   ├── server/            # 本地 HTTP 服务（供浏览器插件调用）+ tests.rs
+│   │   ├── engine_pool.rs     # 引擎实例池（读写锁 + spawn_blocking 凭据读取）
+│   │   ├── cache_controller.rs# 缓存开关 generation 门禁
+│   │   ├── clipboard_gate.rs  # 剪贴板去重与划词抑制判定（纯函数）
+│   │   ├── ocr.rs             # 平台原生 OCR（Windows WinRT，其余平台返回未支持）
+│   │   └── secrets.rs         # 密钥读写（系统凭据管理器）
+│   ├── bin/export_bindings.rs # 导出 tauri-specta 强类型绑定
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 │
 ├── src/                       # 桌面端前端 (React + TS)
-│   ├── components/
-│   ├── pages/                 # 主窗口 / 设置 / 悬浮球 / 查词浮窗
-│   ├── hooks/
-│   ├── stores/
+│   ├── App.tsx                # 主窗口与浮窗（#float）视图、设置中心
+│   ├── task/                  # 共享任务状态机、代际隔离、useTaskRunner 钩子
 │   ├── i18n/                  # zh-CN.json / en.json
 │   └── bindings.ts            # tauri-specta 自动生成的类型与 API
 │
@@ -127,6 +129,8 @@ transly/
 │   │   └── popup/             # 插件工具栏弹窗 UI
 │   ├── manifest.json
 │   └── package.json
+│
+├── docs/                      # 架构决策与跨端边界说明（索引见 docs/README.md）
 │
 ├── .github/workflows/         # CI
 ├── lefthook.yml               # 本地 Git 提交钩子

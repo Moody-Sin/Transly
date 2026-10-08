@@ -105,18 +105,12 @@ function renderProgressState(state: {
 
 
 async function restoreProgressState() {
-  // 兼容直接作为 popup 打开或独立页面调试
-  let tabId: number | undefined
+  // 进度快照按 tabId 索引，Popup 始终关心当前活动标签页。
+  // 仅声明了 activeTab / storage 权限（未申请 tabs），`chrome.tabs.query`
+  // 不会返回 url 字段，因此不做 url 过滤，也不做全量标签页回退
+  // （那种回退在无 tabs 权限下永远拿不到 url，是死代码）。
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (activeTab?.id && !activeTab.url?.startsWith('chrome-extension://')) {
-    tabId = activeTab.id
-  } else {
-    // 降级查询最近的正常网页标签
-    const allTabs = await chrome.tabs.query({})
-    const webTab = allTabs.find((t) => t.id && t.url && !t.url.startsWith('chrome-extension://'))
-    tabId = webTab?.id
-  }
-
+  const tabId = activeTab?.id
   if (!tabId) return
 
   chrome.runtime.sendMessage({ type: 'GET_TASK_PROGRESS', tabId }, (response) => {

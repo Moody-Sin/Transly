@@ -185,16 +185,33 @@ export function startDynamicObserver(
         }
         const nodesToProcess = Array.from(pendingNodes)
         pendingNodes.clear()
+
+        // 增量批次是独立任务：重置计数基准，否则进度百分比与失败判定会被
+        // 首屏任务的累计值污染（total 只增不减 → 永不收敛；
+        // failedItemsMap 不清空 → 后续批次被误判为“部分失败”）。
+        const batchEntries: TextNodeEntry[] = []
         for (const root of nodesToProcess) {
           if (generation !== currentGeneration) break
           if (document.body.contains(root)) {
-            const entries = collectTextNodes(root)
-            if (entries.length > 0) {
-              currentTaskEntries.push(...entries)
-              currentTaskTotal += entries.length
-              await translateEntries(entries, currentTargetLang, currentEngine, 30, generation)
-            }
+            batchEntries.push(...collectTextNodes(root))
           }
+        }
+        if (batchEntries.length === 0 || generation !== currentGeneration) return
+
+        currentTaskEntries.push(...batchEntries)
+        currentTaskTotal = batchEntries.length
+        currentTaskCompleted = 0
+        failedItemsMap.clear()
+
+        const failedBatches = await translateEntries(
+          batchEntries,
+          currentTargetLang,
+          currentEngine,
+          30,
+          generation,
+        )
+        if (generation === currentGeneration) {
+          broadcastTerminalState(generation, failedBatches)
         }
       }, 500)
     }
@@ -226,13 +243,19 @@ interface BatchResponsePayload {
   }>
 }
 
+/**
+ * 翻译一批文本节点并原地写回 DOM。
+ *
+ * 返回本批次的失败批次数；**不广播任务终态**（由调用方在任务级广播一次），
+ * 仅广播中途进度。
+ */
 async function translateEntries(
   entries: TextNodeEntry[],
   targetLang: string,
   engine: string = 'google',
   batchSize: number = 30,
   expectedGen: number = currentGeneration,
-) {
+): Promise<number> {
   const requestTotalNodes = entries.length
   const totalBatches = Math.ceil(requestTotalNodes / batchSize)
   let failedBatches = 0
@@ -245,12 +268,11 @@ async function translateEntries(
         type: 'TRANSLATION_CANCELLED',
         generation: expectedGen,
       }).catch(() => {})
-      return
+      return failedBatches
     }
 
     const batch = entries.slice(i, i + batchSize)
     const items = batch.map((item) => ({ id: item.id, text: item.text }))
-    const texts = batch.map((item) => item.text)
 
     try {
       const response = await new Promise<{ ok: boolean; data?: BatchResponsePayload; error?: string }>(
@@ -259,7 +281,6 @@ async function translateEntries(
             {
               type: 'TRANSLATE_BATCH',
               items,
-              texts,
               source_lang: 'auto',
               target_lang: targetLang,
               engine,
@@ -276,7 +297,7 @@ async function translateEntries(
           type: 'TRANSLATION_CANCELLED',
           generation: expectedGen,
         }).catch(() => {})
-        return
+        return failedBatches
       }
 
       if (response && response.ok && response.data) {
@@ -340,22 +361,32 @@ async function translateEntries(
     }
   }
 
-  if (expectedGen === currentGeneration) {
-    const isTotalFailed = currentTaskCompleted === 0 && currentTaskTotal > 0
-    const isPartialFailed = failedItemsMap.size > 0 && currentTaskCompleted > 0
-    chrome.runtime.sendMessage({
-      type: isTotalFailed
-        ? 'TRANSLATION_FAILED'
-        : isPartialFailed
-          ? 'TRANSLATION_PARTIAL_FAILED'
-          : 'TRANSLATION_FINISHED',
-      generation: expectedGen,
-      completed: currentTaskCompleted,
-      total: currentTaskTotal,
-      failedBatches,
-      failedCount: failedItemsMap.size,
-    }).catch(() => {})
-  }
+  return failedBatches
+}
+
+/**
+ * 广播任务终态。
+ *
+ * 必须由任务级入口（首屏 / 重试 / 增量批次）在**单个批次组**结束后调用一次，
+ * 而不是在 `translateEntries` 内部：增量监听会为每个 pending root 各调一次
+ * `translateEntries`，若终态在函数内广播，无限滚动页面会持续闪烁徽标，
+ * 且 `currentTaskTotal` 只增不减导致百分比永不收敛。
+ */
+function broadcastTerminalState(expectedGen: number, failedBatches: number) {
+  const isTotalFailed = currentTaskCompleted === 0 && currentTaskTotal > 0
+  const isPartialFailed = failedItemsMap.size > 0 && currentTaskCompleted > 0
+  chrome.runtime.sendMessage({
+    type: isTotalFailed
+      ? 'TRANSLATION_FAILED'
+      : isPartialFailed
+        ? 'TRANSLATION_PARTIAL_FAILED'
+        : 'TRANSLATION_FINISHED',
+    generation: expectedGen,
+    completed: currentTaskCompleted,
+    total: currentTaskTotal,
+    failedBatches,
+    failedCount: failedItemsMap.size,
+  }).catch(() => {})
 }
 
 
@@ -372,8 +403,9 @@ async function retryFailedTranslations() {
   currentTaskCompleted = 0
   failedItemsMap.clear()
 
-  await translateEntries(entries, currentTargetLang, currentEngine, 30, retryGeneration)
+  const failedBatches = await translateEntries(entries, currentTargetLang, currentEngine, 30, retryGeneration)
   if (retryGeneration === currentGeneration) {
+    broadcastTerminalState(retryGeneration, failedBatches)
     startDynamicObserver(currentTargetLang, currentEngine, retryGeneration)
   }
 }
@@ -417,13 +449,7 @@ export async function translateFullPage(
 
   if (entries.length === 0) {
     console.log('[Transly] 未检测到可翻译的文本节点')
-    chrome.runtime.sendMessage({
-      type: 'TRANSLATION_FINISHED',
-      generation: taskGeneration,
-      completed: 0,
-      total: 0,
-      failedBatches: 0,
-    }).catch(() => {})
+    broadcastTerminalState(taskGeneration, 0)
     startDynamicObserver(targetLang, engine, taskGeneration)
     return
   }
@@ -435,10 +461,11 @@ export async function translateFullPage(
   }).catch(() => {})
 
   console.log(`[Transly] 收集到 ${entries.length} 个文本节点，任务版本=${taskGeneration}，开始批量翻译...`)
-  await translateEntries(entries, targetLang, engine, batchSize, taskGeneration)
+  const failedBatches = await translateEntries(entries, targetLang, engine, batchSize, taskGeneration)
 
   // 翻译结束时再次校验代际版本，避免中途已被还原后误开启动态监听
   if (taskGeneration === currentGeneration) {
+    broadcastTerminalState(taskGeneration, failedBatches)
     console.log('[Transly] 首屏整页翻译完成，已开启动态增量监听')
     startDynamicObserver(targetLang, engine, taskGeneration)
   }

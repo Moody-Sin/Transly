@@ -113,13 +113,13 @@ export default function App() {
       const res = await commands.rotateServerToken()
       if (res.status === 'ok') {
         setServerToken(res.data)
-        setSaveStatus('Token 已重新生成，旧插件配对已自动失效！')
+        setSaveStatus(t.settings.statusTokenRotated)
         setTimeout(() => setSaveStatus(null), 2500)
       } else {
         setSaveStatus(res.error)
       }
     } catch {
-      setSaveStatus('重新生成 Token 失败')
+      setSaveStatus(t.settings.statusTokenRotateFailed)
     }
   }
 
@@ -161,10 +161,10 @@ export default function App() {
       const res = await commands.deleteApiKey(eng)
       if (res.status === 'error') throw new Error(res.error)
       checkConfiguredKeys()
-      setSaveStatus('密钥已从系统凭据库移除')
+      setSaveStatus(t.settings.statusKeyDeleted)
       setTimeout(() => setSaveStatus(null), 2000)
     } catch {
-      setSaveStatus('删除密钥失败')
+      setSaveStatus(t.settings.statusKeyDeleteFailed)
     }
   }
 
@@ -244,9 +244,9 @@ export default function App() {
               onChange={(e) => setTargetLang(e.target.value)}
               className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 outline-none"
             >
-              <option value="zh-CN">中文</option>
-              <option value="en">EN</option>
-              <option value="ja">日文</option>
+              <option value="zh-CN">{t.translation.languageZhCN}</option>
+              <option value="en">{t.languages.en}</option>
+              <option value="ja">{t.translation.languageJa}</option>
             </select>
           </div>
         </div>
@@ -305,10 +305,10 @@ export default function App() {
           <button
             onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}
             className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
-            title="切换语言 / Switch Language"
+            title={t.app.switchLanguage}
           >
             <Globe className="h-3.5 w-3.5 text-indigo-500" />
-            <span>{locale === 'zh-CN' ? 'EN' : '中文'}</span>
+            <span>{locale === 'zh-CN' ? 'EN' : t.translation.languageZhCN}</span>
           </button>
           {serverToken && (
             <button
@@ -358,10 +358,10 @@ export default function App() {
               onChange={(e) => setEngine(e.target.value)}
               className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
             >
-              <option value="google">Google 网页翻译 (免Key)</option>
-              <option value="deepl">DeepL (需API Key / 自动降级)</option>
-              <option value="deepseek">DeepSeek LLM (需API Key / 自动降级)</option>
-              <option value="openai">OpenAI (需API Key / 自动降级)</option>
+              <option value="google">{t.translation.engineGoogle}</option>
+              <option value="deepl">{t.translation.engineDeepl}</option>
+              <option value="deepseek">{t.translation.engineDeepseek}</option>
+              <option value="openai">{t.translation.engineOpenai}</option>
             </select>
           </div>
 
@@ -406,7 +406,7 @@ export default function App() {
                 <button
                   onClick={() => setOcrError(null)}
                   className="text-slate-400 hover:text-slate-600 ml-2"
-                  title="关闭"
+                  title={t.translation.btnClose}
                 >
                   ✕
                 </button>
@@ -492,12 +492,12 @@ export default function App() {
                     <label className="text-slate-500">{t.settings.deeplKeyLabel}</label>
                     {deeplConfigured && (
                       <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
-                        已配置 ✓
+                        {t.settings.configuredBadge}
                         <button
                           onClick={() => handleDeleteKey('deepl')}
                           className="text-slate-400 hover:text-rose-600 ml-1 underline"
                         >
-                          删除
+                          {t.settings.btnDeleteKey}
                         </button>
                       </span>
                     )}
@@ -506,7 +506,7 @@ export default function App() {
                     type="password"
                     value={deeplKey}
                     onChange={(e) => setDeeplKey(e.target.value)}
-                    placeholder={deeplConfigured ? '重新输入以覆盖当前密钥' : '例如: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx'}
+                    placeholder={deeplConfigured ? t.settings.keyPlaceholderOverwrite : t.settings.keyPlaceholderDeepl}
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -515,12 +515,12 @@ export default function App() {
                     <label className="text-slate-500">{t.settings.deepseekKeyLabel}</label>
                     {deepseekConfigured && (
                       <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
-                        已配置 ✓
+                        {t.settings.configuredBadge}
                         <button
                           onClick={() => handleDeleteKey('deepseek')}
                           className="text-slate-400 hover:text-rose-600 ml-1 underline"
                         >
-                          删除
+                          {t.settings.btnDeleteKey}
                         </button>
                       </span>
                     )}
@@ -529,21 +529,21 @@ export default function App() {
                     type="password"
                     value={deepseekKey}
                     onChange={(e) => setDeepseekKey(e.target.value)}
-                    placeholder={deepseekConfigured ? '重新输入以覆盖当前密钥' : '例如: sk-xxxxxxxx'}
+                    placeholder={deepseekConfigured ? t.settings.keyPlaceholderOverwrite : t.settings.keyPlaceholderDeepseek}
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-slate-500">OpenAI API Key:</label>
+                    <label className="text-slate-500">{t.settings.openaiKeyLabel}</label>
                     {openaiConfigured && (
                       <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
-                        已配置 ✓
+                        {t.settings.configuredBadge}
                         <button
                           onClick={() => handleDeleteKey('openai')}
                           className="text-slate-400 hover:text-rose-600 ml-1 underline"
                         >
-                          删除
+                          {t.settings.btnDeleteKey}
                         </button>
                       </span>
                     )}
@@ -552,7 +552,7 @@ export default function App() {
                     type="password"
                     value={openaiKey}
                     onChange={(e) => setOpenaiKey(e.target.value)}
-                    placeholder={openaiConfigured ? '重新输入以覆盖当前密钥' : '例如: sk-proj-xxxxxxxx'}
+                    placeholder={openaiConfigured ? t.settings.keyPlaceholderOverwrite : t.settings.keyPlaceholderOpenai}
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -618,7 +618,7 @@ export default function App() {
                     onClick={async () => {
                       const res = await commands.clearCache()
                       if (res.status === 'ok') {
-                        setSaveStatus(`已清理 ${res.data} 条缓存记录`)
+                        setSaveStatus(t.settings.statusCacheCleared.replace('{n}', String(res.data)))
                         setTimeout(() => setSaveStatus(null), 2000)
                       }
                     }}
@@ -674,7 +674,7 @@ export default function App() {
                         <button
                           onClick={() => handleDeleteGlossary(src)}
                           className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                          title="删除术语"
+                          title={t.settings.btnDeleteGlossary}
                         >
                           <X className="h-3 w-3" />
                         </button>

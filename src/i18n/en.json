@@ -2,7 +2,8 @@
   "app": {
     "settings": "Settings",
     "copyToken": "Extension Token",
-    "tokenCopied": "Token Copied"
+    "tokenCopied": "Token Copied",
+    "switchLanguage": "Switch Language / 切换语言"
   },
   "translation": {
     "autoDetect": "Auto Detect",
@@ -16,7 +17,14 @@
     "maxBatch": "Max batch ",
     "apiKeyRequired": "API key required",
     "btnOcrPaste": "Paste & OCR",
-    "ocrRunning": "Scanning image..."
+    "ocrRunning": "Scanning image...",
+    "languageZhCN": "Chinese",
+    "languageJa": "Japanese",
+    "engineGoogle": "Google Web (no key)",
+    "engineDeepl": "DeepL (API key required / auto fallback)",
+    "engineDeepseek": "DeepSeek LLM (API key required / auto fallback)",
+    "engineOpenai": "OpenAI (API key required / auto fallback)",
+    "btnClose": "Close"
   },
   "ocrError": {
     "no_image": "No image in clipboard. Copy or take a screenshot first.",
@@ -75,6 +83,19 @@
     "statusKeysSaved": "Saved securely to system vault!",
     "statusSaveFailed": "Save failed, check system permissions",
     "statusGlossaryAdded": "Glossary term added successfully!",
-    "statusGlossaryFailed": "Failed to add term"
+    "statusGlossaryFailed": "Failed to add term",
+    "openaiKeyLabel": "OpenAI API Key:",
+    "configuredBadge": "Configured ✓",
+    "btnDeleteKey": "Delete",
+    "btnDeleteGlossary": "Delete term",
+    "keyPlaceholderDeepl": "e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx",
+    "keyPlaceholderDeepseek": "e.g. sk-xxxxxxxx",
+    "keyPlaceholderOpenai": "e.g. sk-proj-xxxxxxxx",
+    "keyPlaceholderOverwrite": "Re-enter to overwrite the current key",
+    "statusKeyDeleted": "Key removed from the system credential store",
+    "statusKeyDeleteFailed": "Failed to delete key",
+    "statusTokenRotated": "Token regenerated — existing extension pairings are now invalid.",
+    "statusTokenRotateFailed": "Failed to regenerate token",
+    "statusCacheCleared": "Cleared {n} cached entries"
   }
 }

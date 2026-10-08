@@ -2,7 +2,8 @@
   "app": {
     "settings": "设置",
     "copyToken": "插件配对 Token",
-    "tokenCopied": "已复制 Token"
+    "tokenCopied": "已复制 Token",
+    "switchLanguage": "切换语言 / Switch Language"
   },
   "translation": {
     "autoDetect": "自动检测",
@@ -16,7 +17,14 @@
     "maxBatch": "单批上限 ",
     "apiKeyRequired": "需配置密钥",
     "btnOcrPaste": "识别剪贴板图片",
-    "ocrRunning": "正在识图中..."
+    "ocrRunning": "正在识图中...",
+    "languageZhCN": "中文",
+    "languageJa": "日文",
+    "engineGoogle": "Google 网页翻译 (免Key)",
+    "engineDeepl": "DeepL (需API Key / 自动降级)",
+    "engineDeepseek": "DeepSeek LLM (需API Key / 自动降级)",
+    "engineOpenai": "OpenAI (需API Key / 自动降级)",
+    "btnClose": "关闭"
   },
   "ocrError": {
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",
@@ -75,6 +83,19 @@
     "statusKeysSaved": "密钥已保存至系统安全凭据！",
     "statusSaveFailed": "保存失败，请检查系统权限",
     "statusGlossaryAdded": "术语已添加并生效！",
-    "statusGlossaryFailed": "术语添加失败"
+    "statusGlossaryFailed": "术语添加失败",
+    "openaiKeyLabel": "OpenAI API Key:",
+    "configuredBadge": "已配置 ✓",
+    "btnDeleteKey": "删除",
+    "btnDeleteGlossary": "删除术语",
+    "keyPlaceholderDeepl": "例如: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx",
+    "keyPlaceholderDeepseek": "例如: sk-xxxxxxxx",
+    "keyPlaceholderOpenai": "例如: sk-proj-xxxxxxxx",
+    "keyPlaceholderOverwrite": "重新输入以覆盖当前密钥",
+    "statusKeyDeleted": "密钥已从系统凭据库移除",
+    "statusKeyDeleteFailed": "删除密钥失败",
+    "statusTokenRotated": "Token 已重新生成，旧插件配对已自动失效！",
+    "statusTokenRotateFailed": "重新生成 Token 失败",
+    "statusCacheCleared": "已清理 {n} 条缓存记录"
   }
 }

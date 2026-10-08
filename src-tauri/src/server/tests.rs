@@ -29,7 +29,9 @@ fn test_is_allowed_origin() {
 #[tokio::test]
 async fn test_health_check() {
     let cache = TranslationCache::in_memory().unwrap();
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let glossary = Arc::new(RwLock::new(Glossary::new()));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("test-token".to_string()));
@@ -46,7 +48,9 @@ async fn test_health_check() {
 #[tokio::test]
 async fn test_cors_origin_policy() {
     let cache = TranslationCache::in_memory().unwrap();
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let glossary = Arc::new(RwLock::new(Glossary::new()));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("test-token".to_string()));
@@ -90,7 +94,9 @@ async fn test_cors_origin_policy() {
 #[tokio::test]
 async fn test_translate_unauthorized() {
     let cache = TranslationCache::in_memory().unwrap();
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let glossary = Arc::new(RwLock::new(Glossary::new()));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("valid-token".to_string()));
@@ -113,7 +119,9 @@ async fn test_translate_authorized() {
     cache
         .set("hello", "你好", "auto", "zh-CN", "google_web")
         .unwrap();
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let mut glossary_instance = Glossary::new();
     glossary_instance.insert("你好", "世界你好");
     let glossary = Arc::new(RwLock::new(glossary_instance));
@@ -162,7 +170,9 @@ async fn test_translate_authorized() {
 #[tokio::test]
 async fn test_translate_cache_disabled_path() {
     let cache = Arc::new(TranslationCache::in_memory().unwrap());
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let glossary = Arc::new(RwLock::new(Glossary::new()));
 
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(false));
@@ -213,7 +223,9 @@ async fn test_translate_cache_disabled_path() {
 #[tokio::test]
 async fn test_translate_language_and_length_validation() {
     let cache = Arc::new(TranslationCache::in_memory().unwrap());
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let glossary = Arc::new(RwLock::new(Glossary::new()));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
 
@@ -350,7 +362,9 @@ async fn test_cache_disable_and_clear_synchronization_boundary() {
 #[tokio::test]
 async fn test_translate_structured_batch_items() {
     let cache = Arc::new(TranslationCache::in_memory().unwrap());
-    let pool = Arc::new(crate::engine_pool::EnginePool::new());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
     let glossary = Arc::new(RwLock::new(Glossary::new()));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("valid-token".to_string()));

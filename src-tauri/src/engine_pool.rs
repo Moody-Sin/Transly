@@ -32,6 +32,20 @@ impl EnginePool {
         }
     }
 
+    /// 测试专用：注入零网络、零凭据的默认引擎。
+    ///
+    /// 生产默认引擎是 `GoogleWebEngine`，测试若直接用 `new()` 会在缓存未命中时
+    /// 真实外呼 translate.googleapis.com，违反“CI 不真调外部 API”规则，
+    /// 且断言恒为 200 使用例失去信号。
+    #[cfg(test)]
+    pub fn with_default_engine(default_engine: Arc<dyn TranslateEngine>) -> Self {
+        Self {
+            default_engine,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            secret_getter: None,
+        }
+    }
+
     pub fn default_engine(&self) -> Arc<dyn TranslateEngine> {
         self.default_engine.clone()
     }
@@ -101,15 +115,47 @@ impl EnginePool {
         .unwrap_or(self.default_engine.clone())
     }
 
-    /// 密钥更新或删除时，使对应引擎缓存失效
+    /// 密钥更新或删除时，使对应引擎缓存失效。
+    /// 归一化规则必须与 `get_engine` 一致，否则会漏删缓存导致旧密钥被继续复用。
     pub async fn invalidate(&self, engine_id: &str) {
         let mut map = self.cache.write().await;
-        map.remove(&engine_id.to_lowercase());
+        map.remove(&engine_id.trim().to_lowercase());
     }
 }
 
 impl Default for EnginePool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 测试专用零网络、零凭据的翻译引擎桩。
+///
+/// 仅用于验证服务端编排逻辑（缓存门禁、参数校验、术语库替换），
+/// 绝不发起任何外部网络请求，也不触碰系统凭据管理器。
+#[cfg(test)]
+pub mod testing {
+    use async_trait::async_trait;
+    use transly_core::{Result, TranslateEngine, TranslationRequest, TranslationResponse};
+
+    pub struct StubEngine;
+
+    #[async_trait]
+    impl TranslateEngine for StubEngine {
+        fn id(&self) -> &str {
+            "google_web"
+        }
+
+        fn name(&self) -> &str {
+            "Stub 测试引擎"
+        }
+
+        async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
+            Ok(TranslationResponse {
+                text: format!("[stub:{}]{}", req.target_lang, req.text),
+                detected_source_lang: Some("en".to_string()),
+                engine: self.id().to_string(),
+            })
+        }
     }
 }

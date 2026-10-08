@@ -155,10 +155,18 @@ pub async fn add_glossary_term(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_glossary_terms(
+pub async fn get_glossary_terms(
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<Vec<(String, String)>, String> {
-    cache.get_all_glossary_terms().map_err(|e| e.to_string())
+    // SQLite 同步 I/O 必须移出主线程：全表查询在缓存膨胀时可达数十毫秒
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_all_glossary_terms()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("术语库读取任务调度异常: {e}")))
 }
 
 #[tauri::command]
@@ -183,32 +191,47 @@ pub async fn delete_glossary_term(
 
 #[tauri::command]
 #[specta::specta]
-pub fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32, String> {
-    cache
-        .clear_all_cache()
-        .map(|n| n as u32)
-        .map_err(|e| e.to_string())
+pub async fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32, String> {
+    // DELETE 全表在 10 万条缓存下是长事务，必须移出主线程避免 UI 硬卡
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .clear_all_cache()
+            .map(|n| n as u32)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("缓存清理任务调度异常: {e}")))
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_cache_enabled(
+pub async fn set_cache_enabled(
     enabled: bool,
     controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
-    crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
-        .map_err(|e| format!("写入系统配置失败: {e}"))?;
+    // keyring 写入为同步阻塞 I/O，禁止占用主线程
+    tokio::task::spawn_blocking(move || {
+        crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
+    })
+    .await
+    .map_err(|e| format!("配置写入任务调度异常: {e}"))?
+    .map_err(|e| format!("写入系统配置失败: {e}"))?;
 
     if enabled {
         controller.enable();
         Ok(())
     } else {
-        // 在同一门禁锁内递增 generation 并清空旧磁盘缓存，彻底原子闭环
-        match controller.disable_and_clear(cache.inner()) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("已禁用缓存，但清空历史缓存记录失败: {e}")),
-        }
+        // 在同一门禁锁内递增 generation 并清空旧磁盘缓存，彻底原子闭环；
+        // 清空为 SQLite 长事务，同样移出主线程
+        let controller_ref = controller.inner().clone();
+        let cache_ref = cache.inner().clone();
+        tokio::task::spawn_blocking(move || controller_ref.disable_and_clear(&cache_ref))
+            .await
+            .map_err(|e| format!("缓存清空任务调度异常: {e}"))?
+            .map(|_| ())
+            .map_err(|e| format!("已禁用缓存，但清空历史缓存记录失败: {e}"))
     }
 }
 
@@ -222,14 +245,19 @@ pub fn get_cache_enabled(
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_clipboard_monitor(
+pub async fn set_clipboard_monitor(
     enabled: bool,
     flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(), String> {
-    crate::secrets::set_secret(
-        "clipboard_monitor_enabled",
-        if enabled { "true" } else { "false" },
-    )
+    // keyring 写入为同步阻塞 I/O，禁止占用主线程
+    tokio::task::spawn_blocking(move || {
+        crate::secrets::set_secret(
+            "clipboard_monitor_enabled",
+            if enabled { "true" } else { "false" },
+        )
+    })
+    .await
+    .map_err(|e| format!("凭据写入任务调度异常: {e}"))?
     .map_err(|e| format!("写入系统安全凭据失败: {e}"))?;
     flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
     Ok(())
@@ -237,9 +265,11 @@ pub fn set_clipboard_monitor(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_clipboard_monitor(_flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>) -> bool {
-    crate::secrets::get_secret("clipboard_monitor_enabled")
-        .map(|v| v == "true")
+pub async fn get_clipboard_monitor() -> bool {
+    // keyring 读取为同步阻塞 I/O，禁止占用主线程
+    tokio::task::spawn_blocking(|| crate::secrets::get_secret("clipboard_monitor_enabled"))
+        .await
+        .map(|res| res.map(|v| v == "true").unwrap_or(false))
         .unwrap_or(false)
 }
 
@@ -325,8 +355,12 @@ pub struct PendingFloatResponse {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_server_token() -> Result<String, String> {
-    crate::secrets::get_or_create_server_token().map_err(|e| e.to_string())
+pub async fn get_server_token() -> Result<String, String> {
+    // keyring 读取（未命中时还会生成并写入）为同步阻塞 I/O，禁止占用主线程
+    tokio::task::spawn_blocking(crate::secrets::get_or_create_server_token)
+        .await
+        .map_err(|e| format!("Token 读取任务调度异常: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -361,19 +395,27 @@ pub async fn save_api_key(
     if key.len() > 512 {
         return Err("API 密钥长度超出限制".to_string());
     }
-    crate::secrets::set_secret(&engine, key.trim()).map_err(|e| e.to_string())?;
+    // keyring 写入为同步阻塞 I/O，禁止占用主线程
+    let key_owned = key.trim().to_string();
+    let engine_owned = engine.clone();
+    tokio::task::spawn_blocking(move || crate::secrets::set_secret(&engine_owned, &key_owned))
+        .await
+        .map_err(|e| format!("密钥写入任务调度异常: {e}"))?
+        .map_err(|e| e.to_string())?;
     pool.invalidate(&engine).await;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn is_api_key_configured(engine: String) -> bool {
+pub async fn is_api_key_configured(engine: String) -> bool {
     if validate_engine_name(&engine).is_err() {
         return false;
     }
-    crate::secrets::get_secret(&engine)
-        .map(|k| !k.trim().is_empty())
+    // keyring 读取为同步阻塞 I/O，禁止占用主线程
+    tokio::task::spawn_blocking(move || crate::secrets::get_secret(&engine))
+        .await
+        .map(|res| res.map(|k| !k.trim().is_empty()).unwrap_or(false))
         .unwrap_or(false)
 }
 
@@ -384,7 +426,12 @@ pub async fn delete_api_key(
     pool: tauri::State<'_, Arc<EnginePool>>,
 ) -> Result<(), String> {
     validate_engine_name(&engine)?;
-    crate::secrets::delete_secret(&engine).map_err(|e| e.to_string())?;
+    // keyring 删除为同步阻塞 I/O，禁止占用主线程
+    let engine_owned = engine.clone();
+    tokio::task::spawn_blocking(move || crate::secrets::delete_secret(&engine_owned))
+        .await
+        .map_err(|e| format!("密钥删除任务调度异常: {e}"))?
+        .map_err(|e| e.to_string())?;
     pool.invalidate(&engine).await;
     Ok(())
 }

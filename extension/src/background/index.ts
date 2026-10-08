@@ -1,5 +1,27 @@
 const LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
 
+/**
+ * 注入整页翻译脚本。
+ *
+ * 采用**主动注入**而非 `content_scripts` 常驻声明：
+ * - 仅在用户点击“翻译此网页”时注入，符合 `PRIVACY_POLICY.md` 中
+ *   “仅在主动触发时提取 DOM 文本”的承诺；
+ * - 不再需要 `<all_urls>` 宿主权限，减少商店审核阻力与权限面。
+ */
+async function ensureContentScriptInjected(tabId: number): Promise<void> {
+  try {
+    // 重复注入会重置 content script 状态，因此先探测是否已就绪
+    await chrome.tabs.sendMessage(tabId, { type: 'PING_CONTENT_SCRIPT' })
+    return
+  } catch {
+    // 未就绪，执行注入
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content.js'],
+  })
+}
+
 // 获取存储的通信 Token
 async function getServerToken(): Promise<string | null> {
   const result = await chrome.storage.local.get(['transly_server_token'])
@@ -152,6 +174,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         })
       })
       .catch((err) => sendResponse({ ok: false, serverRunning: false, error: err.message }))
+    return true
+  }
+
+  if (message.type === 'ENSURE_CONTENT_SCRIPT') {
+    const tabId = message.tabId
+    if (typeof tabId !== 'number') {
+      sendResponse({ ok: false, error: '缺少 tabId' })
+      return true
+    }
+    ensureContentScriptInjected(tabId)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }))
     return true
   }
 

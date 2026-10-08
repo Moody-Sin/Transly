@@ -473,6 +473,13 @@ export async function translateFullPage(
 
 // 监听来自扩展 Popup 或快捷指令的消息
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'PING_CONTENT_SCRIPT') {
+    // 注入探测：响应存在即说明本脚本已就绪，宿主无需重复注入。
+    // 同步响应，不返回 true，避免留下悬挂的消息端口。
+    sendResponse({ ok: true })
+    return
+  }
+
   if (message.type === 'START_PAGE_TRANSLATION') {
     translateFullPage(message.target_lang || 'zh-CN', message.engine || 'google')
       .then(() => sendResponse({ ok: true }))

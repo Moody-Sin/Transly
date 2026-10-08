@@ -96,6 +96,7 @@ pnpm tauri dev
 
 ### 3. 已知限制与注意事项
 - **复杂富文本编辑器**：为保障页面编辑安全，Transly 默认不对 `contenteditable`、富文本代码编辑器（如 Monaco / CodeMirror）及包含 `.notranslate` 属性的节点进行强行替换。
+- **扩展按需注入**：扩展不再向所有网站常驻注入脚本，仅在您点击「翻译此网页」时向当前标签页注入，因此无需全站宿主权限；浏览器内部页（`chrome://`）等受限页面无法注入。
 - **图片 OCR 翻译 (Windows 原生)**：支持主输入框底栏「识别剪贴板图片」入口或 `ocr_clipboard_image` 命令。Windows 平台基于系统 `Windows.Media.Ocr` 原生硬件加速识别并自动触发即时翻译，全流程内存零落盘。非 Windows 平台调用返回明确的未支持错误。
 - **外部 API 差异**：DeepL、OpenAI 及 DeepSeek 需在设置中配置有效 API Key（安全托管于系统凭据管理器中，绝不上传第三方服务器）。
 

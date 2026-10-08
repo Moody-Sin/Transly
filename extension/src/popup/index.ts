@@ -121,9 +121,25 @@ async function restoreProgressState() {
 }
 restoreProgressState()
 
+/**
+ * 确保目标标签页已注入 content script。
+ *
+ * content script 不再常驻声明（避免 `<all_urls>` 全站注入），
+ * 因此所有发给页面的消息都必须先经过这一步。
+ */
+async function ensureInjected(tabId: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'ENSURE_CONTENT_SCRIPT', tabId }, (res) => {
+      resolve(Boolean(res?.ok))
+    })
+  })
+}
+
 async function sendToActiveTab(message: object) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (tab?.id) chrome.tabs.sendMessage(tab.id, message)
+  if (!tab?.id) return
+  if (!(await ensureInjected(tab.id))) return
+  chrome.tabs.sendMessage(tab.id, message)
 }
 
 btnCancel.addEventListener('click', () => {
@@ -187,23 +203,32 @@ chrome.runtime.onMessage.addListener((message) => {
 // 触发整页翻译
 btnTranslate.addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (tab?.id) {
-    progressBox.style.display = 'block'
-    progressText.textContent = '分析页面...'
-    progressBar.style.width = '10%'
-    const targetLang = selectLang ? selectLang.value : 'zh-CN'
-    chrome.tabs.sendMessage(tab.id, {
-      type: 'START_PAGE_TRANSLATION',
-      target_lang: targetLang,
-      engine: selectEngine.value,
-    })
+  if (!tab?.id) return
+
+  progressBox.style.display = 'block'
+  progressText.textContent = '分析页面...'
+  progressBar.style.width = '10%'
+
+  // 首次使用该页面时先注入 content script（主动注入，非常驻）
+  if (!(await ensureInjected(tab.id))) {
+    progressText.textContent = '无法访问当前页面，请改用普通网页重试'
+    return
   }
+
+  const targetLang = selectLang ? selectLang.value : 'zh-CN'
+  chrome.tabs.sendMessage(tab.id, {
+    type: 'START_PAGE_TRANSLATION',
+    target_lang: targetLang,
+    engine: selectEngine.value,
+  })
 })
 
 // 触发恢复原文
 btnRestore.addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (tab?.id) {
+    // 未注入过则无需恢复
+    if (!(await ensureInjected(tab.id))) return
     chrome.tabs.sendMessage(tab.id, {
       type: 'RESTORE_PAGE_TRANSLATION',
     })

@@ -4256,6 +4256,7 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-typescript",
+ "subtle",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",

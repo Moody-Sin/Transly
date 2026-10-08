@@ -25,10 +25,10 @@ pub struct StatusResponse {
 
 #[derive(Deserialize)]
 pub struct TranslateBatchRequest {
-    /// 兼容旧版：纯文本数组
+    /// 兼容旧版客户端：纯文本数组（新客户端统一走 `items`）
     #[serde(default)]
     pub texts: Vec<String>,
-    /// 新增契约：带有明确 stable ID 的批量项目
+    /// 主契约：带有明确 stable ID 的批量项目
     #[serde(default)]
     pub items: Vec<BatchItemRequest>,
     pub source_lang: Option<String>,
@@ -88,6 +88,24 @@ fn is_allowed_origin(origin_str: &str) -> bool {
     }
 
     false
+}
+
+/// 恒定时间比较两个字节序列，避免 Bearer Token 被计时侧信道逐字节推断。
+/// 长度不等时立即返回 false（长度本身不是秘密）。
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+
+/// 校验 `Authorization: Bearer <token>` 头是否与期望令牌一致。
+fn bearer_matches(header: Option<&str>, expected: &str) -> bool {
+    let Some(val) = header else {
+        return false;
+    };
+    let Some(presented) = val.strip_prefix("Bearer ") else {
+        return false;
+    };
+    constant_time_eq(presented.as_bytes(), expected.as_bytes())
 }
 
 pub fn create_router(
@@ -150,12 +168,42 @@ async fn auth_middleware(
         .and_then(|v| v.to_str().ok());
 
     let current_token = state.token.read().await;
-    match auth_header {
-        Some(val) if val == format!("Bearer {}", current_token.as_str()) => {
-            drop(current_token);
-            Ok(next.run(request).await)
-        }
-        _ => Err(StatusCode::UNAUTHORIZED),
+    if bearer_matches(auth_header, current_token.as_str()) {
+        drop(current_token);
+        Ok(next.run(request).await)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn test_bearer_matches_exact_token() {
+        assert!(bearer_matches(Some("Bearer abc123"), "abc123"));
+    }
+
+    #[test]
+    fn test_bearer_rejects_malformed_and_mismatched() {
+        // 缺失头部 / 前缀错误 / 大小写不符
+        assert!(!bearer_matches(None, "abc123"));
+        assert!(!bearer_matches(Some("abc123"), "abc123"));
+        assert!(!bearer_matches(Some("bearer abc123"), "abc123"));
+        // 前缀正确但令牌不同（含长度不同与同长度不同两种）
+        assert!(!bearer_matches(Some("Bearer abc12"), "abc123"));
+        assert!(!bearer_matches(Some("Bearer abc124"), "abc123"));
+        // 空令牌不得匹配空期望值以外的任何输入
+        assert!(!bearer_matches(Some("Bearer "), "abc123"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_semantics() {
+        assert!(constant_time_eq(b"token", b"token"));
+        assert!(!constant_time_eq(b"token", b"tokeN"));
+        assert!(!constant_time_eq(b"token", b"token2"));
+        assert!(constant_time_eq(b"", b""));
     }
 }
 

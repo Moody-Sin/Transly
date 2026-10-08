@@ -34,6 +34,8 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 enigo = "0.3"
 rand = "0.8"
+# 恒定时间比较：Bearer Token 鉴权防止计时侧信道
+subtle = "2.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }

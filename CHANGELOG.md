@@ -7,6 +7,8 @@
 
 ## [未发布]
 
+## [0.2.1] - 2026-10-08
+
 ### 修复
 - **扩展在途批次绕过代际闸门，「还原原文」后译文被重新写回 (P1)**：`sendBatchWithSplit` 收到响应后立即调用 `applyBatchResponse`，而 `translateEntries` 的「响应写回前安全拦截」要等其返回后才执行；`applyBatchResponse` 的 `items` 主契约分支（当前唯一路径）内部**没有**代际判定，只有旧版 `translations` 兼容分支有。用户点击「还原原文」（`currentGeneration += 1`）或取消后，只要仍有批次在途，译文就会被原地写回页面——用户看到的是「还原失败」，与代码注释宣称的「严禁写入 DOM」直接矛盾。现把代际闸门下沉进 `applyBatchResponse` 入口统一判定，并对 `markBatchFailed` 的两处调用点加同样守卫，避免还原后失败集被污染导致「重试失败项」按钮凭空出现。
 - **设置面板「立即清空」缓存无任何错误处理 (P3)**：`App.tsx` 的 `clearCache` 按钮只处理成功分支，既无 `else` 也无 `catch`，与同面板其他操作（保存密钥、轮换 Token、术语增删）的防御性写法不一致。IPC 抛错或返回 `error` 时用户点击后**毫无反馈**并产生未处理的 Promise 拒绝。现补齐 `error` 分支与 `catch`，并新增 `statusCacheClearFailed` 文案（中英同步）。

@@ -52,10 +52,10 @@ Transly 是一款基于 Rust 与 Tauri 2 构建的跨平台桌面翻译软件，
 ### 预编译安装包
 
 从 [Releases](https://github.com/Moody-Sin/Transly/releases) 页面下载对应操作系统的安装包：
-- **Windows**: `Transly_0.2.0_x64-setup.exe` 或 `.msi`
-- **macOS**: `Transly_0.2.0_aarch64.dmg`
-- **Linux**: `Transly_0.2.0_amd64.deb` 或 `.AppImage`
-- **浏览器扩展**: 下载 `transly-extension-v0.2.0.zip` 并解压。
+- **Windows**: `Transly_0.2.1_x64-setup.exe` 或 `.msi`
+- **macOS**: `Transly_0.2.1_aarch64.dmg`
+- **Linux**: `Transly_0.2.1_amd64.deb` 或 `.AppImage`
+- **浏览器扩展**: 下载 `transly-extension-v0.2.1.zip` 并解压。
 
 ### 源码开发构建
 

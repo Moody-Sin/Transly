@@ -1,9 +1,9 @@
 [package]
 name = "transly-core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Transly Authors"]
-description = "Core logic for Transly translation engine, cache, detection, and glossary."
+description = "Core logic for Transly translation engine, cache, validation, and glossary."
 license = "MIT"
 
 [dependencies]

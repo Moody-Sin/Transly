@@ -1,6 +1,6 @@
 # transly-core
 
-> Transly 核心翻译、缓存、语言检测与术语库逻辑（纯 Rust，无 Tauri 依赖）。
+> Transly 核心翻译、缓存、语言代码校验与术语库逻辑（纯 Rust，无 Tauri 依赖）。
 
 [![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
 

@@ -543,6 +543,7 @@ async fn translate_batch_handler(
 /// 拆成 bind 与 serve 两段，`on_listening` 在端口已成功绑定后触发：
 /// `axum::serve` 正常只在出错时返回，若等服务返回再上报状态，
 /// 成功路径永远停在“启动中”。
+#[allow(clippy::too_many_arguments)]
 pub async fn start_server(
     port: u16,
     token: Arc<RwLock<String>>,
@@ -550,6 +551,8 @@ pub async fn start_server(
     pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
     cache_controller: Arc<crate::cache_controller::CacheController>,
+    pairing_manager: Arc<pairing::PairingManager>,
+    pairing_notify_hook: Option<PairingNotifyHook>,
     on_listening: impl FnOnce(),
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -557,7 +560,15 @@ pub async fn start_server(
     on_listening();
     axum::serve(
         listener,
-        create_router(token, cache, pool, glossary, cache_controller),
+        create_router_with_pairing(
+            token,
+            cache,
+            pool,
+            glossary,
+            cache_controller,
+            pairing_manager,
+            pairing_notify_hook,
+        ),
     )
     .await?;
     Ok(())

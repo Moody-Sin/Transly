@@ -33,6 +33,8 @@ macro_rules! app_command_builder {
             $crate::commands::take_pending_float_request,
             $crate::commands::get_server_token,
             $crate::commands::rotate_server_token,
+            $crate::commands::approve_pairing,
+            $crate::commands::reject_pairing,
             $crate::commands::save_api_key,
             $crate::commands::is_api_key_configured,
             $crate::commands::delete_api_key,

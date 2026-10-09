@@ -90,8 +90,8 @@ fn main() {
     // 初始化全局术语库并从 SQLite 加载持久化规则
     let mut initial_glossary = Glossary::new();
     if let Ok(terms) = cache.get_all_glossary_terms() {
-        for (src, tgt) in terms {
-            initial_glossary.insert(src, tgt);
+        for (src, tgt, match_case) in terms {
+            initial_glossary.insert_with_options(src, tgt, match_case);
         }
     }
     let glossary = Arc::new(RwLock::new(initial_glossary));
@@ -136,12 +136,15 @@ fn main() {
         initial_cache_enabled,
     ));
 
+    let pairing_manager = Arc::new(src_tauri::server::pairing::PairingManager::new());
+
     // 克隆传递给 setup 内部异步启动
     let server_token = token.clone();
     let server_cache = cache.clone();
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
     let server_cache_controller = cache_controller.clone();
+    let server_pairing_manager = pairing_manager.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -151,6 +154,7 @@ fn main() {
         .manage(glossary)
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
+        .manage(pairing_manager)
         .manage(Arc::new(commands::FloatSticky::default()))
         .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
@@ -165,6 +169,24 @@ fn main() {
                 .state::<Arc<commands::ServerStatusSlot>>()
                 .inner()
                 .clone();
+            let app_handle_for_server = app.handle().clone();
+            let pairing_notify_hook: src_tauri::server::PairingNotifyHook = Arc::new(
+                move |session_id: &str, browser_hint: Option<&str>| {
+                    #[derive(serde::Serialize, Clone)]
+                    struct PairingRequestedPayload {
+                        session_id: String,
+                        browser_hint: Option<String>,
+                    }
+                    let _ = app_handle_for_server.emit(
+                        "transly://pairing-requested",
+                        PairingRequestedPayload {
+                            session_id: session_id.to_string(),
+                            browser_hint: browser_hint.map(ToString::to_string),
+                        },
+                    );
+                },
+            );
+
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
             match server_token {
                 Some(token_val) => {
@@ -178,6 +200,8 @@ fn main() {
                             server_pool,
                             server_glossary,
                             server_cache_controller,
+                            server_pairing_manager,
+                            Some(pairing_notify_hook),
                             move || listening_slot.set(commands::ServerStatus::Running),
                         )
                         .await;

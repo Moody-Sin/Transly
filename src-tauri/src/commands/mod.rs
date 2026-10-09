@@ -245,23 +245,34 @@ pub async fn translate_stream(
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct GlossaryTermDto {
+    pub source: String,
+    pub target: String,
+    pub match_case: bool,
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn add_glossary_term(
     source: String,
     target: String,
+    match_case: Option<bool>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
     // SQLite 写入为同步阻塞 I/O，禁止占用 async 运行时工作线程
+    let is_match_case = match_case.unwrap_or(true);
     let cache_ref = cache.inner().clone();
     let (write_source, write_target) = (source.clone(), target.clone());
-    tokio::task::spawn_blocking(move || cache_ref.set_glossary_term(&write_source, &write_target))
-        .await
-        .map_err(|e| format!("术语写入任务调度异常: {e}"))?
-        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        cache_ref.set_glossary_term(&write_source, &write_target, is_match_case)
+    })
+    .await
+    .map_err(|e| format!("术语写入任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
     let mut g = glossary.write().await;
-    g.insert(source, target);
+    g.insert_with_options(source, target, is_match_case);
     Ok(())
 }
 
@@ -269,12 +280,22 @@ pub async fn add_glossary_term(
 #[specta::specta]
 pub async fn get_glossary_terms(
     cache: tauri::State<'_, Arc<TranslationCache>>,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<GlossaryTermDto>, String> {
     // SQLite 同步 I/O 必须移出主线程：全表查询在缓存膨胀时可达数十毫秒
     let cache_ref = cache.inner().clone();
     tokio::task::spawn_blocking(move || {
         cache_ref
             .get_all_glossary_terms()
+            .map(|terms| {
+                terms
+                    .into_iter()
+                    .map(|(source, target, match_case)| GlossaryTermDto {
+                        source,
+                        target,
+                        match_case,
+                    })
+                    .collect()
+            })
             .map_err(|e| e.to_string())
     })
     .await
@@ -291,22 +312,23 @@ pub async fn delete_glossary_term(
     // SQLite 删除与全表回读均为同步阻塞 I/O，统一下沉到阻塞线程池
     let cache_ref = cache.inner().clone();
     let deleted_key = source.clone();
-    let terms = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>, String> {
-        cache_ref
-            .delete_glossary_term(&deleted_key)
-            .map_err(|e| e.to_string())?;
-        cache_ref
-            .get_all_glossary_terms()
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("术语删除任务调度异常: {e}"))??;
+    let terms =
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, bool)>, String> {
+            cache_ref
+                .delete_glossary_term(&deleted_key)
+                .map_err(|e| e.to_string())?;
+            cache_ref
+                .get_all_glossary_terms()
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("术语删除任务调度异常: {e}"))??;
 
     // 重新构建内存术语库
     let mut g = glossary.write().await;
     *g = Glossary::new();
-    for (src, tgt) in terms {
-        g.insert(src, tgt);
+    for (src, tgt, match_case) in terms {
+        g.insert_with_options(src, tgt, match_case);
     }
     Ok(())
 }
@@ -560,6 +582,32 @@ pub async fn rotate_server_token(
     Ok(new_token)
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn approve_pairing(
+    pairing_mgr: tauri::State<'_, Arc<crate::server::pairing::PairingManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    if pairing_mgr.approve(&session_id).await {
+        Ok(())
+    } else {
+        Err("配对会话不存在或已过期".to_string())
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn reject_pairing(
+    pairing_mgr: tauri::State<'_, Arc<crate::server::pairing::PairingManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    if pairing_mgr.reject(&session_id).await {
+        Ok(())
+    } else {
+        Err("配对会话不存在或已过期".to_string())
+    }
+}
+
 /// 本地 HTTP 服务（供浏览器插件调用）的运行状态。
 ///
 /// 服务在后台异步启动，失败只进 stderr 的话用户完全无感：
@@ -763,5 +811,22 @@ mod tests {
         let dto = TranslateErrorDto::from_error(&Error::Input("翻译文本过长".into()));
         assert_eq!(dto.kind, ErrorKind::Input);
         assert!(!dto.retryable);
+    }
+
+    #[tokio::test]
+    async fn test_pairing_commands_approve_and_reject() {
+        let manager = Arc::new(crate::server::pairing::PairingManager::new());
+        let (s1, _) = manager.create_session("client-1".into(), None).await;
+        let (s2, _) = manager.create_session("client-2".into(), None).await;
+
+        // approve 测试
+        assert!(manager.approve(&s1).await);
+        // 重复 approve 应失败
+        assert!(!manager.approve(&s1).await);
+
+        // reject 测试
+        assert!(manager.reject(&s2).await);
+        // 重复 reject 应失败
+        assert!(!manager.reject(&s2).await);
     }
 }

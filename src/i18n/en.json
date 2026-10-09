@@ -97,6 +97,10 @@
   },
   "settings": {
     "title": "Transly Settings & Credentials",
+    "themeTitle": "Appearance Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System",
     "credentialsTitle": "Native OS Credential Store (Never written in plain text)",
     "deeplKeyLabel": "DeepL API Key (Free & Pro supported):",
     "deepseekKeyLabel": "DeepSeek API Key:",

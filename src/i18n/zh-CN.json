@@ -97,6 +97,10 @@
   },
   "settings": {
     "title": "Transly 设置与凭据管理",
+    "themeTitle": "外观主题",
+    "themeLight": "浅色模式",
+    "themeDark": "深色模式",
+    "themeSystem": "跟随系统",
     "credentialsTitle": "系统原生安全凭据托管 (密钥绝不落盘明文)",
     "deeplKeyLabel": "DeepL API Key (支持 Free 与 Pro):",
     "deepseekKeyLabel": "DeepSeek API Key:",

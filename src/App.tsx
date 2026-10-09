@@ -64,6 +64,33 @@ export default function App() {
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
   const [isFloatPinned, setIsFloatPinned] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
+    return (localStorage.getItem('transly_theme') as 'light' | 'dark' | 'system') || 'system'
+  })
+
+  // 同步 theme 类名到 document.documentElement
+  useEffect(() => {
+    const applyTheme = () => {
+      const isDark =
+        theme === 'dark' ||
+        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      if (isDark) {
+        document.documentElement.classList.add('dark')
+      } else {
+        document.documentElement.classList.remove('dark')
+      }
+    }
+
+    applyTheme()
+    localStorage.setItem('transly_theme', theme)
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = () => {
+      if (theme === 'system') applyTheme()
+    }
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [theme])
 
   // 浏览器扩展一键配对请求浮层
   const [pairingRequest, setPairingRequest] = useState<{
@@ -503,11 +530,13 @@ export default function App() {
   // 迷你悬浮小窗模式 (无边框、紧凑置顶卡片)
   if (isFloatWindow) {
     return (
-      <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-indigo-100 bg-white/95 p-3.5 shadow-2xl backdrop-blur-md select-none">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+      <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-indigo-100 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-md select-none text-slate-800 dark:text-slate-100">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
           <div className="flex items-center gap-1.5">
-            <Languages className="h-4 w-4 text-indigo-600" />
-            <span className="text-xs font-semibold text-slate-800">{t.float.title}</span>
+            <Languages className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+              {t.float.title}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -518,8 +547,8 @@ export default function App() {
               }}
               className={`rounded p-1 transition-colors ${
                 isFloatPinned
-                  ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                  : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+                  ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-900'
+                  : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300'
               }`}
               title={isFloatPinned ? t.float.unpin : t.float.pin}
             >
@@ -528,7 +557,7 @@ export default function App() {
             {isTranslating && (
               <button
                 onClick={runner.cancel}
-                className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-200"
+                className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
               >
                 {t.task.btnCancel}
               </button>
@@ -536,7 +565,7 @@ export default function App() {
             <select
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
-              className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 outline-none"
+              className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
             >
               <option value="zh-CN">{t.translation.languageZhCN}</option>
               <option value="en">{t.languages.en}</option>
@@ -545,7 +574,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="my-2 flex-1 overflow-auto rounded-lg bg-slate-50/70 p-2 text-xs leading-relaxed text-slate-800 border border-slate-100">
+        <div className="my-2 flex-1 overflow-auto rounded-lg bg-slate-50/70 dark:bg-slate-800/70 p-2 text-xs leading-relaxed text-slate-800 dark:text-slate-200 border border-slate-100 dark:border-slate-800">
           {isTranslating ? (
             <span className="text-slate-400 animate-pulse">{t.float.translating}</span>
           ) : error ? (
@@ -607,38 +636,38 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50 font-sans">
+    <div className="flex h-screen flex-col bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100">
       {/* 顶部标题栏 */}
-      <header className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4">
+      <header className="flex h-12 items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4">
         <div className="flex items-center gap-2">
-          <Languages className="h-5 w-5 text-indigo-600" />
-          <span className="font-semibold text-slate-800">Transly</span>
+          <Languages className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+          <span className="font-semibold text-slate-800 dark:text-slate-100">Transly</span>
         </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500">
+        <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
           <button
             onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}
-            className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
+            className="flex items-center gap-1 rounded bg-slate-100 dark:bg-slate-800 px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
             title={t.app.switchLanguage}
           >
-            <Globe className="h-3.5 w-3.5 text-indigo-500" />
+            <Globe className="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400" />
             <span>{locale === 'zh-CN' ? 'EN' : t.translation.languageZhCN}</span>
           </button>
           {serverToken && (
             <button
               onClick={handleCopyToken}
               title={t.app.copyToken}
-              className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
+              className="flex items-center gap-1 rounded bg-slate-100 dark:bg-slate-800 px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
             >
-              <Key className="h-3.5 w-3.5 text-indigo-500" />
+              <Key className="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400" />
               <span>{tokenCopied ? t.app.tokenCopied : t.app.copyToken}</span>
             </button>
           )}
           <button
             onClick={() => setShowSettings(true)}
-            className="flex items-center gap-1 rounded bg-slate-100 px-2 py-1 text-slate-600 hover:bg-slate-200"
+            className="flex items-center gap-1 rounded bg-slate-100 dark:bg-slate-800 px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
             title={t.app.settings}
           >
-            <Settings className="h-3.5 w-3.5 text-slate-500" />
+            <Settings className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
             <span>{t.app.settings}</span>
           </button>
         </div>
@@ -878,23 +907,51 @@ export default function App() {
       {/* 设置与密钥配置模态框 */}
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="flex max-h-[85vh] w-[480px] flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+          <div className="flex max-h-[85vh] w-[480px] flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 shrink-0">
               <div className="flex items-center gap-2">
-                <Settings className="h-4 w-4 text-indigo-600" />
-                <h3 className="font-semibold text-slate-800 text-sm">{t.settings.title}</h3>
+                <Settings className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="font-semibold text-slate-800 dark:text-slate-100 text-sm">
+                  {t.settings.title}
+                </h3>
               </div>
               <button
                 onClick={() => setShowSettings(false)}
-                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             <div className="mt-4 flex flex-1 flex-col gap-4 overflow-y-auto pr-1 text-xs">
+              {/* 外观主题设置 */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-slate-800/80 p-3 border border-slate-100 dark:border-slate-800">
+                <span className="font-medium text-slate-700 dark:text-slate-200">
+                  {t.settings.themeTitle}
+                </span>
+                <div className="flex items-center gap-1">
+                  {(['light', 'dark', 'system'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setTheme(mode)}
+                      className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                        theme === mode
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600 border border-slate-200 dark:border-slate-600'
+                      }`}
+                    >
+                      {mode === 'light'
+                        ? t.settings.themeLight
+                        : mode === 'dark'
+                          ? t.settings.themeDark
+                          : t.settings.themeSystem}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* API 密钥管理 */}
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/80 p-3 border border-slate-100 dark:border-slate-800">
                 <span className="font-medium text-slate-700">{t.settings.credentialsTitle}</span>
                 <div>
                   <div className="flex items-center justify-between mb-1">

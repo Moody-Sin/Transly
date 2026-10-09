@@ -6,6 +6,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
 	translateStream: (taskId: number, text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_stream", { taskId, text, sourceLang, targetLang, engineName })),
+	cancelStreamTask: (taskId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_stream_task", { taskId })),
 	getEngineCapabilities: (engine: string) => typedError<EngineCapabilitiesDto, string>(__TAURI_INVOKE("get_engine_capabilities", { engine })),
 	/**
 	 *  设置浮窗粘滞：翻译中/错误态时为 true，浮窗不失焦自动隐藏，

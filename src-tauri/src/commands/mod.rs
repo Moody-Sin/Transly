@@ -149,6 +149,7 @@ pub async fn translate_stream(
     pool: tauri::State<'_, Arc<EnginePool>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
     cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
+    stream_registry: tauri::State<'_, Arc<StreamTaskRegistry>>,
 ) -> Result<TranslateOutcomeDto, TranslateErrorDto> {
     use tauri::Emitter;
 
@@ -231,7 +232,30 @@ pub async fn translate_stream(
         );
     });
 
-    match active_engine.translate_stream(&req, on_chunk).await {
+    // 注册任务取消信号
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    if let Ok(mut map) = stream_registry.0.lock() {
+        map.insert(task_id, cancel_tx);
+    }
+
+    let stream_fut = active_engine.translate_stream(&req, on_chunk);
+
+    let res = tokio::select! {
+        outcome = stream_fut => {
+            if let Ok(mut map) = stream_registry.0.lock() {
+                map.remove(&task_id);
+            }
+            outcome
+        }
+        _ = cancel_rx => {
+            if let Ok(mut map) = stream_registry.0.lock() {
+                map.remove(&task_id);
+            }
+            return Err(TranslateErrorDto::from_error(&Error::Internal("流式任务已被前端主动取消".into())));
+        }
+    };
+
+    match res {
         Ok(res) => {
             let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             let cache_target_engine = res.actual_engine();
@@ -248,6 +272,24 @@ pub async fn translate_stream(
         }
         Err(e) => Err(TranslateErrorDto::from_error(&e)),
     }
+}
+
+/// 全局并发流式翻译任务取消注册表
+#[derive(Clone, Default)]
+pub struct StreamTaskRegistry(pub Arc<std::sync::Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>>);
+
+#[tauri::command]
+#[specta::specta]
+pub async fn cancel_stream_task(
+    task_id: u32,
+    registry: tauri::State<'_, Arc<StreamTaskRegistry>>,
+) -> Result<(), String> {
+    if let Ok(mut map) = registry.0.lock() {
+        if let Some(tx) = map.remove(&task_id) {
+            let _ = tx.send(());
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]

@@ -157,9 +157,11 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
   const run = useCallback(
     (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => {
       if (!text.trim()) return
-      // 新输入立即作废上一代：清掉待触发的防抖，并让在途响应失效
+      // 新输入立即作废上一代：清掉待触发的防抖，物理取消旧任务，并让在途响应失效
       clearDebounce()
+      const oldTaskId = genRef.current
       genRef.current += 1
+      commands.cancelStreamTask(oldTaskId).catch(() => {})
       const source = opts?.source ?? 'input'
       const delay = opts?.debounceMs ?? 0
       if (delay > 0) {
@@ -177,8 +179,11 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
 
   const cancel = useCallback(() => {
     clearDebounce()
+    const activeTaskId = genRef.current
     // 递增代际使全部在途响应失效；已应用的译文保持（取消 ≠ 还原）
     genRef.current += 1
+    // 向后端发送物理取消信号，中断底层 LLM 流式连接与 Token 消耗
+    commands.cancelStreamTask(activeTaskId).catch(() => {})
     setSnapshot((s) => (s.state === 'running' ? { ...s, state: nextState(s.state, 'cancel') } : s))
   }, [clearDebounce])
 

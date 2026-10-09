@@ -28,6 +28,7 @@ macro_rules! app_command_builder {
         ::tauri_specta::Builder::<::tauri::Wry>::new().commands(::tauri_specta::collect_commands![
             $crate::commands::translate,
             $crate::commands::translate_stream,
+            $crate::commands::cancel_stream_task,
             $crate::commands::get_engine_capabilities,
             $crate::commands::set_float_sticky,
             $crate::commands::take_pending_float_request,

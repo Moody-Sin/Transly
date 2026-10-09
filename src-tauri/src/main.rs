@@ -158,6 +158,7 @@ fn main() {
         .manage(cache_controller)
         .manage(pairing_manager)
         .manage(Arc::new(commands::FloatSticky::default()))
+        .manage(Arc::new(commands::StreamTaskRegistry::default()))
         .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
         .manage(Arc::new(commands::SelectionContext {

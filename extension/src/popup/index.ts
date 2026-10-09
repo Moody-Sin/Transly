@@ -312,10 +312,14 @@ btnTranslate.addEventListener('click', async () => {
   }
 
   const targetLang = selectLang ? selectLang.value : 'zh-CN'
+  const modeRadio = document.querySelector<HTMLInputElement>('input[name="transly_mode"]:checked')
+  const mode = modeRadio ? modeRadio.value : 'replace'
+
   chrome.tabs.sendMessage(tab.id, {
     type: 'START_PAGE_TRANSLATION',
     target_lang: targetLang,
     engine: selectEngine.value,
+    mode,
   })
 })
 

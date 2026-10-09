@@ -636,6 +636,8 @@ function markBatchFailed(batch: TextNodeEntry[], errorKind: string) {
   }
 }
 
+let currentTranslateMode = 'replace'
+
 /** 按 ID 将服务端响应写回 DOM，逐项记录失败 */
 function applyBatchResponse(
   resData: BatchResponsePayload | undefined,
@@ -644,9 +646,6 @@ function applyBatchResponse(
 ) {
   if (!resData) return
 
-  // 代际闸门：还原原文 / 取消 / 新任务后到达的响应一律丢弃，严禁写回 DOM。
-  // `items` 主契约分支此前没有这道判定（只有旧版 `translations` 分支有），
-  // 导致「还原原文」后仍在途的批次把译文重新写回页面 —— 用户看到的是还原失败。
   if (expectedGen !== currentGeneration) return
 
   if (resData.items && resData.items.length > 0) {
@@ -655,7 +654,7 @@ function applyBatchResponse(
     for (const entry of batch) {
       const itemRes = itemMap.get(entry.id)
       if (itemRes && itemRes.status === 'success' && itemRes.text) {
-        replaceTextNode(entry.node, itemRes.text)
+        replaceTextNode(entry.node, itemRes.text, currentTranslateMode)
         failedItemsMap.delete(entry.id)
         currentTaskCompleted += 1
       } else {
@@ -671,7 +670,7 @@ function applyBatchResponse(
     resData.translations.forEach((translated, idx) => {
       if (batch[idx]) {
         if (translated && translated !== batch[idx].text) {
-          replaceTextNode(batch[idx].node, translated)
+          replaceTextNode(batch[idx].node, translated, currentTranslateMode)
           failedItemsMap.delete(batch[idx].id)
           currentTaskCompleted += 1
         } else {
@@ -761,7 +760,12 @@ function cancelTranslation() {
 /**
  * 执行整页沉浸式翻译（分批次打包请求，原地替换）
  */
-export async function translateFullPage(targetLang: string = 'zh-CN', engine: string = 'google') {
+export async function translateFullPage(
+  targetLang: string = 'zh-CN',
+  engine: string = 'google',
+  mode: string = 'replace',
+) {
+  currentTranslateMode = mode
   // 递增任务代际版本号，立即使所有历史在途异步批次响应失效
   currentGeneration += 1
   const taskGeneration = currentGeneration
@@ -815,7 +819,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'START_PAGE_TRANSLATION') {
-    translateFullPage(message.target_lang || 'zh-CN', message.engine || 'google')
+    translateFullPage(
+      message.target_lang || 'zh-CN',
+      message.engine || 'google',
+      message.mode || 'replace',
+    )
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }))
     return true

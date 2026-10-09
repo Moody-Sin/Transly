@@ -364,6 +364,11 @@ export default function App() {
     }
   }
 
+  const handleClearSource = () => {
+    setSourceText('')
+    runner.cancel()
+  }
+
   const handleCopy = () => {
     if (!translatedText) return
     navigator.clipboard.writeText(translatedText)
@@ -645,16 +650,35 @@ export default function App() {
                   </div>
                 )}
                 <div className="mt-2 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={handleOcrClipboard}
-                    disabled={ocrLoading || isTranslating}
-                    className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
-                    title={t.translation.btnOcrPaste}
-                  >
-                    <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
-                    <span>{ocrLoading ? t.translation.ocrRunning : t.translation.btnOcrPaste}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleOcrClipboard}
+                      disabled={ocrLoading || isTranslating}
+                      className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+                      title={t.translation.btnOcrPaste}
+                    >
+                      <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
+                      <span>
+                        {ocrLoading ? t.translation.ocrRunning : t.translation.btnOcrPaste}
+                      </span>
+                    </button>
+                    {sourceText.trim() && (
+                      <button
+                        type="button"
+                        onClick={handleClearSource}
+                        className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-500 shadow-sm hover:bg-slate-100"
+                        title={t.translation.clearText}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {sourceText.length > 0 && (
+                      <span className="text-[10px] text-slate-400">
+                        {t.translation.charCount.replace('{n}', String(sourceText.length))}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     {isTranslating && (
                       <button

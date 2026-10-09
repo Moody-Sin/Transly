@@ -8,6 +8,7 @@
 ## [未发布]
 
 ### 新增
+- **主输入框快速清空与实时字符计数统计 (P3)**：在主翻译界面的源文本操作底栏新增「清空内容」快速操作按钮与字符实时统计标签（`{n} 字符`），与取消任务状态平滑联动，提升日常大段文本翻译时的交互便捷度。
 - **翻译历史模糊搜索与导出 (CSV / JSON) (P1)**：在 `crates/transly-core` 的 `TranslationCache` 中实现 `search` 模糊查询，在命令层导出 `search_translation_history`。前端 `HistoryPanel` 增加实时搜索输入框（支持原文与译文模糊匹配）以及一键导出为 `.json` / `.csv` 文件功能，便于用户将翻译记录整理归档或用作生词复习资料。
 - **系统原生 Web Speech 零开销发音朗读 (TTS) (P2)**：基于现代浏览器与 WebView 内置的 `window.speechSynthesis` 原生 API，在桌面端主界面译文区、悬浮浮窗模式以及历史记录条目旁提供发音朗读按钮（小喇叭图标），实现原文与目标语言文本的零体积、零依赖、零额外网络开销的原生语音朗读。
 - **翻译缓存批量写入单次显式事务化 (P1)**：在 `crates/transly-core` 的 `TranslationCache` 中引入 `set_batch` 接口，内部使用 `conn.transaction()?` 与单次预编译语句批量落盘；服务端（`src-tauri/src/server/mod.rs`）在整页批量翻译成功后统一通过 `set_batch` 提交事务，将单次批量翻译的 30 次隐式加锁与写盘减少为 1 次批量提交，大幅降低高并发与整页翻译下的 SQLite 锁争用与磁盘 I/O。

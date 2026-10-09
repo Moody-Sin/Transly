@@ -31,6 +31,8 @@
     "engineDeepseek": "DeepSeek LLM (API key required / auto fallback)",
     "engineOpenai": "OpenAI (API key required / auto fallback)",
     "speak": "Read Aloud",
+    "clearText": "Clear Text",
+    "charCount": "{n} chars",
     "btnClose": "Close"
   },
   "history": {

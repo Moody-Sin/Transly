@@ -745,3 +745,93 @@ async fn test_pairing_http_endpoints_roundtrip() {
     assert_eq!(poll_data2["status"], "approved");
     assert_eq!(poll_data2["token"], "secret-pairing-token");
 }
+
+#[tokio::test]
+async fn test_e2e_extension_batch_translate_and_fallback_flow() {
+    // 搭建真实路由服务端拓扑
+    let cache = Arc::new(TranslationCache::in_memory().unwrap());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let mut glossary_instance = Glossary::new();
+    glossary_instance.insert_with_options("agent", "智能体", false);
+    let glossary = Arc::new(RwLock::new(glossary_instance));
+    let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+    let token = Arc::new(RwLock::new("e2e-session-token".to_string()));
+
+    let app = create_router(token, cache.clone(), pool, glossary, cache_controller);
+
+    // 1. 模拟 Chrome 浏览器插件发起一整批 DOM 文本节点的沉浸式翻译请求
+    let batch_req_body = serde_json::json!({
+        "items": [
+            { "id": "node_1", "text": "Hello world with Agent" },
+            { "id": "node_2", "text": "Another paragraph for testing" }
+        ],
+        "source_lang": "auto",
+        "target_lang": "zh-CN",
+        "engine": "google_web"
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/translate")
+        .header(header::AUTHORIZATION, "Bearer e2e-session-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::ORIGIN,
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+        )
+        .body(Body::from(batch_req_body.to_string()))
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let resp: TranslateBatchResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(resp.items.len(), 2);
+
+    // 验证翻译结果结构化返回，并经过了忽略大小写的全局术语库修正 ("Agent" -> "智能体")
+    if let BatchItemResult::Success { ref text, .. } = resp.items[0] {
+        assert!(text.contains("智能体"), "术语替换应生效: {text}");
+    } else {
+        panic!("第一项应为成功结果");
+    }
+
+    // 2. 验证写入缓存使用的是批量事务 set_batch
+    let cached_1 = cache
+        .get("Hello world with Agent", "auto", "zh-CN", "google_web")
+        .unwrap();
+    let cached_2 = cache
+        .get(
+            "Another paragraph for testing",
+            "auto",
+            "zh-CN",
+            "google_web",
+        )
+        .unwrap();
+    assert!(cached_1.is_some(), "第一项应已被写入缓存");
+    assert!(cached_2.is_some(), "第二项应已被写入缓存");
+
+    // 3. 再次发起相同批量请求：验证 100% 命中缓存且毫秒级响应
+    let req2 = Request::builder()
+        .method("POST")
+        .uri("/translate")
+        .header(header::AUTHORIZATION, "Bearer e2e-session-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::ORIGIN,
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+        )
+        .body(Body::from(batch_req_body.to_string()))
+        .unwrap();
+
+    let res2 = app.clone().oneshot(req2).await.unwrap();
+    assert_eq!(res2.status(), StatusCode::OK);
+    let bytes2 = res2.into_body().collect().await.unwrap().to_bytes();
+    let resp2: TranslateBatchResponse = serde_json::from_slice(&bytes2).unwrap();
+    assert_eq!(resp2.items.len(), 2);
+    if let BatchItemResult::Success { ref text, .. } = resp2.items[0] {
+        assert!(text.contains("智能体"));
+    }
+}

@@ -8,6 +8,8 @@
 ## [未发布]
 
 ### 新增
+- **离线语言检测与智能双向语言路由 (P0)**：在 `crates/transly-core` 中新增 `detect_language` 与 `resolve_smart_target_lang` 模块，纯 Rust 基于 Unicode 字符区段（汉字给予 2.5 倍权重支持中英夹杂技术文本准确识别、假名、谚文、西里尔、阿拉伯、拉丁字母）实现微秒级零网络离线语言探测。主界面与任务调度状态机接入「中英智能双向对转」：当用户目标语言设定为中文时，输入中文自动对转翻译为英文，输入非中文保持翻译为中文；反之亦然。主界面源文本区同步显示「检测为: {lang}」与「自动转译为: {lang}」智能路由标识，彻底消除频繁手动切换语言下拉框的繁琐交互。
+- **划词原地翻译并替换全局生产力工作流 (P0)**：在平台层 `src-tauri` 中新增 `trigger_selection_replacement` 逻辑与 `get_replace_shortcut` / `set_replace_shortcut` 命令，注册默认全局热键 `Alt+Shift+R`（支持用户在设置中心自定义持久化配置）。按下快捷键后自动模拟复制选区文本、智能推断目标语言并异步翻译，译文生成后自动模拟粘贴覆盖原选区并妥善恢复用户原有剪贴板历史；引入全局 `CLIPBOARD_SIMULATION_MUTEX` 互斥排队锁彻底杜绝与悬浮划词并发竞争，自适应轮询上限调优至 300ms 兼顾大段长选区，执行期间全程置 `sel_flag` 抑制剪贴板监听器自触发，为跨应用写作、聊天与代码注释翻译提供一键原地直达体验。
 - **全局划词快捷键自定义支持 (P1)**：在平台层 `src-tauri` 中新增 `get_shortcut` 与 `set_shortcut` 命令，支持从系统凭据持久化读取与更新用户自定义全局快捷键（如 `Ctrl+Shift+T`，默认 `Alt+Shift+D`）；并在设置中心提供快捷键录入与保存交互，热重载注册全局热键，避免与其他系统或应用快捷键冲突。
 - **LLM 引擎自定义 Base URL 端点与模型名称 (P1)**：在设置中心为 DeepSeek 与 OpenAI 引擎新增端点与模型自定义输入支持（命令层新增 `save_llm_config` 与 `get_llm_config`，密钥安全存储于平台凭据库中）。`EnginePool` 引擎池根据自定义配置动态装配 `OpenAIEngine` 实例并在保存后即时失效旧缓存，全面支持用户接入本地 Ollama、vLLM、OneAPI 及私有部署大模型。
 - **Firefox (Gecko) 浏览器扩展专属构建与打包适配 (P2)**：在 `extension/scripts/build-firefox.mjs` 中实现自动化 Firefox 产物生成，自动适配 Firefox MV3 规范（`browser_specific_settings.gecko` 与 `background.scripts` 兼容），并在根目录提供 `pnpm run build:extension:firefox` 一键构建 `dist-firefox` 产物。

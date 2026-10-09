@@ -483,10 +483,111 @@ pub async fn ocr_clipboard_image(
 }
 
 pub const DEFAULT_SHORTCUT: &str = "Alt+Shift+D";
+pub const DEFAULT_REPLACE_SHORTCUT: &str = "Alt+Shift+R";
+
+/// 全局剪贴板自动化互斥锁，确保划词悬浮呼出与原地替换模拟流程不发生并发抢占
+static CLIPBOARD_SIMULATION_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct SelectionContext {
     pub sel_flag: Arc<std::sync::atomic::AtomicBool>,
     pub counter: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// 触发划词原地翻译并替换工作流：
+/// 1. 模拟复制 (Ctrl+C / Cmd+C) 获取当前选区文本
+/// 2. 使用离线检测推断智能目标语言并执行翻译
+/// 3. 将译文写入剪贴板并模拟粘贴 (Ctrl+V / Cmd+V) 覆盖原选区
+/// 4. 延迟后恢复用户原有剪贴板，全程置 `sel_flag` 抑制剪贴板监听器自触发
+pub fn trigger_selection_replacement(
+    handle: tauri::AppHandle,
+    sel_flag: Arc<std::sync::atomic::AtomicBool>,
+    pool: Arc<EnginePool>,
+    glossary: Arc<RwLock<Glossary>>,
+) {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    tauri::async_runtime::spawn(async move {
+        // 获取互斥锁排队，避免划词悬浮与原地替换同时模拟读写剪贴板发生数据竞态
+        let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+
+        // 0. 备份原剪贴板
+        let old_clipboard = handle.clipboard().read_text().ok();
+
+        // 抑制剪贴板监听
+        sel_flag.store(true, Ordering::SeqCst);
+
+        // 1. 模拟 Ctrl+C
+        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+            #[cfg(target_os = "macos")]
+            let modifier = Key::Meta;
+            #[cfg(not(target_os = "macos"))]
+            let modifier = Key::Control;
+
+            let _ = enigo.key(modifier, Direction::Press);
+            let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+            let _ = enigo.key(modifier, Direction::Release);
+        }
+
+        // 2. 自适应轮询读取选中文本（单次 15ms，长文本自适应上限放宽至 300ms，内容变化立即放行）
+        let clipboard_reader = {
+            let h = handle.clone();
+            move || h.clipboard().read_text().ok()
+        };
+        let detected_text = crate::clipboard_gate::poll_clipboard_change(
+            old_clipboard.as_deref(),
+            clipboard_reader,
+            std::time::Duration::from_millis(15),
+            std::time::Duration::from_millis(300),
+        )
+        .await;
+
+        if let Some(text) = detected_text {
+            let clean = text.trim();
+            if !clean.is_empty() {
+                // 3. 智能推断目标语言（默认目标若为中文，中文对转英文；非中文对转中文）
+                let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
+                let engine = pool.default_engine();
+                let req = TranslationRequest {
+                    text: clean.to_string(),
+                    source_lang: "auto".to_string(),
+                    target_lang,
+                };
+
+                if let Ok(res) = engine.translate(&req).await {
+                    let g = glossary.read().await;
+                    let final_text = g.apply(&res.text);
+
+                    // 4. 将译文写入剪贴板并模拟粘贴覆盖原选区
+                    if handle.clipboard().write_text(final_text).is_ok() {
+                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                            #[cfg(target_os = "macos")]
+                            let modifier = Key::Meta;
+                            #[cfg(not(target_os = "macos"))]
+                            let modifier = Key::Control;
+
+                            let _ = enigo.key(modifier, Direction::Press);
+                            let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+                            let _ = enigo.key(modifier, Direction::Release);
+                        }
+                        // 留出应用接收粘贴事件的窗口时间
+                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                    }
+                }
+            }
+        }
+
+        // 5. 恢复用户原有剪贴板内容
+        if let Some(old_clipboard) = old_clipboard {
+            if let Err(e) = handle.clipboard().write_text(old_clipboard) {
+                eprintln!("[Clipboard Warning] 原地替换后恢复原剪贴板失败: {e}");
+            }
+        }
+
+        sel_flag.store(false, Ordering::SeqCst);
+    });
 }
 
 pub fn trigger_selection_translation(
@@ -501,6 +602,9 @@ pub fn trigger_selection_translation(
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     tauri::async_runtime::spawn(async move {
+        // 获取互斥锁排队，避免划词悬浮与原地替换同时模拟读写剪贴板发生数据竞态
+        let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+
         // 0. 备份旧剪贴板内容
         let old_clipboard = handle.clipboard().read_text().ok();
 
@@ -641,6 +745,90 @@ pub async fn set_shortcut(
         .map_err(|e| format!("保存快捷键失败: {e}"))?;
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_replace_shortcut() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::secrets::get_secret("custom_replace_shortcut")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string())
+    .pipe(Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_replace_shortcut(
+    shortcut: String,
+    app: tauri::AppHandle,
+    selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let clean = shortcut.trim();
+    if clean.is_empty() {
+        return Err("快捷键不能为空".to_string());
+    }
+
+    let old_shortcut = tokio::task::spawn_blocking(|| {
+        crate::secrets::get_secret("custom_replace_shortcut")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string());
+
+    if old_shortcut != clean {
+        let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+    }
+
+    let app_h = app.clone();
+    let sel_flag = selection_ctx.sel_flag.clone();
+    let pool_ref = pool.inner().clone();
+    let glossary_ref = glossary.inner().clone();
+
+    let register_res = app
+        .global_shortcut()
+        .on_shortcut(clean, move |_app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                trigger_selection_replacement(
+                    app_h.clone(),
+                    sel_flag.clone(),
+                    pool_ref.clone(),
+                    glossary_ref.clone(),
+                );
+            }
+        });
+
+    if let Err(e) = register_res {
+        return Err(format!(
+            "划词替换快捷键注册失败，可能按键格式不合法或被系统占用: {e}"
+        ));
+    }
+
+    let to_save = clean.to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::secrets::set_secret("custom_replace_shortcut", &to_save)
+    })
+    .await
+    .map_err(|e| format!("快捷键调度异常: {e}"))?
+    .map_err(|e| format!("保存快捷键失败: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn detect_text_language(text: String) -> Result<Option<String>, String> {
+    Ok(transly_core::detect_language(&text).map(|s| s.to_string()))
 }
 
 trait Pipe: Sized {
@@ -1090,5 +1278,17 @@ mod tests {
         assert!(manager.reject(&s2).await);
         // 重复 reject 应失败
         assert!(!manager.reject(&s2).await);
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_language_command() {
+        let res = detect_text_language("你好世界".to_string()).await;
+        assert_eq!(res, Ok(Some("zh-CN".to_string())));
+
+        let res_en = detect_text_language("Hello world".to_string()).await;
+        assert_eq!(res_en, Ok(Some("en".to_string())));
+
+        let res_none = detect_text_language("".to_string()).await;
+        assert_eq!(res_none, Ok(None));
     }
 }

@@ -14,6 +14,8 @@ export interface RunnerSnapshot {
   error: TaskError | null
   source: 'input' | 'selection' | 'clipboard' | null
   sourceText: string
+  detectedLang?: string | null
+  effectiveTargetLang?: string | null
 }
 
 export interface TaskRunner {
@@ -36,6 +38,8 @@ const EMPTY: RunnerSnapshot = {
   error: null,
   source: null,
   sourceText: '',
+  detectedLang: null,
+  effectiveTargetLang: null,
 }
 
 export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
@@ -77,6 +81,31 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
         error: null,
       }))
 
+      // 探测源语言并在中英智能双向对转时自适应目标语言
+      let effectiveTarget = langRef.current
+      let detected: string | null = null
+      try {
+        const detectRes = await commands.detectTextLanguage(text)
+        if (detectRes.status === 'ok' && detectRes.data) {
+          detected = detectRes.data
+          const isTargetChinese =
+            effectiveTarget === 'zh' ||
+            effectiveTarget === 'zh-CN' ||
+            effectiveTarget === 'zh-Hans' ||
+            effectiveTarget === 'zh-TW'
+          const isTargetEnglish =
+            effectiveTarget === 'en' || effectiveTarget === 'en-US' || effectiveTarget === 'en-GB'
+
+          if (isTargetChinese && detected === 'zh-CN') {
+            effectiveTarget = 'en'
+          } else if (isTargetEnglish && detected === 'en') {
+            effectiveTarget = 'zh-CN'
+          }
+        }
+      } catch {
+        // 探测失败时静默回退默认目标语言
+      }
+
       // 主窗口如果使用 LLM 引擎（OpenAI/DeepSeek），优先使用 translateStream 实现流式打字机效果
       const currentEng = engineRef.current
       const isLlm = currentEng === 'openai' || currentEng === 'deepseek'
@@ -86,9 +115,9 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       const reqPromise =
         isLlm && !isFloatWindow
           ? commands
-              .translateStream(gen, text, 'auto', langRef.current, currentEng)
+              .translateStream(gen, text, 'auto', effectiveTarget, currentEng)
               .catch(toFailureOutcome)
-          : commands.translate(text, 'auto', langRef.current, currentEng).catch(toFailureOutcome)
+          : commands.translate(text, 'auto', effectiveTarget, currentEng).catch(toFailureOutcome)
 
       const res = await reqPromise
       // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
@@ -102,6 +131,8 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
           error: null,
           source,
           sourceText: text,
+          detectedLang: detected,
+          effectiveTargetLang: effectiveTarget,
         })
       } else {
         setSnapshot({
@@ -115,6 +146,8 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
           },
           source,
           sourceText: text,
+          detectedLang: detected,
+          effectiveTargetLang: effectiveTarget,
         })
       }
     },

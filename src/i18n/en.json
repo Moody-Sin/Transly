@@ -13,6 +13,9 @@
   },
   "translation": {
     "autoDetect": "Auto Detect",
+    "smartAutoToggle": "Smart Bi-directional Toggle",
+    "detectedLang": "Detected as",
+    "smartRoutingTo": "Auto routed to",
     "inputPlaceholder": "Type or paste text to translate...",
     "outputPlaceholder": "Translation will appear here...",
     "btnTranslate": "Translate",
@@ -106,6 +109,8 @@
     "clipboardMonitorDesc": "Pop up mini float window automatically on copying text",
     "shortcutTitle": "Global Selection Shortcut",
     "shortcutDesc": "Hotkey to pop up float window (e.g. Alt+Shift+D or Ctrl+Shift+T)",
+    "replaceShortcutTitle": "In-place Replace Shortcut",
+    "replaceShortcutDesc": "Hotkey to translate and replace selected text in place (e.g. Alt+Shift+R)",
     "btnSaveShortcut": "Save Shortcut",
     "statusShortcutSaved": "Shortcut updated successfully!",
     "statusShortcutFailed": "Failed to update shortcut",

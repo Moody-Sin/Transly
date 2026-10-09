@@ -59,6 +59,7 @@ export default function App() {
   const [ocrError, setOcrError] = useState<string | null>(null)
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
+  const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
 
   // 浏览器扩展一键配对请求浮层
   const [pairingRequest, setPairingRequest] = useState<{
@@ -171,6 +172,17 @@ export default function App() {
       })
       .catch((err) => {
         console.warn('[Transly] 读取快捷键失败：', err)
+      })
+
+    commands
+      .getReplaceShortcut()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setCustomReplaceShortcut(res.data)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取划词替换快捷键失败：', err)
       })
 
     loadGlossaryList()
@@ -303,6 +315,22 @@ export default function App() {
   const handleSaveShortcut = async () => {
     try {
       const res = await commands.setShortcut(customShortcut.trim())
+      if (res.status === 'ok') {
+        setSaveStatus(t.settings.statusShortcutSaved)
+        setTimeout(() => setSaveStatus(null), 2000)
+      } else {
+        setSaveStatus(res.error)
+      }
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusShortcutFailed,
+      )
+    }
+  }
+
+  const handleSaveReplaceShortcut = async () => {
+    try {
+      const res = await commands.setReplaceShortcut(customReplaceShortcut.trim())
       if (res.status === 'ok') {
         setSaveStatus(t.settings.statusShortcutSaved)
         setTimeout(() => setSaveStatus(null), 2000)
@@ -628,21 +656,34 @@ export default function App() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs font-medium text-slate-500">
-                  {t.translation.autoDetect}
+                  {runner.snapshot.detectedLang
+                    ? `${t.translation.detectedLang}: ${runner.snapshot.detectedLang}`
+                    : t.translation.autoDetect}
                 </span>
                 <ArrowRight className="h-4 w-4 text-slate-400" />
-                <select
-                  value={targetLang}
-                  onChange={(e) => setTargetLang(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
-                >
-                  <option value="zh-CN">{t.languages['zh-CN']}</option>
-                  <option value="en">{t.languages.en}</option>
-                  <option value="ja">{t.languages.ja}</option>
-                  <option value="ko">{t.languages.ko}</option>
-                  <option value="fr">{t.languages.fr}</option>
-                  <option value="de">{t.languages.de}</option>
-                </select>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={targetLang}
+                    onChange={(e) => setTargetLang(e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="zh-CN">{t.languages['zh-CN']}</option>
+                    <option value="en">{t.languages.en}</option>
+                    <option value="ja">{t.languages.ja}</option>
+                    <option value="ko">{t.languages.ko}</option>
+                    <option value="fr">{t.languages.fr}</option>
+                    <option value="de">{t.languages.de}</option>
+                  </select>
+                  {runner.snapshot.effectiveTargetLang &&
+                    runner.snapshot.effectiveTargetLang !== targetLang && (
+                      <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 border border-indigo-200">
+                        {t.translation.smartRoutingTo}:{' '}
+                        {t.languages[
+                          runner.snapshot.effectiveTargetLang as keyof typeof t.languages
+                        ] || runner.snapshot.effectiveTargetLang}
+                      </span>
+                    )}
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -979,6 +1020,33 @@ export default function App() {
                   value={customShortcut}
                   onChange={(e) => setCustomShortcut(e.target.value)}
                   placeholder="Alt+Shift+D"
+                  className="rounded border border-slate-200 bg-white px-2.5 py-1 text-slate-700 outline-none focus:border-indigo-500 font-mono text-[11px]"
+                />
+              </div>
+
+              {/* 划词原地替换快捷键设置 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-slate-700">
+                      {t.settings.replaceShortcutTitle}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {t.settings.replaceShortcutDesc}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleSaveReplaceShortcut}
+                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+                  >
+                    {t.settings.btnSaveShortcut}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={customReplaceShortcut}
+                  onChange={(e) => setCustomReplaceShortcut(e.target.value)}
+                  placeholder="Alt+Shift+R"
                   className="rounded border border-slate-200 bg-white px-2.5 py-1 text-slate-700 outline-none focus:border-indigo-500 font-mono text-[11px]"
                 />
               </div>

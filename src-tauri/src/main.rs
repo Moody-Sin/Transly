@@ -227,11 +227,16 @@ fn main() {
                 }
             }
 
-            // 注册全局快捷键（默认 Alt+Shift+D，支持系统凭据中读取用户自定义值），自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
+            // 注册全局快捷键（默认 Alt+Shift+D 划词悬浮翻译，Alt+Shift+R 划词原地替换）
             let active_shortcut = secrets::get_secret("custom_shortcut")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| commands::DEFAULT_SHORTCUT.to_string());
+
+            let active_replace_shortcut = secrets::get_secret("custom_replace_shortcut")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| commands::DEFAULT_REPLACE_SHORTCUT.to_string());
 
             let app_handle = app.handle().clone();
             let sel_flag = selection_flag.clone();
@@ -245,6 +250,24 @@ fn main() {
                             sel_flag.clone(),
                             counter.clone(),
                             pending_slot.clone(),
+                        );
+                    }
+                },
+            );
+
+            let replace_app_handle = app.handle().clone();
+            let replace_sel_flag = selection_flag.clone();
+            let replace_pool = app.state::<Arc<EnginePool>>().inner().clone();
+            let replace_glossary = app.state::<Arc<RwLock<Glossary>>>().inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                active_replace_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        commands::trigger_selection_replacement(
+                            replace_app_handle.clone(),
+                            replace_sel_flag.clone(),
+                            replace_pool.clone(),
+                            replace_glossary.clone(),
                         );
                     }
                 },

@@ -13,6 +13,9 @@
   },
   "translation": {
     "autoDetect": "自动检测",
+    "smartAutoToggle": "智能双向对转",
+    "detectedLang": "检测为",
+    "smartRoutingTo": "自动转译为",
     "inputPlaceholder": "输入或粘贴需要翻译的文本...",
     "outputPlaceholder": "译文将显示在这里...",
     "btnTranslate": "翻译",
@@ -106,6 +109,8 @@
     "clipboardMonitorDesc": "复制外文时自动弹出迷你浮窗，无需手动呼出",
     "shortcutTitle": "全局划词快捷键",
     "shortcutDesc": "按键组合唤起悬浮窗（如: Alt+Shift+D 或 Ctrl+Shift+T）",
+    "replaceShortcutTitle": "划词原地替换快捷键",
+    "replaceShortcutDesc": "按键组合将选中文本原地翻译并替换覆盖（如: Alt+Shift+R）",
     "btnSaveShortcut": "保存快捷键",
     "statusShortcutSaved": "快捷键已更新生效！",
     "statusShortcutFailed": "快捷键保存失败",

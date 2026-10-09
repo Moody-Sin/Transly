@@ -125,6 +125,126 @@ pub async fn translate(
     }
 }
 
+/// 流式分块传输载荷（通过 Tauri Event 广播至指定窗口）
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct StreamChunkPayload {
+    pub task_id: u32,
+    pub chunk: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub async fn translate_stream(
+    task_id: u32,
+    text: String,
+    source_lang: Option<String>,
+    target_lang: String,
+    engine_name: Option<String>,
+    window: tauri::Window,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+    cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
+) -> Result<TranslateOutcomeDto, TranslateErrorDto> {
+    use tauri::Emitter;
+
+    let sl = source_lang.unwrap_or_else(|| "auto".to_string());
+
+    transly_core::validate_translation_input(&text, &sl, &target_lang)
+        .map_err(|e| TranslateErrorDto::from_error(&e))?;
+
+    if let Some(ref eng) = engine_name {
+        if !transly_core::validate_engine_id(eng) {
+            return Err(TranslateErrorDto::from_error(&Error::Input(format!(
+                "不支持或未知的翻译引擎: {eng}"
+            ))));
+        }
+    }
+
+    let active_engine = if let Some(ref name) = engine_name {
+        pool.get_engine(name).await
+    } else {
+        pool.default_engine()
+    };
+
+    let (cache_enabled, start_gen) = cache_controller.snapshot();
+
+    // 1. 若开启缓存，优先查缓存
+    if cache_enabled {
+        let cached_res = {
+            let cache_ref = cache.inner().clone();
+            let engine_clone = active_engine.clone();
+            let t = text.clone();
+            let s = sl.clone();
+            let tl = target_lang.clone();
+            tokio::task::spawn_blocking(move || {
+                transly_core::lookup_cache_with_fallback(
+                    &cache_ref,
+                    engine_clone.as_ref(),
+                    &t,
+                    &s,
+                    &tl,
+                )
+            })
+            .await
+            .unwrap_or(None)
+        };
+
+        if let Some((cached_text, used_engine)) = cached_res {
+            let g = glossary.read().await;
+            let applied = g.apply(&cached_text);
+            // 命中缓存时直接分发完整 chunk，让打字机视图立即就绪
+            let _ = window.emit(
+                "translate-stream-chunk",
+                StreamChunkPayload {
+                    task_id,
+                    chunk: applied.clone(),
+                },
+            );
+            return Ok(TranslateOutcomeDto {
+                text: applied,
+                engine: used_engine,
+            });
+        }
+    }
+
+    // 2. 缓存未命中或未开启，调用流式引擎翻译
+    let req = TranslationRequest {
+        text: text.clone(),
+        source_lang: sl.clone(),
+        target_lang: target_lang.clone(),
+    };
+
+    let win_clone = window.clone();
+    let on_chunk: transly_core::engine::StreamCallback = Box::new(move |chunk_str| {
+        let _ = win_clone.emit(
+            "translate-stream-chunk",
+            StreamChunkPayload {
+                task_id,
+                chunk: chunk_str.to_string(),
+            },
+        );
+    });
+
+    match active_engine.translate_stream(&req, on_chunk).await {
+        Ok(res) => {
+            let cache_target_engine = res.actual_engine();
+            if let Err(e) = cache_controller.set_if_current(start_gen, || {
+                cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
+            }) {
+                eprintln!("[Cache Write Warning] 桌面端流式翻译缓存写入失败: {e}");
+            }
+            let g = glossary.read().await;
+            Ok(TranslateOutcomeDto {
+                text: g.apply(&res.text),
+                engine: res.engine,
+            })
+        }
+        Err(e) => Err(TranslateErrorDto::from_error(&e)),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn add_glossary_term(
@@ -550,6 +670,7 @@ pub struct EngineCapabilitiesDto {
     pub max_batch_size: u32,
     pub supports_batch: bool,
     pub requires_api_key: bool,
+    pub supports_streaming: bool,
 }
 
 #[tauri::command]
@@ -569,6 +690,7 @@ pub async fn get_engine_capabilities(
         max_batch_size: caps.max_batch_size as u32,
         supports_batch: caps.supports_batch,
         requires_api_key: caps.requires_api_key,
+        supports_streaming: caps.supports_streaming,
     })
 }
 

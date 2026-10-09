@@ -581,8 +581,20 @@ export default function App() {
               </div>
 
               <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex-1 overflow-auto text-sm text-slate-800">
-                  {translatedText || (
+                <div className="flex-1 overflow-auto text-sm text-slate-800 whitespace-pre-wrap">
+                  {translatedText ? (
+                    <span>
+                      {translatedText}
+                      {isTranslating && (
+                        <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-500 animate-pulse align-middle" />
+                      )}
+                    </span>
+                  ) : isTranslating ? (
+                    <span className="text-slate-400 flex items-center gap-1.5">
+                      <span className="inline-block w-1.5 h-3.5 bg-indigo-500 animate-pulse" />
+                      {t.translation.translating}
+                    </span>
+                  ) : (
                     <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
                   )}
                 </div>

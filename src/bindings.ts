@@ -5,6 +5,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
+	translateStream: (taskId: number, text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_stream", { taskId, text, sourceLang, targetLang, engineName })),
 	getEngineCapabilities: (engine: string) => typedError<EngineCapabilitiesDto, string>(__TAURI_INVOKE("get_engine_capabilities", { engine })),
 	/**
 	 *  设置浮窗粘滞：翻译中/错误态时为 true，浮窗不失焦自动隐藏，
@@ -61,6 +62,7 @@ export type EngineCapabilitiesDto = {
 	max_batch_size: number,
 	supports_batch: boolean,
 	requires_api_key: boolean,
+	supports_streaming: boolean,
 };
 
 /**

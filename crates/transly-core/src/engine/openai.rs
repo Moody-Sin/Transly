@@ -24,6 +24,8 @@ struct ChatCompletionRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
     temperature: f32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +41,21 @@ struct ChatResponseMessage {
 #[derive(Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
+}
+
+#[derive(Deserialize)]
+struct StreamChatChoice {
+    delta: StreamDelta,
+}
+
+#[derive(Deserialize)]
+struct StreamDelta {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StreamChatCompletionResponse {
+    choices: Vec<StreamChatChoice>,
 }
 
 impl OpenAIEngine {
@@ -96,6 +113,7 @@ impl TranslateEngine for OpenAIEngine {
             max_batch_size: 1,
             supports_batch: false,
             requires_api_key: true,
+            supports_streaming: true,
             fallback_engine: None,
         }
     }
@@ -123,6 +141,7 @@ impl TranslateEngine for OpenAIEngine {
                 },
             ],
             temperature: 0.2,
+            stream: false,
         };
 
         let url = format!("{}/chat/completions", self.base_url);
@@ -157,6 +176,105 @@ impl TranslateEngine for OpenAIEngine {
         Err(Error::Engine {
             engine: self.id().to_string(),
             message: "LLM API 返回内容为空".to_string(),
+        })
+    }
+
+    async fn translate_stream(
+        &self,
+        req: &TranslationRequest,
+        on_chunk: super::StreamCallback,
+    ) -> Result<TranslationResponse> {
+        if self.api_key.trim().is_empty() {
+            return Err(Error::MissingCredentials("API Key 不能为空".into()));
+        }
+
+        let system_prompt = format!(
+            "You are a professional, accurate translator. Translate the given text directly into target language '{tl}' without any explanations, pleasantries, or markdown decoration. Keep original line breaks and formatting identical.",
+            tl = req.target_lang
+        );
+
+        let body = ChatCompletionRequest {
+            model: &self.model,
+            messages: vec![
+                ChatMessage {
+                    role: "system",
+                    content: &system_prompt,
+                },
+                ChatMessage {
+                    role: "user",
+                    content: &req.text,
+                },
+            ],
+            temperature: 0.2,
+            stream: true,
+        };
+
+        let url = format!("{}/chat/completions", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(Error::Engine {
+                engine: self.id().to_string(),
+                message: format!("LLM API 响应错误 ({status}): {err_body}"),
+            });
+        }
+
+        use futures::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut full_text = String::new();
+        let mut buffer = String::new();
+
+        while let Some(item) = stream.next().await {
+            let bytes = item?;
+            let chunk_str = String::from_utf8_lossy(&bytes);
+            buffer.push_str(&chunk_str);
+
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim().to_string();
+                buffer.drain(..=newline_pos);
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        break;
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<StreamChatCompletionResponse>(data) {
+                        for choice in parsed.choices {
+                            if let Some(content) = choice.delta.content {
+                                if !content.is_empty() {
+                                    on_chunk(&content);
+                                    full_text.push_str(&content);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if full_text.trim().is_empty() {
+            return Err(Error::Engine {
+                engine: self.id().to_string(),
+                message: "LLM API 流式返回内容为空".to_string(),
+            });
+        }
+
+        Ok(TranslationResponse {
+            text: full_text.trim().to_string(),
+            detected_source_lang: None,
+            engine: self.id().to_string(),
         })
     }
 
@@ -199,6 +317,7 @@ mod tests {
         assert_eq!(engine.id(), "openai:gpt-4o-mini");
         assert_eq!(engine.base_url, "https://api.openai.com/v1");
         assert_eq!(engine.model, "gpt-4o-mini");
+        assert!(engine.capabilities().supports_streaming);
     }
 
     #[test]

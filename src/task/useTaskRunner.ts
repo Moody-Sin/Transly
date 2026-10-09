@@ -66,39 +66,60 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     }
   }, [])
 
-  const execute = useCallback(async (text: string, source: RunnerSnapshot['source']) => {
-    const gen = ++genRef.current
-    lastRunRef.current = { text, source }
-    setSnapshot((s) => ({ ...s, state: nextState(s.state, 'submit'), error: null }))
-
-    // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
-    // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
-    const res = await commands
-      .translate(text, 'auto', langRef.current, engineRef.current)
-      .catch(toFailureOutcome)
-    // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
-    if (applyIfCurrent(gen, genRef.current, true) !== true) return
-
-    if (res.status === 'ok') {
-      setSnapshot({
-        state: nextState('running', 'resolve'),
-        text: res.data.text,
-        engine: res.data.engine,
+  const execute = useCallback(
+    async (text: string, source: RunnerSnapshot['source']) => {
+      const gen = ++genRef.current
+      lastRunRef.current = { text, source }
+      setSnapshot((s) => ({
+        ...s,
+        state: nextState(s.state, 'submit'),
+        text: '', // 新一轮运行重置译文
         error: null,
-        source,
-        sourceText: text,
-      })
-    } else {
-      setSnapshot({
-        state: nextState('running', 'reject'),
-        text: '',
-        engine: null,
-        error: { kind: res.error.kind, message: res.error.message, retryable: res.error.retryable },
-        source,
-        sourceText: text,
-      })
-    }
-  }, [])
+      }))
+
+      // 主窗口如果使用 LLM 引擎（OpenAI/DeepSeek），优先使用 translateStream 实现流式打字机效果
+      const currentEng = engineRef.current
+      const isLlm = currentEng === 'openai' || currentEng === 'deepseek'
+
+      // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
+      // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
+      const reqPromise =
+        isLlm && !isFloatWindow
+          ? commands
+              .translateStream(gen, text, 'auto', langRef.current, currentEng)
+              .catch(toFailureOutcome)
+          : commands.translate(text, 'auto', langRef.current, currentEng).catch(toFailureOutcome)
+
+      const res = await reqPromise
+      // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
+      if (applyIfCurrent(gen, genRef.current, true) !== true) return
+
+      if (res.status === 'ok') {
+        setSnapshot({
+          state: nextState('running', 'resolve'),
+          text: res.data.text,
+          engine: res.data.engine,
+          error: null,
+          source,
+          sourceText: text,
+        })
+      } else {
+        setSnapshot({
+          state: nextState('running', 'reject'),
+          text: '',
+          engine: null,
+          error: {
+            kind: res.error.kind,
+            message: res.error.message,
+            retryable: res.error.retryable,
+          },
+          source,
+          sourceText: text,
+        })
+      }
+    },
+    [isFloatWindow],
+  )
 
   const run = useCallback(
     (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => {
@@ -139,6 +160,33 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     if (!canRetryExecution(snapshotRef.current.state, snapshotRef.current.error, true)) return
     void execute(last.text, last.source)
   }, [execute])
+
+  // 订阅流式分块事件 (translate-stream-chunk)，实现打字机式实时逐字累加
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    listen<{ task_id: number; chunk: string }>('translate-stream-chunk', (event) => {
+      const payload = event.payload
+      if (!payload || payload.task_id !== genRef.current) return
+      // 代际一致时将 chunk 追加到当前 snapshot
+      setSnapshot((s) => {
+        if (s.state !== 'running') return s
+        return {
+          ...s,
+          text: s.text + payload.chunk,
+        }
+      })
+    })
+      .then((fn) => {
+        unlisten = fn
+      })
+      .catch((err) => {
+        console.warn('[Transly] translate-stream-chunk 事件订阅失败：', err)
+      })
+
+    return () => {
+      if (unlisten) unlisten()
+    }
+  }, [])
 
   // 订阅划词 / 剪贴板事件：按 request_id 去重，同一段文本只翻译一次。
   // 浮窗首次显示前页面 JS 尚未就绪，emit 的事件会永久丢失；

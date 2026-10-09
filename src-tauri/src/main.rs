@@ -229,35 +229,48 @@ fn main() {
                                     let _ = enigo.key(modifier, Direction::Release);
                                 }
 
-                                // 2. 稍微等待系统剪贴板更新
-                                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                                // 2. 自适应短轮询检测系统剪贴板更新（单次 15ms，最多等 180ms，内容变化立即放行）
+                                let clipboard_reader = {
+                                    let h = handle.clone();
+                                    move || h.clipboard().read_text().ok()
+                                };
+                                let detected_text = src_tauri::clipboard_gate::poll_clipboard_change(
+                                    old_clipboard.as_deref(),
+                                    clipboard_reader,
+                                    std::time::Duration::from_millis(15),
+                                    std::time::Duration::from_millis(180),
+                                )
+                                .await;
 
                                 // 3. 提取剪贴板文本并唤起轻量悬浮窗
-                                let text = handle.clipboard().read_text().unwrap_or_default();
-                                if !text.trim().is_empty() {
-                                    let rid = counter.fetch_add(1, Ordering::SeqCst);
-                                    let req = commands::FloatRequest {
-                                        text,
-                                        source: "selection",
-                                        request_id: rid,
-                                    };
-                                    // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
-                                    if pending_slot.push(req.clone()) {
-                                        eprintln!("浮窗请求队列已满，丢弃最旧请求");
-                                    }
-                                    if let Some(float_win) = handle.get_webview_window("float") {
-                                        place_float_near_cursor(&float_win);
-                                        let _ = float_win.show();
-                                        let _ = float_win.set_focus();
-                                        // 必须 emit_to：Emitter::emit 会广播给所有窗口，
-                                        // 主窗口连带翻译一次并将划词结果写进主窗口输出区
-                                        let _ = float_win.emit_to("float", "float-translate", req);
+                                if let Some(text) = detected_text {
+                                    if !text.trim().is_empty() {
+                                        let rid = counter.fetch_add(1, Ordering::SeqCst);
+                                        let req = commands::FloatRequest {
+                                            text,
+                                            source: "selection",
+                                            request_id: rid,
+                                        };
+                                        // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
+                                        if pending_slot.push(req.clone()) {
+                                            eprintln!("浮窗请求队列已满，丢弃最旧请求");
+                                        }
+                                        if let Some(float_win) = handle.get_webview_window("float") {
+                                            place_float_near_cursor(&float_win);
+                                            let _ = float_win.show();
+                                            let _ = float_win.set_focus();
+                                            // 必须 emit_to：Emitter::emit 会广播给所有窗口，
+                                            // 主窗口连带翻译一次并将划词结果写进主窗口输出区
+                                            let _ = float_win.emit_to("float", "float-translate", req);
+                                        }
                                     }
                                 }
 
                                 // 4. 恢复原剪贴板内容，避免污染用户复制历史
                                 if let Some(old_clipboard) = old_clipboard {
-                                    let _ = handle.clipboard().write_text(old_clipboard);
+                                    if let Err(e) = handle.clipboard().write_text(old_clipboard) {
+                                        eprintln!("[Clipboard Warning] 划词后恢复原剪贴板失败（可能被外部锁占用）: {e}");
+                                    }
                                 }
 
                                 // 无论成败均释放抑制标志，避免剪贴板监听被永久抑制

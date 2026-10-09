@@ -69,6 +69,9 @@ impl BatchItemResult {
     }
 }
 
+/// 流式输出增量 Token 回调
+pub type StreamCallback = Box<dyn Fn(&str) + Send + Sync>;
+
 /// 翻译引擎能力描述符
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineCapabilities {
@@ -77,6 +80,8 @@ pub struct EngineCapabilities {
     pub max_batch_size: usize,
     pub supports_batch: bool,
     pub requires_api_key: bool,
+    #[serde(default)]
+    pub supports_streaming: bool,
     #[serde(default)]
     pub fallback_engine: Option<String>,
 }
@@ -93,11 +98,24 @@ pub trait TranslateEngine: Send + Sync {
             max_batch_size: 100,
             supports_batch: true,
             requires_api_key: false,
+            supports_streaming: false,
             fallback_engine: None,
         }
     }
 
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse>;
+
+    /// 流式翻译输出：每产生一个增量片段即触发 on_chunk 回调，最终返回完整的聚合响应。
+    /// 默认实现回落至普通非流式 translate 并在完成时一次性回调完整文本。
+    async fn translate_stream(
+        &self,
+        req: &TranslationRequest,
+        on_chunk: StreamCallback,
+    ) -> Result<TranslationResponse> {
+        let res = self.translate(req).await?;
+        on_chunk(&res.text);
+        Ok(res)
+    }
 
     async fn translate_batch(
         &self,

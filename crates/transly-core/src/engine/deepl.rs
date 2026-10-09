@@ -105,6 +105,7 @@ impl TranslateEngine for DeepLEngine {
             max_batch_size: crate::MAX_BATCH_ITEMS,
             supports_batch: true,
             requires_api_key: true,
+            supports_streaming: false,
             fallback_engine: None,
         }
     }

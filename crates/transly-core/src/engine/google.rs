@@ -200,6 +200,7 @@ impl TranslateEngine for GoogleWebEngine {
             max_batch_size: 1,
             supports_batch: false,
             requires_api_key: false,
+            supports_streaming: false,
             fallback_engine: None,
         }
     }

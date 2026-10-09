@@ -35,6 +35,30 @@ impl TranslateEngine for FallbackEngine {
         caps
     }
 
+    async fn translate_stream(
+        &self,
+        req: &TranslationRequest,
+        on_chunk: super::StreamCallback,
+    ) -> Result<TranslationResponse> {
+        match self.primary.translate_stream(req, on_chunk).await {
+            Ok(res) => Ok(res),
+            Err(primary_err) => {
+                if matches!(primary_err, Error::MissingCredentials(_)) {
+                    return Err(primary_err);
+                }
+                match self.fallback.translate(req).await {
+                    Ok(mut res) => {
+                        if !res.engine.ends_with("(fallback)") {
+                            res.engine = format!("{}(fallback)", res.engine);
+                        }
+                        Ok(res)
+                    }
+                    Err(_) => Err(primary_err),
+                }
+            }
+        }
+    }
+
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
         match self.primary.translate(req).await {
             Ok(res) => Ok(res),
@@ -140,6 +164,35 @@ mod tests {
         assert_eq!(res.text, "backup:hello");
         assert_eq!(res.engine, "backup(fallback)");
         // 缓存写入用的是剥离后缀的 actual_engine，否则降级路径缓存永久 Miss
+        assert_eq!(res.actual_engine(), "backup");
+    }
+
+    #[tokio::test]
+    async fn test_fallback_stream_when_primary_fails() {
+        let primary = Arc::new(FailingEngine);
+        let fallback = Arc::new(SuccessEngine("backup"));
+        let engine = FallbackEngine::new(primary, fallback);
+
+        let req = TranslationRequest {
+            text: "hello".to_string(),
+            source_lang: "en".to_string(),
+            target_lang: "zh-CN".to_string(),
+        };
+
+        let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let cb_collected = collected.clone();
+        let res = engine
+            .translate_stream(
+                &req,
+                Box::new(move |chunk| {
+                    cb_collected.lock().unwrap().push(chunk.to_string());
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.text, "backup:hello");
+        assert_eq!(res.engine, "backup(fallback)");
         assert_eq!(res.actual_engine(), "backup");
     }
 

@@ -41,6 +41,10 @@ export default function App() {
   const [deeplKey, setDeeplKey] = useState('')
   const [deepseekKey, setDeepseekKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
+  const [deepseekBaseUrl, setDeepseekBaseUrl] = useState('')
+  const [deepseekModel, setDeepseekModel] = useState('')
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState('')
+  const [openaiModel, setOpenaiModel] = useState('')
   const [clipboardMonitor, setClipboardMonitor] = useState(false)
   const [cacheEnabled, setCacheEnabled] = useState(true)
   const [glossarySource, setGlossarySource] = useState('')
@@ -54,6 +58,7 @@ export default function App() {
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrError, setOcrError] = useState<string | null>(null)
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
+  const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
 
   // 浏览器扩展一键配对请求浮层
   const [pairingRequest, setPairingRequest] = useState<{
@@ -102,6 +107,26 @@ export default function App() {
       .isApiKeyConfigured('openai')
       .then(setOpenaiConfigured)
       .catch((err) => console.warn('[Transly] 读取 OpenAI 密钥状态失败：', err))
+
+    commands
+      .getLlmConfig('deepseek')
+      .then((res) => {
+        if (res.status === 'ok') {
+          setDeepseekBaseUrl(res.data.base_url || '')
+          setDeepseekModel(res.data.model || '')
+        }
+      })
+      .catch((err) => console.warn('[Transly] 读取 DeepSeek 配置失败：', err))
+
+    commands
+      .getLlmConfig('openai')
+      .then((res) => {
+        if (res.status === 'ok') {
+          setOpenaiBaseUrl(res.data.base_url || '')
+          setOpenaiModel(res.data.model || '')
+        }
+      })
+      .catch((err) => console.warn('[Transly] 读取 OpenAI 配置失败：', err))
   }
 
   useEffect(() => {
@@ -135,6 +160,17 @@ export default function App() {
       })
       .catch((err) => {
         console.warn('[Transly] 读取缓存开关失败：', err)
+      })
+
+    commands
+      .getShortcut()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setCustomShortcut(res.data)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取快捷键失败：', err)
       })
 
     loadGlossaryList()
@@ -264,6 +300,22 @@ export default function App() {
     }
   }
 
+  const handleSaveShortcut = async () => {
+    try {
+      const res = await commands.setShortcut(customShortcut.trim())
+      if (res.status === 'ok') {
+        setSaveStatus(t.settings.statusShortcutSaved)
+        setTimeout(() => setSaveStatus(null), 2000)
+      } else {
+        setSaveStatus(res.error)
+      }
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusShortcutFailed,
+      )
+    }
+  }
+
   const handleRotateToken = async () => {
     try {
       const res = await commands.rotateServerToken()
@@ -307,6 +359,17 @@ export default function App() {
         if (res.status === 'error') throw new Error(res.error)
         setOpenaiKey('')
       }
+      // 保存 LLM 自定义端点与模型名称
+      await commands.saveLlmConfig(
+        'deepseek',
+        deepseekBaseUrl.trim() || null,
+        deepseekModel.trim() || null,
+      )
+      await commands.saveLlmConfig(
+        'openai',
+        openaiBaseUrl.trim() || null,
+        openaiModel.trim() || null,
+      )
       checkConfiguredKeys()
       setSaveStatus(t.settings.statusKeysSaved)
       setTimeout(() => setSaveStatus(null), 2500)
@@ -826,6 +889,22 @@ export default function App() {
                     }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
+                  <div className="mt-1.5 grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={deepseekBaseUrl}
+                      onChange={(e) => setDeepseekBaseUrl(e.target.value)}
+                      placeholder={t.settings.deepseekBaseUrlPlaceholder}
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                    />
+                    <input
+                      type="text"
+                      value={deepseekModel}
+                      onChange={(e) => setDeepseekModel(e.target.value)}
+                      placeholder={t.settings.deepseekModelPlaceholder}
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                    />
+                  </div>
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -853,6 +932,22 @@ export default function App() {
                     }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
+                  <div className="mt-1.5 grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={openaiBaseUrl}
+                      onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                      placeholder={t.settings.openaiBaseUrlPlaceholder}
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                    />
+                    <input
+                      type="text"
+                      value={openaiModel}
+                      onChange={(e) => setOpenaiModel(e.target.value)}
+                      placeholder={t.settings.openaiModelPlaceholder}
+                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                    />
+                  </div>
                 </div>
                 <div className="flex justify-end pt-1">
                   <button
@@ -863,6 +958,29 @@ export default function App() {
                     <span>{t.settings.btnSaveKeys}</span>
                   </button>
                 </div>
+              </div>
+
+              {/* 全局划词快捷键设置 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-slate-700">{t.settings.shortcutTitle}</div>
+                    <div className="text-[11px] text-slate-400">{t.settings.shortcutDesc}</div>
+                  </div>
+                  <button
+                    onClick={handleSaveShortcut}
+                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+                  >
+                    {t.settings.btnSaveShortcut}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={customShortcut}
+                  onChange={(e) => setCustomShortcut(e.target.value)}
+                  placeholder="Alt+Shift+D"
+                  className="rounded border border-slate-200 bg-white px-2.5 py-1 text-slate-700 outline-none focus:border-indigo-500 font-mono text-[11px]"
+                />
               </div>
 
               {/* 剪贴板监听开关 */}

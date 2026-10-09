@@ -6,6 +6,7 @@ export default tseslint.config(
   {
     ignores: [
       '**/dist/**',
+      '**/dist-firefox/**',
       '**/target/**',
       '**/node_modules/**',
       'src/bindings.ts',

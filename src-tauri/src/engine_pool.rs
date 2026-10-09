@@ -106,10 +106,29 @@ impl EnginePool {
                 }
                 "openai" | "deepseek" => {
                     let key = get_key(&id);
-                    let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
-                        Arc::new(OpenAIEngine::deepseek(key))
+                    let custom_url = get_key(&format!("{id}_base_url"));
+                    let custom_model = get_key(&format!("{id}_model"));
+                    let base_url = if custom_url.trim().is_empty() {
+                        None
                     } else {
-                        Arc::new(OpenAIEngine::new(key, None, None))
+                        Some(custom_url)
+                    };
+                    let model = if custom_model.trim().is_empty() {
+                        None
+                    } else {
+                        Some(custom_model)
+                    };
+
+                    let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
+                        let ds_url =
+                            base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string());
+                        let ds_model = model.unwrap_or_else(|| "deepseek-chat".to_string());
+                        let mut engine =
+                            OpenAIEngine::new(key, Some(ds_url), Some(ds_model.clone()));
+                        engine.set_engine_id(format!("deepseek:{ds_model}"));
+                        Arc::new(engine)
+                    } else {
+                        Arc::new(OpenAIEngine::new(key, base_url, model))
                     };
                     Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
                 }

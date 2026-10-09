@@ -24,6 +24,10 @@ export const commands = {
 	saveApiKey: (engine: string, key: string) => typedError<null, string>(__TAURI_INVOKE("save_api_key", { engine, key })),
 	isApiKeyConfigured: (engine: string) => __TAURI_INVOKE<boolean>("is_api_key_configured", { engine }),
 	deleteApiKey: (engine: string) => typedError<null, string>(__TAURI_INVOKE("delete_api_key", { engine })),
+	saveLlmConfig: (engine: string, baseUrl: string | null, model: string | null) => typedError<null, string>(__TAURI_INVOKE("save_llm_config", { engine, baseUrl, model })),
+	getLlmConfig: (engine: string) => typedError<LlmConfigDto, string>(__TAURI_INVOKE("get_llm_config", { engine })),
+	getShortcut: () => typedError<string, string>(__TAURI_INVOKE("get_shortcut")),
+	setShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_shortcut", { shortcut })),
 	addGlossaryTerm: (source: string, target: string, matchCase: boolean | null) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target, matchCase })),
 	getGlossaryTerms: () => typedError<GlossaryTermDto[], string>(__TAURI_INVOKE("get_glossary_terms")),
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
@@ -81,6 +85,11 @@ export type GlossaryTermDto = {
 	source: string,
 	target: string,
 	match_case: boolean,
+};
+
+export type LlmConfigDto = {
+	base_url: string | null,
+	model: string | null,
 };
 
 export type OcrErrorDto = {

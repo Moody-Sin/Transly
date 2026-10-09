@@ -84,6 +84,10 @@ impl OpenAIEngine {
         }
     }
 
+    pub fn set_engine_id(&mut self, id: impl Into<String>) {
+        self.engine_id = id.into();
+    }
+
     /// 针对 DeepSeek 预设的便捷构造函数
     pub fn deepseek(api_key: impl Into<String>) -> Self {
         let mut engine = Self::new(

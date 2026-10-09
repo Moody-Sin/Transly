@@ -482,6 +482,68 @@ pub async fn ocr_clipboard_image(
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
 }
 
+pub const DEFAULT_SHORTCUT: &str = "Alt+Shift+D";
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_shortcut() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::secrets::get_secret("custom_shortcut")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string())
+    .pipe(Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_shortcut(shortcut: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let clean = shortcut.trim();
+    if clean.is_empty() {
+        return Err("快捷键不能为空".to_string());
+    }
+
+    // 读取当前生效的旧快捷键
+    let old_shortcut = tokio::task::spawn_blocking(|| {
+        crate::secrets::get_secret("custom_shortcut")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string());
+
+    // 尝试注销旧快捷键（若与新快捷键不同）
+    if old_shortcut != clean {
+        let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+    }
+
+    // 持久化存储新快捷键
+    let to_save = clean.to_string();
+    tokio::task::spawn_blocking(move || crate::secrets::set_secret("custom_shortcut", &to_save))
+        .await
+        .map_err(|e| format!("快捷键调度异常: {e}"))?
+        .map_err(|e| format!("保存快捷键失败: {e}"))?;
+
+    Ok(())
+}
+
+trait Pipe: Sized {
+    fn pipe<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(Self) -> R,
+    {
+        f(self)
+    }
+}
+
+impl<T> Pipe for T {}
+
 /// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示
 #[derive(Clone, serde::Serialize)]
 pub struct FloatRequest {
@@ -673,6 +735,77 @@ fn validate_engine_name(engine: &str) -> Result<(), String> {
         "deepl" | "openai" | "deepseek" => Ok(()),
         other => Err(format!("不支持或未知的引擎凭据配置: {other}")),
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Default)]
+pub struct LlmConfigDto {
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_llm_config(
+    engine: String,
+    base_url: Option<String>,
+    model: Option<String>,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+) -> Result<(), String> {
+    let eng = engine.to_lowercase();
+    if eng != "openai" && eng != "deepseek" {
+        return Err("仅支持配置 OpenAI 或 DeepSeek 的端点与模型".to_string());
+    }
+
+    let url_key = format!("{eng}_base_url");
+    let model_key = format!("{eng}_model");
+
+    let url_val = base_url.unwrap_or_default().trim().to_string();
+    let model_val = model.unwrap_or_default().trim().to_string();
+
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        if url_val.is_empty() {
+            let _ = crate::secrets::delete_secret(&url_key);
+        } else {
+            crate::secrets::set_secret(&url_key, &url_val)?;
+        }
+
+        if model_val.is_empty() {
+            let _ = crate::secrets::delete_secret(&model_key);
+        } else {
+            crate::secrets::set_secret(&model_key, &model_val)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("配置保存调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    pool.invalidate(&engine).await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_llm_config(engine: String) -> Result<LlmConfigDto, String> {
+    let eng = engine.to_lowercase();
+    if eng != "openai" && eng != "deepseek" {
+        return Err("仅支持读取 OpenAI 或 DeepSeek 的端点与模型".to_string());
+    }
+
+    let url_key = format!("{eng}_base_url");
+    let model_key = format!("{eng}_model");
+
+    tokio::task::spawn_blocking(move || {
+        let base_url = crate::secrets::get_secret(&url_key)
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let model = crate::secrets::get_secret(&model_key)
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        Ok(LlmConfigDto { base_url, model })
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("配置读取调度异常: {e}")))
 }
 
 #[tauri::command]

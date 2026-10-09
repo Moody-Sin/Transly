@@ -8,6 +8,9 @@
 ## [未发布]
 
 ### 新增
+- **全局划词快捷键自定义支持 (P1)**：在平台层 `src-tauri` 中新增 `get_shortcut` 与 `set_shortcut` 命令，支持从系统凭据持久化读取与更新用户自定义全局快捷键（如 `Ctrl+Shift+T`，默认 `Alt+Shift+D`）；并在设置中心提供快捷键录入与保存交互，热重载注册全局热键，避免与其他系统或应用快捷键冲突。
+- **LLM 引擎自定义 Base URL 端点与模型名称 (P1)**：在设置中心为 DeepSeek 与 OpenAI 引擎新增端点与模型自定义输入支持（命令层新增 `save_llm_config` 与 `get_llm_config`，密钥安全存储于平台凭据库中）。`EnginePool` 引擎池根据自定义配置动态装配 `OpenAIEngine` 实例并在保存后即时失效旧缓存，全面支持用户接入本地 Ollama、vLLM、OneAPI 及私有部署大模型。
+- **Firefox (Gecko) 浏览器扩展专属构建与打包适配 (P2)**：在 `extension/scripts/build-firefox.mjs` 中实现自动化 Firefox 产物生成，自动适配 Firefox MV3 规范（`browser_specific_settings.gecko` 与 `background.scripts` 兼容），并在根目录提供 `pnpm run build:extension:firefox` 一键构建 `dist-firefox` 产物。
 - **主输入框快速清空与实时字符计数统计 (P3)**：在主翻译界面的源文本操作底栏新增「清空内容」快速操作按钮与字符实时统计标签（`{n} 字符`），与取消任务状态平滑联动，提升日常大段文本翻译时的交互便捷度。
 - **翻译历史模糊搜索与导出 (CSV / JSON) (P1)**：在 `crates/transly-core` 的 `TranslationCache` 中实现 `search` 模糊查询，在命令层导出 `search_translation_history`。前端 `HistoryPanel` 增加实时搜索输入框（支持原文与译文模糊匹配）以及一键导出为 `.json` / `.csv` 文件功能，便于用户将翻译记录整理归档或用作生词复习资料。
 - **系统原生 Web Speech 零开销发音朗读 (TTS) (P2)**：基于现代浏览器与 WebView 内置的 `window.speechSynthesis` 原生 API，在桌面端主界面译文区、悬浮浮窗模式以及历史记录条目旁提供发音朗读按钮（小喇叭图标），实现原文与目标语言文本的零体积、零依赖、零额外网络开销的原生语音朗读。

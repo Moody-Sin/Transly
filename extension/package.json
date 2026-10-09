@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && node scripts/build.mjs && node scripts/postbuild.mjs"
+    "build": "tsc && node scripts/build.mjs && node scripts/postbuild.mjs",
+    "build:firefox": "node scripts/build-firefox.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.308",

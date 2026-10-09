@@ -222,13 +222,18 @@ fn main() {
                 }
             }
 
-            // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
+            // 注册全局快捷键（默认 Alt+Shift+D，支持系统凭据中读取用户自定义值），自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
+            let active_shortcut = secrets::get_secret("custom_shortcut")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| commands::DEFAULT_SHORTCUT.to_string());
+
             let app_handle = app.handle().clone();
             let sel_flag = selection_flag.clone();
             let counter = request_counter.clone();
             let _ =
                 app.global_shortcut()
-                    .on_shortcut("Alt+Shift+D", move |_app, _shortcut, event| {
+                    .on_shortcut(active_shortcut.as_str(), move |_app, _shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             let handle = app_handle.clone();
                             let sel_flag = sel_flag.clone();

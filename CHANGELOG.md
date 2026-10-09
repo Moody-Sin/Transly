@@ -52,15 +52,14 @@
 - **文档与实现对齐 (P2)**：`PROJECT_RULES.md`、`extension/README.md`、`PRIVACY_POLICY.md` 中「聚合**可视区域**文本块」的表述与实现不符（实为全量 `document.body` 遍历，不做可视裁剪），已如实改写；隐私政策同时补明提取范围排除脚本/样式/代码块/输入控件/可编辑区域。`PROJECT_RULES.md` 新增「批量请求上限（单一契约来源）」一节。
 - **清理死代码 (P3)**：移除仅被自身单测调用的 `TranslationResponse::is_fallback`、`BatchItemResult::is_success` / `engine`（改由测试直接匹配枚举变体）、`AppConfig::new`（只被单测调用）；`MIN_CLIPBOARD_CHARS` 收窄为模块私有。
 - **`test:task` 覆盖扩展端纯函数 (P3)**：根 `test:task` 增加 `extension/src/shared/*.test.ts`；扩展 `tsconfig.json` 排除测试文件（其 `node:test` 依赖不在扩展运行时类型集内）。
-
-### 修复（上一轮）
-- **中文 445~1000 字段落仍绕过切块上限 (P1)**：上一轮为 `GoogleWebEngine` 引入的 `chunk_paragraph` 上限是「编码后长度 4000」，但**是否进入分块**的判定写的是 `chars().count() > 1000`——量纲错配。`urlencoding` 将中文 1 字膨胀为 9 字符，因此 445~1000 字的中文段落字符数未超 1000（不进分块）、编码后却达 4005~9000（越过自身上限），直连生成超长 URL。危险的是该区间当时能侥幸返回 200，既无测试失败也无线上报错。现改为 `needs_chunking()` 按编码长度判定，与分块上限同量纲，并新增 2 项回归测试（含“用例必须落在旧门槛盲区内”的自校验断言）。
-- **SVG 文本被翻译导致图表/地图标注破版 (P2)**：`IGNORED_TAGS` 黑名单含 `'SVG'`，但 HTML 元素的 `tagName` 返回大写、SVG 命名空间元素返回小写，`has('SVG')` 恒为 false；同处的 `closest()` 选择器也未含 `svg`，两道防线同时失效。现统一 `toUpperCase()` 后比较，并在选择器补 `svg`。
-- **隐私政策声称“加密 SQLite 缓存”与事实不符 (P1)**：`PRIVACY_POLICY.md` 写「建立加密/受保护的 SQLite 缓存」，实测 `cache.db` 为明文 SQLite（文件头 `SQLite format 3`，可直接读出中文原文），无 sqlcipher 亦无字段加密。这对 Chrome 商店审核与用户构成不实陈述。现改为如实描述「本地 SQLite 文件，受操作系统账户权限保护，未做额外加密」。
-- **扩展弹出面板“分析中”进度条回落到 0% (P3)**：页面无可翻译节点时，content script 只广播终态、不发 `TRANSLATION_STARTED`（`total=0`），popup 按常规渲染会把进度条从点击时的 10% 回落到 0% 并显示“翻译完成 ✓”，用户观感是“点了没反应”。现显式区分该终态，新增 `progressNothingToTranslate` 文案（中英同步）。
-- **本地扩展服务启动失败对用户完全不可见 (P2)**：端口 `39281` 被占用（或系统凭据管理器不可用）时，服务启动失败只进 stderr，用户只能看到扩展端「○ 桌面端未运行」而桌面端毫无提示。现新增 `ServerStatus` 状态与 `get_server_status` 命令，在设置面板展示运行中 / 启动中 / 启动失败及具体原因；`start_server` 拆出 `on_listening` 回调（`axum::serve` 正常只在出错时返回，否则状态会永远停在“启动中”）。另新增 `TRANSLY_SERVER_PORT` 环境变量逃生通道，端口被占用时可自救。
-
-### 变更
+- **缓存目录收敛到 Tauri 应用目录约定 (P2)**：原先手拼 `%APPDATA%\Transly`，与 `identifier` 约定（`data_dir/<identifier>`）不一致，macOS 上也不符合平台惯例。现由平台适配层解析为 `data_dir/com.transly.desktop`。**关键点：术语库与翻译缓存在同一个 SQLite 文件里，直接改路径等于丢弃用户自建术语**，因此新增 `storage.rs` 一次性迁移（含 `-wal` / `-shm` 旁路文件，幂等且不覆盖新库），并配 4 项单测；`transly-core` 相应改为 `open_default(data_dir)` 由宿主注入目录，保持零平台假设。
+- **落地“禁止空 catch 吞掉 IPC 注册类调用”规程 (P2)**：`Lessons Learned` 第 8 条早已写明该规程，但修复 ACL 问题时并未执行。现 `useTaskRunner` 的事件订阅与 pending 拉取失败改为 `console.warn` 暴露（这正是当初 ACL 拒绝静默数月的根因）。
+- **前端格式化与 React Hooks 规则接入 (P2)**：`PROJECT_RULES.md` 声称「ESLint + Prettier」，实际无 prettier 依赖、无配置、无格式化脚本，前端代码风格零强制（同文件出现 `catch(() => {})` 与 `catch(() => { })` 两种写法）。现新增 `.prettierrc.json` / `.prettierignore` 与 `format` / `format:check` 脚本，接入 `lefthook` 与 CI；同时接入 `eslint-plugin-react-hooks`（`rules-of-hooks` / `exhaustive-deps`）——`useTaskRunner` 的代际闸门与依赖数组是整套取消/重试语义的根基，此前无任何规则守护。
+- **清理未使用图标与构建产物 (P3)**：删除 `src-tauri/icons/` 下 45 个未被 `tauri.conf.json` 引用的图标（Windows Store `Square*`/`StoreLogo`、`android/mipmap-*`、`ios/*`），其中 4 个仍是模板替换失败的 `{{EMAIL_*}}` 残留；`src-tauri/gen/schemas/` 改为 `.gitignore` 忽略（tauri-build 每次构建重新生成，此前跟踪了 320KB 产物）。
+- **清理零调用死代码 (P3)**：移除仅被自身单测调用的 `rgba_to_bgra`（生产只用 `rgba_to_bgra_in_place`）、零调用的 `impl From<Error> for TranslateErrorDto`、无人读取的 `totalBatches`、仅同文件使用的 `translations` 导出；`nextState` 的 cancel 分支改用 `isTerminal()`，使该函数从死代码变为有生产消费者且与终态集合永不漂移；`EnginePool::with_secret_getter` 收窄为 `#[cfg(test)]`。
+- **文档与 CI 与实际对齐 (P3)**：修正 `src-tauri/README.md` 中 Tauri 1 时代的 `custom-protocol` 特性说明（Tauri 2 已移除该特性）；`PROJECT_RULES.md` 删除「调用系统截图能力」（实际仅读剪贴板图片）与「支持多引擎聚合/对比」（实际只有主备降级）两处未实现表述，补充 `storage.rs` 与 capabilities 目录说明；CI Windows job 补齐 `cargo fmt --check` 与 `--release` clippy，与 Linux job 矩阵对齐；`en.json` 类型断言改为显式标注，使英文缺键在编译期报错而非被 `as` 静默掩盖。
+- **移除零使用契约与死代码 (P2)**：删除从未被构造的 `Error::UnsupportedLanguage` 与 `Error::Timeout`（连带 `ErrorKind::Timeout`，其重试语义已由 `ErrorKind::Network` 与 `Engine` 覆盖）、无生产消费者的 `TaskState::is_terminal` / `is_active`、无人消费的 `TranslateOutcomeDto::cached` / `detected_source_lang` 与 `EngineCapabilities::supports_streaming`（无任何流式实现）、以及未被调用的 `useTaskRunner.reset`。
+- **文档与目录事实对齐 (P2)**：`PROJECT_RULES.md` 目录结构此前描述了不存在的 `src/components`、`src/pages`、`src/hooks`、`src/stores`、`src-tauri/src/platform`、`src-tauri/src/error.rs`，已按实际文件重写；新增 `docs/README.md`、`src/task/README.md`、`extension/src/README.md`，并为 `docs/architecture-state-machines.md` 建立索引（此前全仓库无任何引用）。
 - **缓存目录收敛到 Tauri 应用目录约定 (P2)**：原先手拼 `%APPDATA%\Transly`，与 `identifier` 约定（`data_dir/<identifier>`）不一致，macOS 上也不符合平台惯例。现由平台适配层解析为 `data_dir/com.transly.desktop`。**关键点：术语库与翻译缓存在同一个 SQLite 文件里，直接改路径等于丢弃用户自建术语**，因此新增 `storage.rs` 一次性迁移（含 `-wal` / `-shm` 旁路文件，幂等且不覆盖新库），并配 4 项单测；`transly-core` 相应改为 `open_default(data_dir)` 由宿主注入目录，保持零平台假设。
 - **落地“禁止空 catch 吞掉 IPC 注册类调用”规程 (P2)**：`Lessons Learned` 第 8 条早已写明该规程，但修复 ACL 问题时并未执行。现 `useTaskRunner` 的事件订阅与 pending 拉取失败改为 `console.warn` 暴露（这正是当初 ACL 拒绝静默数月的根因）。
 - **前端格式化与 React Hooks 规则接入 (P2)**：`PROJECT_RULES.md` 声称「ESLint + Prettier」，实际无 prettier 依赖、无配置、无格式化脚本，前端代码风格零强制（同文件出现 `catch(() => {})` 与 `catch(() => { })` 两种写法）。现新增 `.prettierrc.json` / `.prettierignore` 与 `format` / `format:check` 脚本，接入 `lefthook` 与 CI；同时接入 `eslint-plugin-react-hooks`（`rules-of-hooks` / `exhaustive-deps`）——`useTaskRunner` 的代际闸门与依赖数组是整套取消/重试语义的根基，此前无任何规则守护。
@@ -210,31 +209,29 @@
 
 - **本地服务 CORS 来源策略加固**：收紧本地 HTTP 服务的 CORS 策略，严格限制仅允许浏览器扩展（`chrome-extension://`、`moz-extension://`）与本地开发回环请求，杜绝任意第三方恶意网页探测。
 
-### 优化
+### 变更
 - **术语库正则表达式预编译缓存**：在 `Glossary::insert` 时完成 ASCII 单词边界正则的预编译并缓存在 `TermEntry` 中，消除每次文本翻译时的重复动态编译开销。
 - **DeepL 批量请求语言对同构性校验**：在 `DeepLEngine::translate_batch` 中增加全量语言一致性判定，在请求混杂多语种时安全降级为逐项翻译，避免取首项导致的批量乱译。
 - **悬浮小窗文案全面国际化**：补齐浮窗所有静态文本的 i18n 多语言字典支持，消除硬编码。
 - **纳入 Cargo.lock 并完善排除规则**：按应用类型仓库规范取消对 `Cargo.lock` 的忽略，确保跨平台与 CI 重现构建的一致性；明确排除 `extension/dist/`。
 - **规范项目 AGENTS.md 准则**：将项目的核心分层规则、平台边界与安全底线沉淀至根目录 `AGENTS.md`。
-
 - **Google 网页翻译长文本分块防溢出**：对单次传入超过 1200 字符的长段落自动实施换行/分段切片合并，彻底规避 GET URL 超长（HTTP 414 URI Too Long）与触发接口风控阻断。
 - **术语库单词边界精准匹配**：在 `Glossary::apply` 中引入正规表达式单词边界识别（`\b(term)\b`），对英文 ASCII 单词强制边界匹配，彻底杜绝例如 `IT` 误替换 `limit` / `Wait` 的子串误伤问题。
 - **LLM 批量翻译受控并发加速**：在 `OpenAIEngine::translate_batch` 引入 `futures::future::join_all` 受控分批并发处理（并发度 4），大幅缩短浏览器整页多节点批量翻译响应耗时。
 - **SQLite 缓存大表容量修剪算法优化**：重构 `trim_to_max_items` 淘汰算法，使用基于时间游标与 rowid 偏移的高性能删除替代耗时的 `NOT IN` 全表子查询。
-
 - **全局引擎连接池复用 (EnginePool)**：在 `src-tauri` 中引入 `EnginePool`，缓存已初始化的长连接实例并提供读写锁，杜绝单次翻译重复握手与新建网络连接；密钥更新时自动使对应实例失效。
 - **本地 HTTP 服务与浏览器插件引擎传参支持**：`TranslateBatchRequest` 支持 `engine` 字段，浏览器扩展 Popup 支持引擎选择并持久化，整页翻译与增量监听按指定引擎流转。
 - **前端国际化 (i18n) 资源拆分与中英切换**：创建 `src/i18n/` 模块，将硬编码中文文案抽取至 `zh-CN.json` 与 `en.json`，并支持主界面顶部一键切换中英文。
-
 - **SQLite 缓存自动衰减与容量保护**：在 `transly-core` 中实现 `cleanup_older_than_days` 与 `trim_to_max_items` 淘汰策略，并在桌面端启动时自动执行 90 天过期与 100,000 条上限维护，防止本地数据库无序膨胀。
-
 - **系统托盘与后台常驻机制**：Tauri 2 原生集成托盘图标、左键单击激活、右键上下文菜单（“显示主窗口” / “退出 Transly”）；拦截主窗口关闭事件转为后台隐藏，确保本地 HTTP 翻译服务不中断。
 - **浏览器插件 MutationObserver 动态增量翻译**：首屏整页翻译完成后，自动挂载 DOM 变动监听器，针对 SPA 单页应用及瀑布流加载内容执行防抖增量收集与原地无感翻译；还原原文时自动注销监听。
-
 - **引擎实例与连接池复用**：将 `TranslateEngine` 注入 Tauri 全局状态，消除重复创建 `reqwest::Client` 的握手损耗。
 - **插件 Token 配对闭环**：桌面端支持一键复制插件配对 Token，插件 Popup 支持持久化保存 Token 与实时连通性探测。
 - **语言检测增强**：扩展中（CJK）、日（平/片假名）、韩（Hangul）、英多语言特征字符判定。
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
-
-### CI/CD
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
+
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Moody-Sin/Transly/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Moody-Sin/Transly/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Moody-Sin/Transly/releases/tag/v0.1.0

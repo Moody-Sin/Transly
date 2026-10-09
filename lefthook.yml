@@ -17,3 +17,8 @@ pre-commit:
       run: pnpm run format:check
     frontend-test:
       run: pnpm run test:task
+
+commit-msg:
+  commands:
+    conventional-commits:
+      run: node scripts/check-commit-msg.mjs {1}

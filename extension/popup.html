@@ -98,9 +98,17 @@
         <option value="de">Deutsch</option>
       </select>
     </div>
-    <button id="btn-translate" class="btn btn-primary" data-i18n="btnTranslate">
-      翻译此网页 (仅译文)
-    </button>
+    <div style="display: flex; gap: 8px; margin-bottom: 8px; font-size: 11px; color: #475569">
+      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer">
+        <input type="radio" name="transly_mode" value="replace" checked />
+        <span data-i18n="modeReplace">仅译文</span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer">
+        <input type="radio" name="transly_mode" value="bilingual" />
+        <span data-i18n="modeBilingual">双语对照</span>
+      </label>
+    </div>
+    <button id="btn-translate" class="btn btn-primary" data-i18n="btnTranslate">翻译此网页</button>
     <button id="btn-cancel" class="btn btn-secondary" style="display: none" data-i18n="btnCancel">
       取消翻译
     </button>

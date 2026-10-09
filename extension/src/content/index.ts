@@ -49,12 +49,36 @@ export function shouldTranslateElement(element: Element): boolean {
   return true
 }
 
-export function replaceTextNode(node: Text, translatedText: string) {
+export function replaceTextNode(node: Text, translatedText: string, mode: string = 'replace') {
   if (!originalTextMap.has(node)) {
     originalTextMap.set(node, node.nodeValue || '')
   }
   translatedTextSet.add(node)
-  node.nodeValue = translatedText
+
+  if (mode === 'bilingual') {
+    // 双语对照模式：保留原文节点不变，紧随其后追加译文兄弟节点
+    const parent = node.parentElement
+    if (parent) {
+      const transEl = document.createElement('span')
+      transEl.className = 'transly-bilingual-trans'
+      transEl.setAttribute('data-no-translate', 'true')
+      transEl.style.display = 'inline-block'
+      transEl.style.marginLeft = '4px'
+      transEl.style.color = '#4f46e5'
+      transEl.style.opacity = '0.9'
+      transEl.textContent = ` (${translatedText})`
+
+      // 插入到当前 textNode 之后
+      if (node.nextSibling) {
+        parent.insertBefore(transEl, node.nextSibling)
+      } else {
+        parent.appendChild(transEl)
+      }
+    }
+  } else {
+    // 仅译文模式：原地替换文本内容
+    node.nodeValue = translatedText
+  }
 
   // 若父节点是元素，挂载 data-transly-original 标记（若尚未挂载或为空）
   // 方便快捷悬浮查看原文（按下 Alt 键悬停查看）
@@ -65,6 +89,13 @@ export function replaceTextNode(node: Text, translatedText: string) {
 }
 
 export function restoreOriginalText(container: Node = document.body) {
+  // 移除所有双语模式插入的译文元素
+  if (container instanceof Element) {
+    container.querySelectorAll('.transly-bilingual-trans').forEach((el) => {
+      el.remove()
+    })
+  }
+
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
   let curr = walker.nextNode()
   while (curr) {

@@ -136,5 +136,14 @@
   },
   "bubbleClose": {
     "message": "Close"
+  },
+  "modeReplace": {
+    "message": "Translation only"
+  },
+  "modeBilingual": {
+    "message": "Bilingual"
+  },
+  "siteRuleAuto": {
+    "message": "Auto-translate this site"
   }
 }

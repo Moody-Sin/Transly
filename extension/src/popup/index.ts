@@ -21,7 +21,7 @@ applyStaticTranslations()
 
 // 回显已保存的配置
 chrome.storage.local.get(
-  ['transly_server_token', 'transly_engine', 'transly_target_lang'],
+  ['transly_server_token', 'transly_engine', 'transly_target_lang', 'transly_mode'],
   (res) => {
     if (res.transly_server_token) {
       inputToken.value = res.transly_server_token
@@ -32,8 +32,21 @@ chrome.storage.local.get(
     if (res.transly_target_lang && selectLang) {
       selectLang.value = res.transly_target_lang
     }
+    const mode = res.transly_mode || 'replace'
+    const radio = document.querySelector<HTMLInputElement>(
+      `input[name="transly_mode"][value="${mode}"]`,
+    )
+    if (radio) radio.checked = true
   },
 )
+
+document.querySelectorAll<HTMLInputElement>('input[name="transly_mode"]').forEach((el) => {
+  el.addEventListener('change', () => {
+    if (el.checked) {
+      chrome.storage.local.set({ transly_mode: el.value })
+    }
+  })
+})
 
 selectEngine.addEventListener('change', () => {
   chrome.storage.local.set({ transly_engine: selectEngine.value })

@@ -136,5 +136,14 @@
   },
   "bubbleClose": {
     "message": "关闭"
+  },
+  "modeReplace": {
+    "message": "仅译文"
+  },
+  "modeBilingual": {
+    "message": "双语对照"
+  },
+  "siteRuleAuto": {
+    "message": "为此站点记住自动翻译"
   }
 }

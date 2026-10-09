@@ -1,7 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -146,6 +145,9 @@ fn main() {
     let server_cache_controller = cache_controller.clone();
     let server_pairing_manager = pairing_manager.clone();
 
+    let sel_flag_shared = selection_flag.clone();
+    let counter_shared = request_counter.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -158,6 +160,10 @@ fn main() {
         .manage(Arc::new(commands::FloatSticky::default()))
         .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
+        .manage(Arc::new(commands::SelectionContext {
+            sel_flag: sel_flag_shared,
+            counter: counter_shared,
+        }))
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
@@ -170,8 +176,8 @@ fn main() {
                 .inner()
                 .clone();
             let app_handle_for_server = app.handle().clone();
-            let pairing_notify_hook: src_tauri::server::PairingNotifyHook = Arc::new(
-                move |session_id: &str, browser_hint: Option<&str>| {
+            let pairing_notify_hook: src_tauri::server::PairingNotifyHook =
+                Arc::new(move |session_id: &str, browser_hint: Option<&str>| {
                     #[derive(serde::Serialize, Clone)]
                     struct PairingRequestedPayload {
                         session_id: String,
@@ -184,8 +190,7 @@ fn main() {
                             browser_hint: browser_hint.map(ToString::to_string),
                         },
                     );
-                },
-            );
+                });
 
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
             match server_token {
@@ -231,82 +236,19 @@ fn main() {
             let app_handle = app.handle().clone();
             let sel_flag = selection_flag.clone();
             let counter = request_counter.clone();
-            let _ =
-                app.global_shortcut()
-                    .on_shortcut(active_shortcut.as_str(), move |_app, _shortcut, event| {
-                        if event.state() == ShortcutState::Pressed {
-                            let handle = app_handle.clone();
-                            let sel_flag = sel_flag.clone();
-                            let counter = counter.clone();
-                            let pending_slot = pending_slot.clone();
-                            tauri::async_runtime::spawn(async move {
-                                // 0. 备份旧剪贴板内容
-                                let old_clipboard = handle.clipboard().read_text().ok();
-
-                                // 模拟复制期间置抑制标志，防止剪贴板监听对同一次复制自触发翻译
-                                sel_flag.store(true, Ordering::SeqCst);
-
-                                // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
-                                if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
-                                    #[cfg(target_os = "macos")]
-                                    let modifier = Key::Meta;
-                                    #[cfg(not(target_os = "macos"))]
-                                    let modifier = Key::Control;
-
-                                    let _ = enigo.key(modifier, Direction::Press);
-                                    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-                                    let _ = enigo.key(modifier, Direction::Release);
-                                }
-
-                                // 2. 自适应短轮询检测系统剪贴板更新（单次 15ms，最多等 180ms，内容变化立即放行）
-                                let clipboard_reader = {
-                                    let h = handle.clone();
-                                    move || h.clipboard().read_text().ok()
-                                };
-                                let detected_text = src_tauri::clipboard_gate::poll_clipboard_change(
-                                    old_clipboard.as_deref(),
-                                    clipboard_reader,
-                                    std::time::Duration::from_millis(15),
-                                    std::time::Duration::from_millis(180),
-                                )
-                                .await;
-
-                                // 3. 提取剪贴板文本并唤起轻量悬浮窗
-                                if let Some(text) = detected_text {
-                                    if !text.trim().is_empty() {
-                                        let rid = counter.fetch_add(1, Ordering::SeqCst);
-                                        let req = commands::FloatRequest {
-                                            text,
-                                            source: "selection",
-                                            request_id: rid,
-                                        };
-                                        // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
-                                        if pending_slot.push(req.clone()) {
-                                            eprintln!("浮窗请求队列已满，丢弃最旧请求");
-                                        }
-                                        if let Some(float_win) = handle.get_webview_window("float") {
-                                            place_float_near_cursor(&float_win);
-                                            let _ = float_win.show();
-                                            let _ = float_win.set_focus();
-                                            // 必须 emit_to：Emitter::emit 会广播给所有窗口，
-                                            // 主窗口连带翻译一次并将划词结果写进主窗口输出区
-                                            let _ = float_win.emit_to("float", "float-translate", req);
-                                        }
-                                    }
-                                }
-
-                                // 4. 恢复原剪贴板内容，避免污染用户复制历史
-                                if let Some(old_clipboard) = old_clipboard {
-                                    if let Err(e) = handle.clipboard().write_text(old_clipboard) {
-                                        eprintln!("[Clipboard Warning] 划词后恢复原剪贴板失败（可能被外部锁占用）: {e}");
-                                    }
-                                }
-
-                                // 无论成败均释放抑制标志，避免剪贴板监听被永久抑制
-                                sel_flag.store(false, Ordering::SeqCst);
-                            });
-                        }
-                    });
+            let _ = app.global_shortcut().on_shortcut(
+                active_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        commands::trigger_selection_translation(
+                            app_handle.clone(),
+                            sel_flag.clone(),
+                            counter.clone(),
+                            pending_slot.clone(),
+                        );
+                    }
+                },
+            );
 
             // 启动后台剪贴板变动监听任务
             let clip_handle = app.handle().clone();

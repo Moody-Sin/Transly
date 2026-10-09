@@ -484,6 +484,87 @@ pub async fn ocr_clipboard_image(
 
 pub const DEFAULT_SHORTCUT: &str = "Alt+Shift+D";
 
+pub struct SelectionContext {
+    pub sel_flag: Arc<std::sync::atomic::AtomicBool>,
+    pub counter: Arc<std::sync::atomic::AtomicU64>,
+}
+
+pub fn trigger_selection_translation(
+    handle: tauri::AppHandle,
+    sel_flag: Arc<std::sync::atomic::AtomicBool>,
+    counter: Arc<std::sync::atomic::AtomicU64>,
+    pending_slot: Arc<PendingFloatRequests>,
+) {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
+    use std::sync::atomic::Ordering;
+    use tauri::{Emitter, Manager};
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    tauri::async_runtime::spawn(async move {
+        // 0. 备份旧剪贴板内容
+        let old_clipboard = handle.clipboard().read_text().ok();
+
+        // 模拟复制期间置抑制标志，防止剪贴板监听对同一次复制自触发翻译
+        sel_flag.store(true, Ordering::SeqCst);
+
+        // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
+        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+            #[cfg(target_os = "macos")]
+            let modifier = Key::Meta;
+            #[cfg(not(target_os = "macos"))]
+            let modifier = Key::Control;
+
+            let _ = enigo.key(modifier, Direction::Press);
+            let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+            let _ = enigo.key(modifier, Direction::Release);
+        }
+
+        // 2. 自适应短轮询检测系统剪贴板更新（单次 15ms，最多等 180ms，内容变化立即放行）
+        let clipboard_reader = {
+            let h = handle.clone();
+            move || h.clipboard().read_text().ok()
+        };
+        let detected_text = crate::clipboard_gate::poll_clipboard_change(
+            old_clipboard.as_deref(),
+            clipboard_reader,
+            std::time::Duration::from_millis(15),
+            std::time::Duration::from_millis(180),
+        )
+        .await;
+
+        // 3. 提取剪贴板文本并唤起轻量悬浮窗
+        if let Some(text) = detected_text {
+            if !text.trim().is_empty() {
+                let rid = counter.fetch_add(1, Ordering::SeqCst);
+                let req = FloatRequest {
+                    text,
+                    source: "selection",
+                    request_id: rid,
+                };
+                // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
+                if pending_slot.push(req.clone()) {
+                    eprintln!("浮窗请求队列已满，丢弃最旧请求");
+                }
+                if let Some(float_win) = handle.get_webview_window("float") {
+                    let _ = float_win.show();
+                    let _ = float_win.set_focus();
+                    let _ = float_win.emit_to("float", "float-translate", req);
+                }
+            }
+        }
+
+        // 4. 恢复原剪贴板内容，避免污染用户复制历史
+        if let Some(old_clipboard) = old_clipboard {
+            if let Err(e) = handle.clipboard().write_text(old_clipboard) {
+                eprintln!("[Clipboard Warning] 划词后恢复原剪贴板失败（可能被外部锁占用）: {e}");
+            }
+        }
+
+        // 无论成败均释放抑制标志，避免剪贴板监听被永久抑制
+        sel_flag.store(false, Ordering::SeqCst);
+    });
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_shortcut() -> Result<String, String> {
@@ -500,8 +581,13 @@ pub async fn get_shortcut() -> Result<String, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn set_shortcut(shortcut: String, app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+pub async fn set_shortcut(
+    shortcut: String,
+    app: tauri::AppHandle,
+    selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
+    pending_slot: tauri::State<'_, Arc<PendingFloatRequests>>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let clean = shortcut.trim();
     if clean.is_empty() {
@@ -521,6 +607,30 @@ pub async fn set_shortcut(shortcut: String, app: tauri::AppHandle) -> Result<(),
     // 尝试注销旧快捷键（若与新快捷键不同）
     if old_shortcut != clean {
         let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+    }
+
+    // 立即注册新快捷键
+    let app_h = app.clone();
+    let sel_flag = selection_ctx.sel_flag.clone();
+    let counter = selection_ctx.counter.clone();
+    let slot = pending_slot.inner().clone();
+    let register_res = app
+        .global_shortcut()
+        .on_shortcut(clean, move |_app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                trigger_selection_translation(
+                    app_h.clone(),
+                    sel_flag.clone(),
+                    counter.clone(),
+                    slot.clone(),
+                );
+            }
+        });
+
+    if let Err(e) = register_res {
+        return Err(format!(
+            "快捷键注册失败，可能按键格式不合法或被系统占用: {e}"
+        ));
     }
 
     // 持久化存储新快捷键

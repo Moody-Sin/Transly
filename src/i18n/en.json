@@ -3,7 +3,13 @@
     "settings": "Settings",
     "copyToken": "Extension Token",
     "tokenCopied": "Token Copied",
-    "switchLanguage": "Switch Language / 切换语言"
+    "switchLanguage": "Switch Language / 切换语言",
+    "pairingModalTitle": "Extension Pairing Request",
+    "pairingModalDesc": "A local browser extension is requesting to connect to Transly. Allow this extension to use local translation service?",
+    "pairingBrowserLabel": "Source: ",
+    "pairingAllow": "Allow Connection",
+    "pairingReject": "Reject",
+    "pairingExpiresIn": "s before expiration"
   },
   "translation": {
     "autoDetect": "Auto Detect",
@@ -87,6 +93,7 @@
     "glossaryTitle": "Add Global Glossary Rule",
     "glossarySourcePlaceholder": "Source term (e.g. LLM)",
     "glossaryTargetPlaceholder": "Target translation (e.g. Large Language Model)",
+    "glossaryMatchCaseLabel": "Match case",
     "btnAddGlossary": "Add Term",
     "tokenRotateTitle": "Extension Token Rotation",
     "tokenRotateDesc": "Regenerate token to invalidate old pairing immediately for security",

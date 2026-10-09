@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import { commands } from './bindings'
 import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
+import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
@@ -42,12 +44,22 @@ export default function App() {
   const [cacheEnabled, setCacheEnabled] = useState(true)
   const [glossarySource, setGlossarySource] = useState('')
   const [glossaryTarget, setGlossaryTarget] = useState('')
-  const [glossaryList, setGlossaryList] = useState<[string, string][]>([])
+  const [glossaryMatchCase, setGlossaryMatchCase] = useState(true)
+  const [glossaryList, setGlossaryList] = useState<
+    Array<{ source: string; target: string; match_case: boolean }>
+  >([])
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
   const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrError, setOcrError] = useState<string | null>(null)
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
+
+  // 浏览器扩展一键配对请求浮层
+  const [pairingRequest, setPairingRequest] = useState<{
+    sessionId: string
+    browserHint?: string
+    countdown: number
+  } | null>(null)
 
   const isFloatWindow = window.location.hash === '#float'
 
@@ -126,6 +138,65 @@ export default function App() {
 
     loadGlossaryList()
   }, [])
+
+  useEffect(() => {
+    // 监听本地浏览器插件配对请求
+    let unlisten: (() => void) | undefined
+    listen<{ session_id: string; browser_hint?: string }>(
+      'transly://pairing-requested',
+      async (event) => {
+        setPairingRequest({
+          sessionId: event.payload.session_id,
+          browserHint: event.payload.browser_hint,
+          countdown: 60,
+        })
+        try {
+          const win = getCurrentWindow()
+          await win.show()
+          await win.setFocus()
+        } catch {
+          // 在无窗口或测试环境下静默回落
+        }
+      },
+    ).then((fn) => {
+      unlisten = fn
+    })
+
+    return () => {
+      if (unlisten) unlisten()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!pairingRequest) return
+    const timer = setInterval(() => {
+      setPairingRequest((prev) => {
+        if (!prev) return null
+        if (prev.countdown <= 1) {
+          return null
+        }
+        return { ...prev, countdown: prev.countdown - 1 }
+      })
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [pairingRequest])
+
+  const handleApprovePairing = async (sessionId: string) => {
+    try {
+      await commands.approvePairing(sessionId)
+    } finally {
+      setPairingRequest(null)
+    }
+  }
+
+  const handleRejectPairing = async (sessionId: string) => {
+    try {
+      await commands.rejectPairing(sessionId)
+    } finally {
+      setPairingRequest(null)
+    }
+  }
 
   useEffect(() => {
     // 本地服务在后台异步启动，失败只进 stderr 时用户完全无感
@@ -261,10 +332,15 @@ export default function App() {
   const handleAddGlossary = async () => {
     if (!glossarySource.trim() || !glossaryTarget.trim()) return
     try {
-      const res = await commands.addGlossaryTerm(glossarySource.trim(), glossaryTarget.trim())
+      const res = await commands.addGlossaryTerm(
+        glossarySource.trim(),
+        glossaryTarget.trim(),
+        glossaryMatchCase,
+      )
       if (res.status === 'error') throw new Error(res.error)
       setGlossarySource('')
       setGlossaryTarget('')
+      setGlossaryMatchCase(true)
       loadGlossaryList()
       setSaveStatus(t.settings.statusGlossaryAdded)
       setTimeout(() => setSaveStatus(null), 2000)
@@ -627,9 +703,9 @@ export default function App() {
       </main>
       {/* 设置与密钥配置模态框 */}
       {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
-          <div className="w-[480px] rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div className="flex max-h-[85vh] w-[480px] flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
               <div className="flex items-center gap-2">
                 <Settings className="h-4 w-4 text-indigo-600" />
                 <h3 className="font-semibold text-slate-800 text-sm">{t.settings.title}</h3>
@@ -642,7 +718,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="mt-4 flex flex-col gap-4 text-xs">
+            <div className="mt-4 flex flex-1 flex-col gap-4 overflow-y-auto pr-1 text-xs">
               {/* API 密钥管理 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
                 <span className="font-medium text-slate-700">{t.settings.credentialsTitle}</span>
@@ -863,7 +939,16 @@ export default function App() {
                     className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
                 </div>
-                <div className="flex justify-end pt-1">
+                <div className="flex items-center justify-between pt-1">
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={glossaryMatchCase}
+                      onChange={(e) => setGlossaryMatchCase(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <span>{t.settings.glossaryMatchCaseLabel}</span>
+                  </label>
                   <button
                     onClick={handleAddGlossary}
                     disabled={!glossarySource.trim() || !glossaryTarget.trim()}
@@ -876,18 +961,23 @@ export default function App() {
                 {/* 已保存术语列表 */}
                 {glossaryList.length > 0 && (
                   <div className="mt-2 max-h-32 overflow-y-auto border-t border-slate-200 pt-2 flex flex-col gap-1.5">
-                    {glossaryList.map(([src, tgt]) => (
+                    {glossaryList.map((item) => (
                       <div
-                        key={src}
+                        key={item.source}
                         className="flex items-center justify-between rounded bg-white px-2 py-1 border border-slate-200"
                       >
                         <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-slate-700">{src}</span>
+                          <span className="font-semibold text-slate-700">{item.source}</span>
                           <span className="text-slate-400">→</span>
-                          <span className="text-slate-600">{tgt}</span>
+                          <span className="text-slate-600">{item.target}</span>
+                          {!item.match_case && (
+                            <span className="rounded bg-amber-50 px-1 py-0.2 text-[10px] text-amber-600 border border-amber-200">
+                              Aa
+                            </span>
+                          )}
                         </div>
                         <button
-                          onClick={() => handleDeleteGlossary(src)}
+                          onClick={() => handleDeleteGlossary(item.source)}
                           className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                           title={t.settings.btnDeleteGlossary}
                         >
@@ -904,6 +994,49 @@ export default function App() {
                   {saveStatus}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 浏览器扩展配对确认浮层 */}
+      {pairingRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-indigo-100 flex flex-col gap-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-indigo-50 p-2 text-indigo-600">
+                <Key className="h-6 w-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-slate-800 text-sm">{t.app.pairingModalTitle}</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  {t.app.pairingModalDesc}
+                </p>
+                {pairingRequest.browserHint && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    {t.app.pairingBrowserLabel}
+                    <span className="font-medium text-slate-600">{pairingRequest.browserHint}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => handleRejectPairing(pairingRequest.sessionId)}
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                {t.app.pairingReject}
+              </button>
+              <button
+                onClick={() => handleApprovePairing(pairingRequest.sessionId)}
+                className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors flex items-center gap-1.5"
+              >
+                <span>{t.app.pairingAllow}</span>
+                <span className="text-[10px] bg-indigo-700/60 rounded px-1">
+                  {pairingRequest.countdown}s
+                </span>
+              </button>
             </div>
           </div>
         </div>

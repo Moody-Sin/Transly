@@ -3,7 +3,13 @@
     "settings": "设置",
     "copyToken": "插件配对 Token",
     "tokenCopied": "已复制 Token",
-    "switchLanguage": "切换语言 / Switch Language"
+    "switchLanguage": "切换语言 / Switch Language",
+    "pairingModalTitle": "浏览器扩展请求配对",
+    "pairingModalDesc": "检测到本地浏览器扩展正在请求连接 Transly，是否允许该扩展使用本地翻译服务？",
+    "pairingBrowserLabel": "请求来源：",
+    "pairingAllow": "允许连接",
+    "pairingReject": "拒绝",
+    "pairingExpiresIn": "秒后自动失效"
   },
   "translation": {
     "autoDetect": "自动检测",
@@ -87,6 +93,7 @@
     "glossaryTitle": "添加全局术语库规则",
     "glossarySourcePlaceholder": "源术语 (如: LLM)",
     "glossaryTargetPlaceholder": "目标译文 (如: 大语言模型)",
+    "glossaryMatchCaseLabel": "区分大小写",
     "btnAddGlossary": "添加术语",
     "tokenRotateTitle": "浏览器插件配对 Token 轮换",
     "tokenRotateDesc": "重新生成并强制让旧插件配对失效，保障本地接口安全",

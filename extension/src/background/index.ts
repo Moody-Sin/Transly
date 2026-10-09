@@ -451,3 +451,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 })
+
+// 监听标签页加载完成：若命中站点记忆规则中的 'auto' 且有 Token，则自动触发整页翻译
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('http')) {
+    try {
+      const url = new URL(tab.url)
+      const host = url.hostname
+      const cfg = await chrome.storage.local.get([
+        'transly_site_rules',
+        'transly_target_lang',
+        'transly_engine',
+        'transly_mode',
+        'transly_server_token',
+      ])
+
+      const rules = cfg.transly_site_rules || {}
+      if (rules[host] === 'auto' && cfg.transly_server_token) {
+        await ensureContentScriptInjected(tabId)
+        chrome.tabs.sendMessage(tabId, {
+          type: 'START_PAGE_TRANSLATION',
+          target_lang: cfg.transly_target_lang || 'zh-CN',
+          engine: cfg.transly_engine || 'google',
+          mode: cfg.transly_mode || 'replace',
+        })
+      }
+    } catch (err) {
+      console.warn('[Transly] 站点自动翻译触发异常:', err)
+    }
+  }
+})

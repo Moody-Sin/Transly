@@ -48,6 +48,48 @@ document.querySelectorAll<HTMLInputElement>('input[name="transly_mode"]').forEac
   })
 })
 
+const checkSiteAuto = document.getElementById('check-site-auto') as HTMLInputElement
+
+// 回显站点自动翻译配置
+chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+  if (tab?.url) {
+    try {
+      const url = new URL(tab.url)
+      const host = url.hostname
+      chrome.storage.local.get(['transly_site_rules'], (res) => {
+        const rules = res.transly_site_rules || {}
+        if (checkSiteAuto) {
+          checkSiteAuto.checked = rules[host] === 'auto'
+        }
+      })
+    } catch (err) {
+      console.warn('[Transly] 读取站点规则异常:', err)
+    }
+  }
+})
+
+if (checkSiteAuto) {
+  checkSiteAuto.addEventListener('change', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (!tab?.url) return
+    try {
+      const url = new URL(tab.url)
+      const host = url.hostname
+      chrome.storage.local.get(['transly_site_rules'], (res) => {
+        const rules = res.transly_site_rules || {}
+        if (checkSiteAuto.checked) {
+          rules[host] = 'auto'
+        } else {
+          delete rules[host]
+        }
+        chrome.storage.local.set({ transly_site_rules: rules })
+      })
+    } catch (err) {
+      console.warn('[Transly] 保存站点规则异常:', err)
+    }
+  })
+}
+
 selectEngine.addEventListener('change', () => {
   chrome.storage.local.set({ transly_engine: selectEngine.value })
 })

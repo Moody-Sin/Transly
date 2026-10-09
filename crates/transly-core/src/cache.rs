@@ -48,7 +48,8 @@ impl TranslationCache {
             CREATE TABLE IF NOT EXISTS glossary (
                 source_term TEXT PRIMARY KEY,
                 target_term TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                match_case INTEGER NOT NULL DEFAULT 1
             );
             "#,
         )?;
@@ -74,7 +75,8 @@ impl TranslationCache {
             CREATE TABLE IF NOT EXISTS glossary (
                 source_term TEXT PRIMARY KEY,
                 target_term TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                match_case INTEGER NOT NULL DEFAULT 1
             );
             "#,
         )?;
@@ -213,15 +215,26 @@ impl TranslationCache {
         Ok(deleted)
     }
 
-    /// 读取持久化保存的所有术语库规则
-    pub fn get_all_glossary_terms(&self) -> Result<Vec<(String, String)>> {
+    /// 读取持久化保存的所有术语库规则 (source_term, target_term, match_case)
+    pub fn get_all_glossary_terms(&self) -> Result<Vec<(String, String, bool)>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
-        let mut stmt = conn.prepare_cached("SELECT source_term, target_term FROM glossary")?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        // 自动兼容无 match_case 字段的旧版本数据库表结构
+        let _ = conn.execute(
+            "ALTER TABLE glossary ADD COLUMN match_case INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT source_term, target_term, match_case FROM glossary ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let match_case_val: i64 = row.get(2)?;
+            Ok((row.get(0)?, row.get(1)?, match_case_val != 0))
+        })?;
 
         let mut terms = Vec::new();
         for item in rows {
@@ -230,8 +243,8 @@ impl TranslationCache {
         Ok(terms)
     }
 
-    /// 持久化保存或更新术语
-    pub fn set_glossary_term(&self, source: &str, target: &str) -> Result<()> {
+    /// 持久化保存或更新术语（可指定是否区分大小写）
+    pub fn set_glossary_term(&self, source: &str, target: &str, match_case: bool) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -242,12 +255,18 @@ impl TranslationCache {
             .lock()
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
+        // 自动兼容旧表
+        let _ = conn.execute(
+            "ALTER TABLE glossary ADD COLUMN match_case INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+
         conn.execute(
             r#"
-            INSERT OR REPLACE INTO glossary (source_term, target_term, created_at)
-            VALUES (?1, ?2, ?3)
+            INSERT OR REPLACE INTO glossary (source_term, target_term, created_at, match_case)
+            VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![source, target, now],
+            params![source, target, now, if match_case { 1 } else { 0 }],
         )?;
 
         Ok(())
@@ -378,7 +397,7 @@ mod tests {
         let cache = TranslationCache::in_memory().unwrap();
         // 1. 插入翻译缓存与术语库
         cache.set("apple", "苹果", "en", "zh-CN", "m").unwrap();
-        cache.set_glossary_term("LLM", "大模型").unwrap();
+        cache.set_glossary_term("LLM", "大模型", true).unwrap();
 
         assert_eq!(
             cache.get("apple", "en", "zh-CN", "m").unwrap(),
@@ -394,7 +413,10 @@ mod tests {
         assert_eq!(cache.get("apple", "en", "zh-CN", "m").unwrap(), None);
         let glossary_terms = cache.get_all_glossary_terms().unwrap();
         assert_eq!(glossary_terms.len(), 1);
-        assert_eq!(glossary_terms[0], ("LLM".to_string(), "大模型".to_string()));
+        assert_eq!(
+            glossary_terms[0],
+            ("LLM".to_string(), "大模型".to_string(), true)
+        );
     }
 
     #[test]

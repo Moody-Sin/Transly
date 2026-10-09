@@ -17,6 +17,15 @@ impl Glossary {
     }
 
     pub fn insert(&mut self, source: impl Into<String>, target: impl Into<String>) {
+        self.insert_with_options(source, target, true);
+    }
+
+    pub fn insert_with_options(
+        &mut self,
+        source: impl Into<String>,
+        target: impl Into<String>,
+        match_case: bool,
+    ) {
         let src = source.into();
         let tgt = target.into();
 
@@ -27,7 +36,11 @@ impl Glossary {
         let is_ascii_word =
             !src.is_empty() && src.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         let re = if is_ascii_word {
-            let pattern = format!(r"\b{}\b", regex::escape(&src));
+            let flag = if match_case { "" } else { "(?i)" };
+            let pattern = format!(r"{}\b{}\b", flag, regex::escape(&src));
+            regex::Regex::new(&pattern).ok()
+        } else if !match_case {
+            let pattern = format!(r"(?i){}", regex::escape(&src));
             regex::Regex::new(&pattern).ok()
         } else {
             None
@@ -105,5 +118,26 @@ mod tests {
         let result = glossary.apply(text);
         // 应该先匹配长词 "deep learning"，而不是把 deep 先替换掉导致损坏
         assert_eq!(result, "I study 深度学习");
+    }
+
+    #[test]
+    fn test_glossary_case_insensitive() {
+        let mut glossary = Glossary::new();
+        glossary.insert_with_options("agent", "智能体", false);
+        glossary.insert_with_options("NLP", "自然语言处理", false);
+
+        let text = "The autonomous Agent and nlp model";
+        let result = glossary.apply(text);
+        assert_eq!(result, "The autonomous 智能体 and 自然语言处理 model");
+    }
+
+    #[test]
+    fn test_glossary_case_sensitive_default() {
+        let mut glossary = Glossary::new();
+        glossary.insert("Apple", "苹果公司");
+
+        let text = "I eat an apple from Apple";
+        let result = glossary.apply(text);
+        assert_eq!(result, "I eat an apple from 苹果公司");
     }
 }

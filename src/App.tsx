@@ -11,6 +11,8 @@ import {
   Globe,
   Image as ImageIcon,
   Volume2,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import { commands } from './bindings'
 import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
@@ -61,6 +63,7 @@ export default function App() {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
+  const [isFloatPinned, setIsFloatPinned] = useState(false)
 
   // 浏览器扩展一键配对请求浮层
   const [pairingRequest, setPairingRequest] = useState<{
@@ -507,6 +510,21 @@ export default function App() {
             <span className="text-xs font-semibold text-slate-800">{t.float.title}</span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const next = !isFloatPinned
+                setIsFloatPinned(next)
+                commands.setFloatSticky(next).catch(() => {})
+              }}
+              className={`rounded p-1 transition-colors ${
+                isFloatPinned
+                  ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                  : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'
+              }`}
+              title={isFloatPinned ? t.float.unpin : t.float.pin}
+            >
+              {isFloatPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+            </button>
             {isTranslating && (
               <button
                 onClick={runner.cancel}

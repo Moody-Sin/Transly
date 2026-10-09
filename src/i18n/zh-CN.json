@@ -70,7 +70,9 @@
     "title": "Transly 快捷划词",
     "translating": "正在翻译...",
     "placeholder": "划词或复制内容后自动展现译文",
-    "autoHideNotice": "失焦自动收起"
+    "autoHideNotice": "失焦自动收起",
+    "pin": "固定置顶（失焦不收起）",
+    "unpin": "取消置顶（失焦自动收起）"
   },
   "task": {
     "btnCancel": "取消",

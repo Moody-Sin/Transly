@@ -70,7 +70,9 @@
     "title": "Transly Quick Look",
     "translating": "Translating...",
     "placeholder": "Select or copy text to translate automatically",
-    "autoHideNotice": "Auto-hides on blur"
+    "autoHideNotice": "Auto-hides on blur",
+    "pin": "Pin window (keep visible on blur)",
+    "unpin": "Unpin window (auto-hide on blur)"
   },
   "task": {
     "btnCancel": "Cancel",

@@ -20,6 +20,7 @@ import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
+import ShortcutRecorder from './ShortcutRecorder'
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>('zh-CN')
@@ -1003,51 +1004,31 @@ export default function App() {
 
               {/* 全局划词快捷键设置 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-slate-700">{t.settings.shortcutTitle}</div>
-                    <div className="text-[11px] text-slate-400">{t.settings.shortcutDesc}</div>
-                  </div>
-                  <button
-                    onClick={handleSaveShortcut}
-                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
-                  >
-                    {t.settings.btnSaveShortcut}
-                  </button>
+                <div>
+                  <div className="font-medium text-slate-700">{t.settings.shortcutTitle}</div>
+                  <div className="text-[11px] text-slate-400">{t.settings.shortcutDesc}</div>
                 </div>
-                <input
-                  type="text"
+                <ShortcutRecorder
                   value={customShortcut}
-                  onChange={(e) => setCustomShortcut(e.target.value)}
-                  placeholder="Alt+Shift+D"
-                  className="rounded border border-slate-200 bg-white px-2.5 py-1 text-slate-700 outline-none focus:border-indigo-500 font-mono text-[11px]"
+                  onChange={setCustomShortcut}
+                  onSave={handleSaveShortcut}
+                  t={t}
                 />
               </div>
 
               {/* 划词原地替换快捷键设置 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-slate-700">
-                      {t.settings.replaceShortcutTitle}
-                    </div>
-                    <div className="text-[11px] text-slate-400">
-                      {t.settings.replaceShortcutDesc}
-                    </div>
+                <div>
+                  <div className="font-medium text-slate-700">
+                    {t.settings.replaceShortcutTitle}
                   </div>
-                  <button
-                    onClick={handleSaveReplaceShortcut}
-                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
-                  >
-                    {t.settings.btnSaveShortcut}
-                  </button>
+                  <div className="text-[11px] text-slate-400">{t.settings.replaceShortcutDesc}</div>
                 </div>
-                <input
-                  type="text"
+                <ShortcutRecorder
                   value={customReplaceShortcut}
-                  onChange={(e) => setCustomReplaceShortcut(e.target.value)}
-                  placeholder="Alt+Shift+R"
-                  className="rounded border border-slate-200 bg-white px-2.5 py-1 text-slate-700 outline-none focus:border-indigo-500 font-mono text-[11px]"
+                  onChange={setCustomReplaceShortcut}
+                  onSave={handleSaveReplaceShortcut}
+                  t={t}
                 />
               </div>
 

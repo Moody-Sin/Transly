@@ -172,6 +172,55 @@ impl TranslationCache {
         Ok(())
     }
 
+    /// 在单个显式事务中批量保存或更新翻译缓存，大幅降低磁盘 I/O 争用与锁开销
+    pub fn set_batch<'a, I>(&self, entries: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str, &'a str)>,
+    {
+        let items: Vec<(&'a str, &'a str, &'a str, &'a str, &'a str)> =
+            entries.into_iter().collect();
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                r#"
+                INSERT OR REPLACE INTO translation_cache 
+                (cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+            )?;
+
+            for (text, translated, source_lang, target_lang, engine) in items {
+                let key = Self::generate_key(text, source_lang, target_lang, engine);
+                stmt.execute(params![
+                    key,
+                    text,
+                    translated,
+                    source_lang,
+                    target_lang,
+                    engine,
+                    now
+                ])?;
+            }
+        }
+        tx.commit()?;
+
+        Ok(())
+    }
+
     /// 清理超过指定天数的过期缓存
     pub fn cleanup_older_than_days(&self, days: u32) -> Result<usize> {
         let cutoff = std::time::SystemTime::now()
@@ -390,6 +439,31 @@ mod tests {
         // cleanup 不会误删当前刚插入的条目
         let expired = cache.cleanup_older_than_days(1).unwrap();
         assert_eq!(expired, 0);
+    }
+
+    #[test]
+    fn test_set_batch_atomic_transaction() {
+        let cache = TranslationCache::in_memory().unwrap();
+        let entries = vec![
+            ("one", "一", "en", "zh-CN", "google"),
+            ("two", "二", "en", "zh-CN", "google"),
+            ("three", "三", "en", "zh-CN", "deepl"),
+        ];
+
+        cache.set_batch(entries).unwrap();
+
+        assert_eq!(
+            cache.get("one", "en", "zh-CN", "google").unwrap(),
+            Some("一".to_string())
+        );
+        assert_eq!(
+            cache.get("two", "en", "zh-CN", "google").unwrap(),
+            Some("二".to_string())
+        );
+        assert_eq!(
+            cache.get("three", "en", "zh-CN", "deepl").unwrap(),
+            Some("三".to_string())
+        );
     }
 
     #[test]

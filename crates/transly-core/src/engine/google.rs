@@ -64,7 +64,10 @@ impl GoogleWebEngine {
             urlencoding::encode(text)
         );
 
-        let resp = self.client.get(&url).send().await?;
+        let resp = super::send_with_retry(1, std::time::Duration::from_millis(200), || {
+            self.client.get(&url).send()
+        })
+        .await?;
         if !resp.status().is_success() {
             return Err(Error::Engine {
                 engine: self.id().to_string(),

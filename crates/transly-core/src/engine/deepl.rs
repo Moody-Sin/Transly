@@ -124,13 +124,14 @@ impl TranslateEngine for DeepLEngine {
             source_lang,
         };
 
-        let resp = self
-            .client
-            .post(self.endpoint())
-            .header("Authorization", format!("DeepL-Auth-Key {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let resp = super::send_with_retry(1, std::time::Duration::from_millis(250), || {
+            self.client
+                .post(self.endpoint())
+                .header("Authorization", format!("DeepL-Auth-Key {}", self.api_key))
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -199,13 +200,14 @@ impl TranslateEngine for DeepLEngine {
                 source_lang,
             };
 
-            let resp = self
-                .client
-                .post(self.endpoint())
-                .header("Authorization", format!("DeepL-Auth-Key {}", self.api_key))
-                .json(&body)
-                .send()
-                .await?;
+            let resp = super::send_with_retry(1, std::time::Duration::from_millis(250), || {
+                self.client
+                    .post(self.endpoint())
+                    .header("Authorization", format!("DeepL-Auth-Key {}", self.api_key))
+                    .json(&body)
+                    .send()
+            })
+            .await?;
 
             if !resp.status().is_success() {
                 let status = resp.status();

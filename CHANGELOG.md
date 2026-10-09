@@ -8,6 +8,10 @@
 ## [未发布]
 
 ### 新增
+- **翻译缓存批量写入单次显式事务化 (P1)**：在 `crates/transly-core` 的 `TranslationCache` 中引入 `set_batch` 接口，内部使用 `conn.transaction()?` 与单次预编译语句批量落盘；服务端（`src-tauri/src/server/mod.rs`）在整页批量翻译成功后统一通过 `set_batch` 提交事务，将单次批量翻译的 30 次隐式加锁与写盘减少为 1 次批量提交，大幅降低高并发与整页翻译下的 SQLite 锁争用与磁盘 I/O。
+- **翻译引擎网络瞬态故障受控重试与指数退避 (P1)**：在 `crates/transly-core` 的 `TranslateEngine` 内部引入 `send_with_retry` 网络请求重试机制，对底层连接中断、超时及服务端 429/500/502/503/504 等瞬态故障实施至多 1 次指数退避重试（200~300ms 抖动延迟）；严格对 401/403 等鉴权与输入错误绝不重试，大幅提升弱网与整页翻译时的鲁棒性，减少局部缺译。
+- **浏览器扩展整页翻译悬浮查看原文 Tooltip (P1)**：在 `extension/src/content/index.ts` 中基于 `originalTextMap` 增加无侵入的原文悬浮查看交互。原地替换文本节点后向父级元素标记 `data-transly-has-translation`，鼠标悬停时在封闭式 Shadow DOM 浮层中呈现对应原文字句，还原网页时自动彻底销毁，兼顾“整页仅译文保真排版”与“随时对照原文”的双重诉求。
+- **i18n 语言包键值结构完全对称性自动化单元测试 (P2)**：新增 `src/task/i18n.test.ts`，递归遍历并深度比对桌面端（`zh-CN.json` 与 `en.json`）及浏览器插件（`_locales/zh_CN` 与 `_locales/en`）所有语言包的键路径与结构，在提交门禁与 CI 中杜绝遗漏翻译键或运行时 `undefined` 文案。
 - **浏览器插件与桌面端一键自动安全握手配对 (P1)**：在本地 HTTP 服务（`127.0.0.1:39281`）中实现 `/pair/request` 与 `/pair/poll` 握手协议与 `PairingManager` 内存状态机（60 秒有效时效限制、单次读取一次性消费销毁）；在桌面端通过 Tauri 事件 `transly://pairing-requested` 广播配对申请，并在 React 前端弹出带 60s 倒计时动画的来源授权确认模态浮层（`approve_pairing` / `reject_pairing`）；浏览器插件端（`extension/`）在未配对或 Token 失效时提供【一键配对桌面端】交互，自动轮询并无缝写入 `chrome.storage.local`，彻底免除手动复制粘贴 64 位 Token 的繁琐操作，同时杜绝未授权扩展静默窃取风险。
 - **术语库支持「忽略大小写」(Case-insensitive) 选项 (P2)**：在 `crates/transly-core` 的 `Glossary` 中引入 `insert_with_options` 与 `match_case` 开关，支持对 ASCII 单词与多词术语启用不区分大小写匹配（通过 `(?i)` 正则标志支持）；SQLite 持久化数据表通过 `ALTER TABLE glossary ADD COLUMN match_case ...` 自动向前迁移并保持平滑兼容；命令层与前端 DTO 对齐 `GlossaryTermDto`；设置面板新增「区分大小写」复选框与不区分大小写（`Aa`）标识。
 - **浮窗与扩展端网络错误引导对齐 (P2)**：当用户使用默认 Google 网页翻译遇到网络无法直连时，浏览器扩展端（网页划词翻译气泡与 Popup 整页翻译面板）及桌面端浮窗同步提供醒目明确的可执行替代指引（“Google 翻译网络不可达，请在桌面端设置配置 DeepL / DeepSeek 后切换引擎”），中英文语言包同步对齐。

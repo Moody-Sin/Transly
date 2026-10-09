@@ -55,6 +55,13 @@ export function replaceTextNode(node: Text, translatedText: string) {
   }
   translatedTextSet.add(node)
   node.nodeValue = translatedText
+
+  // 若父节点是元素，挂载 data-transly-original 标记（若尚未挂载或为空）
+  // 方便快捷悬浮查看原文（按下 Alt 键悬停查看）
+  const parent = node.parentElement
+  if (parent && !parent.hasAttribute('data-transly-has-translation')) {
+    parent.setAttribute('data-transly-has-translation', 'true')
+  }
 }
 
 export function restoreOriginalText(container: Node = document.body) {
@@ -72,7 +79,151 @@ export function restoreOriginalText(container: Node = document.body) {
     }
     curr = walker.nextNode()
   }
+
+  // 清除父元素标记与残留 Tooltip
+  if (container instanceof Element) {
+    container.querySelectorAll('[data-transly-has-translation]').forEach((el) => {
+      el.removeAttribute('data-transly-has-translation')
+    })
+  }
+  hideOriginalTooltip()
 }
+
+// ==========================================
+// 悬浮查看原文 Tooltip 交互（Shadow DOM 隔离）
+// 按住 Alt 键（或直接悬停已翻译段落）时，在鼠标附近浮现对应节点的原文，
+// 既维持整页翻译仅译文的纯净版面，又提供随时对照原文的能力。
+// ==========================================
+const TOOLTIP_HOST_ID = 'transly-original-tooltip-host'
+let tooltipHost: HTMLElement | null = null
+let tooltipShadow: ShadowRoot | null = null
+let tooltipContainer: HTMLElement | null = null
+
+function ensureTooltipHost(): HTMLElement {
+  if (tooltipHost && tooltipHost.isConnected) return tooltipHost
+  tooltipHost = document.createElement('div')
+  tooltipHost.id = TOOLTIP_HOST_ID
+  tooltipHost.setAttribute('data-no-translate', 'true')
+  tooltipHost.style.cssText =
+    'position: fixed; z-index: 2147483647; top: 0; left: 0; width: 0; height: 0; pointer-events: none;'
+  tooltipShadow = tooltipHost.attachShadow({ mode: 'closed' })
+
+  const style = document.createElement('style')
+  style.textContent = `
+    :host { all: initial; }
+    .tooltip {
+      position: fixed;
+      display: none;
+      max-width: 480px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 8px 12px;
+      background: #1e293b;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      pointer-events: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+      transition: opacity 0.15s ease;
+      opacity: 0;
+      border: 1px solid #334155;
+    }
+    .tooltip.visible {
+      display: block;
+      opacity: 1;
+    }
+    .badge {
+      display: inline-block;
+      margin-bottom: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+    }
+  `
+  tooltipContainer = document.createElement('div')
+  tooltipContainer.className = 'tooltip'
+  tooltipShadow.appendChild(style)
+  tooltipShadow.appendChild(tooltipContainer)
+
+  document.documentElement.appendChild(tooltipHost)
+  return tooltipHost
+}
+
+export function hideOriginalTooltip() {
+  if (tooltipContainer) {
+    tooltipContainer.classList.remove('visible')
+  }
+}
+
+function showOriginalTooltip(originalText: string, clientX: number, clientY: number) {
+  if (!originalText.trim()) return
+  ensureTooltipHost()
+  if (!tooltipContainer) return
+
+  tooltipContainer.innerHTML = `<div class="badge">Original / 原文</div><div>${escapeHtml(originalText)}</div>`
+  tooltipContainer.classList.add('visible')
+
+  const pad = 12
+  const rect = tooltipContainer.getBoundingClientRect()
+  let left = clientX + 16
+  let top = clientY + 16
+
+  if (left + rect.width > window.innerWidth - pad) {
+    left = Math.max(pad, clientX - rect.width - 16)
+  }
+  if (top + rect.height > window.innerHeight - pad) {
+    top = Math.max(pad, clientY - rect.height - 16)
+  }
+
+  tooltipContainer.style.left = `${left}px`
+  tooltipContainer.style.top = `${top}px`
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// 监听鼠标在网页上的移动，当目标为已翻译节点且用户悬停（或按住 Alt）时显示原文 Tooltip
+document.addEventListener('mouseover', (e) => {
+  const target = e.target
+  if (!(target instanceof Element)) return
+  if (!target.hasAttribute('data-transly-has-translation')) return
+
+  // 提取该元素或其子文本节点中缓存的原文
+  let origText = ''
+  for (const child of Array.from(target.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE && originalTextMap.has(child as Text)) {
+      origText += (originalTextMap.get(child as Text) || '') + ' '
+    }
+  }
+
+  if (origText.trim()) {
+    showOriginalTooltip(origText.trim(), e.clientX, e.clientY)
+  }
+})
+
+document.addEventListener('mouseout', (e) => {
+  const target = e.target
+  if (target instanceof Element && target.hasAttribute('data-transly-has-translation')) {
+    hideOriginalTooltip()
+  }
+})
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    hideOriginalTooltip()
+  }
+})
 
 interface TextNodeEntry {
   id: string

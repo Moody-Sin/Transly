@@ -145,13 +145,14 @@ impl TranslateEngine for OpenAIEngine {
         };
 
         let url = format!("{}/chat/completions", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let resp = super::send_with_retry(1, std::time::Duration::from_millis(300), || {
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -210,13 +211,14 @@ impl TranslateEngine for OpenAIEngine {
         };
 
         let url = format!("{}/chat/completions", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let resp = super::send_with_retry(1, std::time::Duration::from_millis(300), || {
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();

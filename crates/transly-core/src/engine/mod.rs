@@ -184,6 +184,54 @@ where
     ranges
 }
 
+/// 判断 HTTP 状态码或错误类型是否为可进行瞬态重试的错误
+pub fn is_transient_retryable_status(status_code: u16) -> bool {
+    // 429: Too Many Requests (限流)
+    // 500: Internal Server Error
+    // 502: Bad Gateway
+    // 503: Service Unavailable
+    // 504: Gateway Timeout
+    matches!(status_code, 429 | 500 | 502 | 503 | 504)
+}
+
+/// 执行带指数退避的瞬态网络请求重试
+///
+/// 仅针对底层网络连接中断、超时或服务端 429/5xx 瞬态故障重试至多 max_retries 次；
+/// 401/403 等鉴权与输入错误绝不重试。
+pub async fn send_with_retry<F, Fut>(
+    max_retries: usize,
+    base_delay: std::time::Duration,
+    mut op: F,
+) -> std::result::Result<reqwest::Response, reqwest::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<reqwest::Response, reqwest::Error>>,
+{
+    let mut attempt = 0;
+    loop {
+        match op().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if attempt < max_retries && is_transient_retryable_status(status) {
+                    attempt += 1;
+                    tokio::time::sleep(base_delay * (1 << (attempt - 1))).await;
+                    continue;
+                }
+                return Ok(resp);
+            }
+            Err(err) => {
+                let is_transient = err.is_timeout() || err.is_connect() || err.is_request();
+                if attempt < max_retries && is_transient {
+                    attempt += 1;
+                    tokio::time::sleep(base_delay * (1 << (attempt - 1))).await;
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
 /// 统一的带 Fallback 降级感知的缓存查询纯函数（杜绝在 IPC 与 HTTP Server 两处重复造轮子与字符串嗅探）
 pub fn lookup_cache_with_fallback(
     cache: &crate::TranslationCache,
@@ -214,6 +262,21 @@ mod tests {
 
     fn ranges_of(texts: &[String]) -> Vec<(usize, usize)> {
         plan_batch_ranges(texts.iter())
+    }
+
+    #[test]
+    fn test_is_transient_retryable_status() {
+        assert!(is_transient_retryable_status(429));
+        assert!(is_transient_retryable_status(500));
+        assert!(is_transient_retryable_status(502));
+        assert!(is_transient_retryable_status(503));
+        assert!(is_transient_retryable_status(504));
+
+        assert!(!is_transient_retryable_status(200));
+        assert!(!is_transient_retryable_status(400));
+        assert!(!is_transient_retryable_status(401));
+        assert!(!is_transient_retryable_status(403));
+        assert!(!is_transient_retryable_status(404));
     }
 
     #[test]

@@ -30,6 +30,8 @@ export const commands = {
 	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
 	/**  分页读取翻译历史（最近优先）。`limit` / `offset` 由前端控制。 */
 	getTranslationHistory: (limit: number, offset: number) => typedError<CacheEntry[], string>(__TAURI_INVOKE("get_translation_history", { limit, offset })),
+	/**  根据关键词检索翻译历史（支持模糊匹配原文与译文） */
+	searchTranslationHistory: (keyword: string, limit: number, offset: number) => typedError<CacheEntry[], string>(__TAURI_INVOKE("search_translation_history", { keyword, limit, offset })),
 	/**  按 `cache_key` 删除单条翻译历史。 */
 	deleteHistoryEntry: (cacheKey: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_history_entry", { cacheKey })),
 	setCacheEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_cache_enabled", { enabled })),

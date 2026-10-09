@@ -8,6 +8,8 @@
 ## [未发布]
 
 ### 新增
+- **翻译历史模糊搜索与导出 (CSV / JSON) (P1)**：在 `crates/transly-core` 的 `TranslationCache` 中实现 `search` 模糊查询，在命令层导出 `search_translation_history`。前端 `HistoryPanel` 增加实时搜索输入框（支持原文与译文模糊匹配）以及一键导出为 `.json` / `.csv` 文件功能，便于用户将翻译记录整理归档或用作生词复习资料。
+- **系统原生 Web Speech 零开销发音朗读 (TTS) (P2)**：基于现代浏览器与 WebView 内置的 `window.speechSynthesis` 原生 API，在桌面端主界面译文区、悬浮浮窗模式以及历史记录条目旁提供发音朗读按钮（小喇叭图标），实现原文与目标语言文本的零体积、零依赖、零额外网络开销的原生语音朗读。
 - **翻译缓存批量写入单次显式事务化 (P1)**：在 `crates/transly-core` 的 `TranslationCache` 中引入 `set_batch` 接口，内部使用 `conn.transaction()?` 与单次预编译语句批量落盘；服务端（`src-tauri/src/server/mod.rs`）在整页批量翻译成功后统一通过 `set_batch` 提交事务，将单次批量翻译的 30 次隐式加锁与写盘减少为 1 次批量提交，大幅降低高并发与整页翻译下的 SQLite 锁争用与磁盘 I/O。
 - **翻译引擎网络瞬态故障受控重试与指数退避 (P1)**：在 `crates/transly-core` 的 `TranslateEngine` 内部引入 `send_with_retry` 网络请求重试机制，对底层连接中断、超时及服务端 429/500/502/503/504 等瞬态故障实施至多 1 次指数退避重试（200~300ms 抖动延迟）；严格对 401/403 等鉴权与输入错误绝不重试，大幅提升弱网与整页翻译时的鲁棒性，减少局部缺译。
 - **浏览器扩展整页翻译悬浮查看原文 Tooltip (P1)**：在 `extension/src/content/index.ts` 中基于 `originalTextMap` 增加无侵入的原文悬浮查看交互。原地替换文本节点后向父级元素标记 `data-transly-has-translation`，鼠标悬停时在封闭式 Shadow DOM 浮层中呈现对应原文字句，还原网页时自动彻底销毁，兼顾“整页仅译文保真排版”与“随时对照原文”的双重诉求。

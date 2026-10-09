@@ -30,6 +30,7 @@
     "engineDeepl": "DeepL (需API Key / 自动降级)",
     "engineDeepseek": "DeepSeek LLM (需API Key / 自动降级)",
     "engineOpenai": "OpenAI (需API Key / 自动降级)",
+    "speak": "朗读发音",
     "btnClose": "关闭"
   },
   "history": {
@@ -46,7 +47,12 @@
     "delete": "删除",
     "loadFailed": "读取翻译历史失败",
     "deleteFailed": "删除失败",
-    "entryCount": "已加载 {n} 条"
+    "entryCount": "已加载 {n} 条",
+    "searchPlaceholder": "搜索历史记录 (原文或译文)...",
+    "exportJson": "导出 JSON",
+    "exportCsv": "导出 CSV",
+    "speak": "朗读发音",
+    "speaking": "正在朗读..."
   },
   "ocrError": {
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",

@@ -386,6 +386,48 @@ impl TranslationCache {
         Ok(entries)
     }
 
+    /// 根据关键词模糊检索翻译历史（匹配原文或译文）
+    pub fn search(&self, keyword: &str, limit: u32, offset: u32) -> Result<Vec<CacheEntry>> {
+        let trimmed = keyword.trim();
+        if trimmed.is_empty() {
+            return self.list_recent(limit, offset);
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let pattern = format!("%{trimmed}%");
+        let mut stmt = conn.prepare_cached(
+            r#"
+            SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
+            FROM translation_cache
+            WHERE source_text LIKE ?1 OR translated_text LIKE ?1
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?2 OFFSET ?3
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![pattern, limit as i64, offset as i64], |row| {
+            Ok(CacheEntry {
+                cache_key: row.get(0)?,
+                source_text: row.get(1)?,
+                translated_text: row.get(2)?,
+                source_lang: row.get(3)?,
+                target_lang: row.get(4)?,
+                engine: row.get(5)?,
+                created_at: row.get::<_, i64>(6)? as u32,
+            })
+        })?;
+
+        let mut entries = Vec::new();
+        for item in rows {
+            entries.push(item?);
+        }
+        Ok(entries)
+    }
+
     /// 按 `cache_key` 删除单条翻译历史。返回是否确实删除了记录。
     pub fn delete_entry(&self, cache_key: &str) -> Result<bool> {
         let conn = self
@@ -522,6 +564,28 @@ mod tests {
         assert_eq!(entry.target_lang, "zh-CN");
         assert_eq!(entry.engine, "m");
         assert!(entry.created_at > 0);
+    }
+
+    #[test]
+    fn test_search_translation_history() {
+        let cache = TranslationCache::in_memory().unwrap();
+        cache.set("apple", "苹果", "en", "zh-CN", "m").unwrap();
+        cache.set("banana", "香蕉", "en", "zh-CN", "m").unwrap();
+        cache.set("pear", "梨子", "en", "zh-CN", "m").unwrap();
+
+        // 原文搜索
+        let res_source = cache.search("app", 10, 0).unwrap();
+        assert_eq!(res_source.len(), 1);
+        assert_eq!(res_source[0].source_text, "apple");
+
+        // 译文搜索
+        let res_target = cache.search("香蕉", 10, 0).unwrap();
+        assert_eq!(res_target.len(), 1);
+        assert_eq!(res_target[0].source_text, "banana");
+
+        // 空搜索回落全部
+        let res_empty = cache.search("", 10, 0).unwrap();
+        assert_eq!(res_empty.len(), 3);
     }
 
     #[test]

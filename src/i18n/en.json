@@ -30,6 +30,7 @@
     "engineDeepl": "DeepL (API key required / auto fallback)",
     "engineDeepseek": "DeepSeek LLM (API key required / auto fallback)",
     "engineOpenai": "OpenAI (API key required / auto fallback)",
+    "speak": "Read Aloud",
     "btnClose": "Close"
   },
   "history": {
@@ -46,7 +47,12 @@
     "delete": "Delete",
     "loadFailed": "Failed to load translation history",
     "deleteFailed": "Failed to delete",
-    "entryCount": "{n} loaded"
+    "entryCount": "{n} loaded",
+    "searchPlaceholder": "Search history (source or translated)...",
+    "exportJson": "Export JSON",
+    "exportCsv": "Export CSV",
+    "speak": "Read Aloud",
+    "speaking": "Reading..."
   },
   "ocrError": {
     "no_image": "No image in clipboard. Copy or take a screenshot first.",

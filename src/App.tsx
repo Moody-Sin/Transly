@@ -10,6 +10,7 @@ import {
   Save,
   Globe,
   Image as ImageIcon,
+  Volume2,
 } from 'lucide-react'
 import { commands } from './bindings'
 import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
@@ -370,6 +371,14 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const handleSpeak = (text: string, lang: string) => {
+    if (!('speechSynthesis' in window) || !text.trim()) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text.trim())
+    utterance.lang = lang
+    window.speechSynthesis.speak(utterance)
+  }
+
   const handleOcrClipboard = async () => {
     setOcrLoading(true)
     setOcrError(null)
@@ -455,17 +464,27 @@ export default function App() {
                 : t.float.autoHideNotice}
           </span>
           {translatedText && (
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
-            >
-              {copied ? (
-                <Check className="h-3 w-3 text-emerald-600" />
-              ) : (
-                <Copy className="h-3 w-3" />
-              )}
-              <span>{copied ? t.translation.copied : t.translation.copy}</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => handleSpeak(translatedText, targetLang)}
+                className="flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200"
+                title={t.translation.speak}
+              >
+                <Volume2 className="h-3 w-3" />
+                <span>{t.translation.speak}</span>
+              </button>
+              <button
+                onClick={handleCopy}
+                className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+              >
+                {copied ? (
+                  <Check className="h-3 w-3 text-emerald-600" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+                <span>{copied ? t.translation.copied : t.translation.copy}</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -679,7 +698,15 @@ export default function App() {
                     <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
                   )}
                   {translatedText && (
-                    <div className="flex justify-end">
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <button
+                        onClick={() => handleSpeak(translatedText, targetLang)}
+                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                        title={t.translation.speak}
+                      >
+                        <Volume2 className="h-3.5 w-3.5" />
+                        <span>{t.translation.speak}</span>
+                      </button>
                       <button
                         onClick={handleCopy}
                         className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"

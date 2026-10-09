@@ -367,6 +367,25 @@ pub async fn get_translation_history(
     .unwrap_or_else(|e| Err(format!("翻译历史读取任务调度异常: {e}")))
 }
 
+/// 根据关键词检索翻译历史（支持模糊匹配原文与译文）
+#[tauri::command]
+#[specta::specta]
+pub async fn search_translation_history(
+    keyword: String,
+    limit: u32,
+    offset: u32,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<Vec<CacheEntry>, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .search(&keyword, limit, offset)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("翻译历史搜索任务调度异常: {e}")))
+}
+
 /// 按 `cache_key` 删除单条翻译历史。
 #[tauri::command]
 #[specta::specta]

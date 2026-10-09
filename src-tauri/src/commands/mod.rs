@@ -100,24 +100,27 @@ pub async fn translate(
     }
 
     // 2. 缓存未命中或未开启，调用引擎翻译
+    // 在翻译前提取代码块与行内代码进行占位保护，防止代码和特殊标识符被篡改
+    let preserved = transly_core::stash_code_blocks(&text);
     let req = TranslationRequest {
-        text: text.clone(),
+        text: preserved.text.clone(),
         source_lang: sl.clone(),
         target_lang: target_lang.clone(),
     };
 
     match active_engine.translate(&req).await {
         Ok(res) => {
+            let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
             let cache_target_engine = res.actual_engine();
             if let Err(e) = cache_controller.set_if_current(start_gen, || {
-                cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
+                cache.set(&text, &restored, &sl, &target_lang, cache_target_engine)
             }) {
                 eprintln!("[Cache Write Warning] 桌面端翻译缓存写入失败: {e}");
             }
             let g = glossary.read().await;
             Ok(TranslateOutcomeDto {
-                text: g.apply(&res.text),
+                text: g.apply(&restored),
                 engine: res.engine,
             })
         }
@@ -210,8 +213,9 @@ pub async fn translate_stream(
     }
 
     // 2. 缓存未命中或未开启，调用流式引擎翻译
+    let preserved = transly_core::stash_code_blocks(&text);
     let req = TranslationRequest {
-        text: text.clone(),
+        text: preserved.text.clone(),
         source_lang: sl.clone(),
         target_lang: target_lang.clone(),
     };
@@ -229,15 +233,16 @@ pub async fn translate_stream(
 
     match active_engine.translate_stream(&req, on_chunk).await {
         Ok(res) => {
+            let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             let cache_target_engine = res.actual_engine();
             if let Err(e) = cache_controller.set_if_current(start_gen, || {
-                cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
+                cache.set(&text, &restored, &sl, &target_lang, cache_target_engine)
             }) {
                 eprintln!("[Cache Write Warning] 桌面端流式翻译缓存写入失败: {e}");
             }
             let g = glossary.read().await;
             Ok(TranslateOutcomeDto {
-                text: g.apply(&res.text),
+                text: g.apply(&restored),
                 engine: res.engine,
             })
         }

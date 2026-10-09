@@ -5,12 +5,14 @@ pub mod engine;
 pub mod error;
 pub mod glossary;
 pub mod ocr;
+pub mod preserve;
 pub mod task;
 pub mod validation;
 
 pub use cache::{CacheEntry, TranslationCache};
 pub use config::AppConfig;
 pub use detector::{detect_language, resolve_smart_target_lang};
+pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};
 pub use engine::{
     lookup_cache_with_fallback, plan_batch_ranges, BatchItemRequest, BatchItemResult, DeepLEngine,
     EngineCapabilities, FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine,

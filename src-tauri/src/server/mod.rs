@@ -17,6 +17,8 @@ use transly_core::{
     Glossary, TranslationCache, TranslationRequest,
 };
 
+pub mod pairing;
+
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
     pub status: &'static str,
@@ -51,6 +53,26 @@ pub struct TranslateBatchResponse {
     pub items: Vec<BatchItemResult>,
 }
 
+#[derive(Deserialize)]
+pub struct PairRequestPayload {
+    pub client_id: String,
+    pub browser_hint: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PairRequestResponse {
+    pub session_id: String,
+    pub expires_in: u64,
+}
+
+#[derive(Deserialize)]
+pub struct PairPollPayload {
+    pub session_id: String,
+    pub client_id: String,
+}
+
+pub type PairingNotifyHook = Arc<dyn Fn(&str, Option<&str>) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ServerState {
     pub token: Arc<RwLock<String>>,
@@ -59,6 +81,29 @@ pub struct ServerState {
     pub glossary: Arc<RwLock<Glossary>>,
     pub concurrency_limit: Arc<tokio::sync::Semaphore>,
     pub cache_controller: Arc<crate::cache_controller::CacheController>,
+    pub pairing_manager: Arc<pairing::PairingManager>,
+    pub pairing_notify_hook: Option<PairingNotifyHook>,
+}
+
+impl ServerState {
+    pub fn new(
+        token: Arc<RwLock<String>>,
+        pool: Arc<crate::engine_pool::EnginePool>,
+        cache: Arc<TranslationCache>,
+        glossary: Arc<RwLock<Glossary>>,
+        cache_controller: Arc<crate::cache_controller::CacheController>,
+    ) -> Self {
+        Self {
+            token,
+            pool,
+            cache,
+            glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
+            cache_controller,
+            pairing_manager: Arc::new(pairing::PairingManager::new()),
+            pairing_notify_hook: None,
+        }
+    }
 }
 
 fn is_allowed_origin(origin_str: &str) -> bool {
@@ -121,6 +166,26 @@ pub fn create_router(
     glossary: Arc<RwLock<Glossary>>,
     cache_controller: Arc<crate::cache_controller::CacheController>,
 ) -> Router {
+    create_router_with_pairing(
+        token,
+        cache,
+        pool,
+        glossary,
+        cache_controller,
+        Arc::new(pairing::PairingManager::new()),
+        None,
+    )
+}
+
+pub fn create_router_with_pairing(
+    token: Arc<RwLock<String>>,
+    cache: Arc<TranslationCache>,
+    pool: Arc<crate::engine_pool::EnginePool>,
+    glossary: Arc<RwLock<Glossary>>,
+    cache_controller: Arc<crate::cache_controller::CacheController>,
+    pairing_manager: Arc<pairing::PairingManager>,
+    pairing_notify_hook: Option<PairingNotifyHook>,
+) -> Router {
     let state = ServerState {
         token,
         pool,
@@ -128,6 +193,8 @@ pub fn create_router(
         glossary,
         concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)), // 限制本地并发处理至多 10 批
         cache_controller,
+        pairing_manager,
+        pairing_notify_hook,
     };
 
     let protected = Router::new()
@@ -157,6 +224,8 @@ pub fn create_router(
 
     Router::new()
         .route("/health", get(health_handler))
+        .route("/pair/request", post(pair_request_handler))
+        .route("/pair/poll", post(pair_poll_handler))
         .merge(protected)
         .layer(cors)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 限制单次 HTTP 请求体最大 2MB
@@ -219,6 +288,42 @@ async fn health_handler() -> Json<StatusResponse> {
 
 async fn verify_token_handler() -> Json<StatusResponse> {
     Json(status_response())
+}
+
+async fn pair_request_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<PairRequestPayload>,
+) -> Result<Json<PairRequestResponse>, StatusCode> {
+    let client_id = payload.client_id.trim();
+    if client_id.is_empty() || client_id.len() > 128 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let (session_id, expires_in) = state
+        .pairing_manager
+        .create_session(client_id.to_string(), payload.browser_hint.clone())
+        .await;
+
+    // 若注册了事件钩子（如 Tauri AppHandle），立即广播通知前端
+    if let Some(ref hook) = state.pairing_notify_hook {
+        hook(&session_id, payload.browser_hint.as_deref());
+    }
+
+    Ok(Json(PairRequestResponse {
+        session_id,
+        expires_in,
+    }))
+}
+
+async fn pair_poll_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<PairPollPayload>,
+) -> Result<Json<pairing::PairingPollResult>, StatusCode> {
+    let current_token = state.token.read().await;
+    let res = state
+        .pairing_manager
+        .poll_session(&payload.session_id, &payload.client_id, &current_token)
+        .await;
+    Ok(Json(res))
 }
 
 fn status_response() -> StatusResponse {

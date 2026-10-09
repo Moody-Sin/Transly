@@ -127,14 +127,7 @@ async fn test_translate_authorized() {
     let glossary = Arc::new(RwLock::new(glossary_instance));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("valid-token".to_string()));
-    let state = ServerState {
-        token,
-        pool,
-        cache: cache.clone(),
-        glossary,
-        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-        cache_controller,
-    };
+    let state = ServerState::new(token, pool, cache.clone(), glossary, cache_controller);
 
     let app = Router::new()
         .route(
@@ -178,14 +171,7 @@ async fn test_translate_cache_disabled_path() {
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(false));
 
     let token = Arc::new(RwLock::new("valid-token".to_string()));
-    let state = ServerState {
-        token,
-        pool,
-        cache: cache.clone(),
-        glossary,
-        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-        cache_controller,
-    };
+    let state = ServerState::new(token, pool, cache.clone(), glossary, cache_controller);
 
     let app = Router::new()
         .route(
@@ -230,14 +216,7 @@ async fn test_translate_language_and_length_validation() {
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
 
     let token = Arc::new(RwLock::new("valid-token".to_string()));
-    let state = ServerState {
-        token: token.clone(),
-        pool,
-        cache,
-        glossary,
-        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-        cache_controller,
-    };
+    let state = ServerState::new(token.clone(), pool, cache, glossary, cache_controller);
 
     let app = Router::new()
         .route(
@@ -374,14 +353,7 @@ async fn test_translate_structured_batch_items() {
         .set("item-cached", "已缓存译文", "auto", "zh-CN", "google_web")
         .unwrap();
 
-    let state = ServerState {
-        token,
-        pool,
-        cache,
-        glossary,
-        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-        cache_controller,
-    };
+    let state = ServerState::new(token, pool, cache, glossary, cache_controller);
 
     let app = Router::new()
         .route(
@@ -446,14 +418,7 @@ async fn test_fallback_cache_hit_on_secondary() {
         .set("fallback-test", "降级译文", "auto", "zh-CN", "google_web")
         .unwrap();
 
-    let state = ServerState {
-        token,
-        pool,
-        cache,
-        glossary,
-        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-        cache_controller,
-    };
+    let state = ServerState::new(token, pool, cache, glossary, cache_controller);
 
     let app = Router::new()
         .route(
@@ -499,14 +464,13 @@ fn translate_app(
     cache: Arc<TranslationCache>,
     pool: Arc<crate::engine_pool::EnginePool>,
 ) -> Router {
-    let state = ServerState {
-        token: Arc::new(RwLock::new("valid-token".to_string())),
+    let state = ServerState::new(
+        Arc::new(RwLock::new("valid-token".to_string())),
         pool,
         cache,
-        glossary: Arc::new(RwLock::new(Glossary::new())),
-        concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
-        cache_controller: Arc::new(crate::cache_controller::CacheController::new(true)),
-    };
+        Arc::new(RwLock::new(Glossary::new())),
+        Arc::new(crate::cache_controller::CacheController::new(true)),
+    );
     Router::new()
         .route(
             "/translate",
@@ -631,4 +595,153 @@ async fn test_batch_item_count_over_limit_is_rejected() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_pairing_session_lifecycle() {
+    let pairing_mgr = Arc::new(pairing::PairingManager::new());
+    let (session_id, expires_in) = pairing_mgr
+        .create_session("client-1".to_string(), Some("Chrome".to_string()))
+        .await;
+    assert_eq!(expires_in, pairing::PAIRING_SESSION_TTL_SECS);
+
+    // 1. 未授权时轮询返回 pending
+    let poll_res = pairing_mgr
+        .poll_session(&session_id, "client-1", "real-token-123")
+        .await;
+    assert_eq!(poll_res, pairing::PairingPollResult::Pending);
+
+    // 2. 授权
+    let approved = pairing_mgr.approve(&session_id).await;
+    assert!(approved);
+
+    // 3. 首次轮询返回 approved 与 token
+    let poll_res2 = pairing_mgr
+        .poll_session(&session_id, "client-1", "real-token-123")
+        .await;
+    assert_eq!(
+        poll_res2,
+        pairing::PairingPollResult::Approved {
+            token: "real-token-123".to_string()
+        }
+    );
+
+    // 4. 一次性消费：二次轮询返回 expired
+    let poll_res3 = pairing_mgr
+        .poll_session(&session_id, "client-1", "real-token-123")
+        .await;
+    assert_eq!(poll_res3, pairing::PairingPollResult::Expired);
+}
+
+#[tokio::test]
+async fn test_pairing_reject_and_client_mismatch() {
+    let pairing_mgr = Arc::new(pairing::PairingManager::new());
+    let (session_id, _) = pairing_mgr
+        .create_session("client-1".to_string(), None)
+        .await;
+
+    // 客户端 ID 不匹配返回 expired
+    let poll_mismatch = pairing_mgr
+        .poll_session(&session_id, "evil-client", "real-token")
+        .await;
+    assert_eq!(poll_mismatch, pairing::PairingPollResult::Expired);
+
+    // 重新创建并拒绝
+    let (session_id2, _) = pairing_mgr
+        .create_session("client-2".to_string(), None)
+        .await;
+    let rejected = pairing_mgr.reject(&session_id2).await;
+    assert!(rejected);
+
+    let poll_reject = pairing_mgr
+        .poll_session(&session_id2, "client-2", "real-token")
+        .await;
+    assert_eq!(poll_reject, pairing::PairingPollResult::Rejected);
+}
+
+#[tokio::test]
+async fn test_pairing_http_endpoints_roundtrip() {
+    let cache = TranslationCache::in_memory().unwrap();
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let glossary = Arc::new(RwLock::new(Glossary::new()));
+    let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+    let token = Arc::new(RwLock::new("secret-pairing-token".to_string()));
+    let pairing_manager = Arc::new(pairing::PairingManager::new());
+
+    let app = create_router_with_pairing(
+        token,
+        Arc::new(cache),
+        pool,
+        glossary,
+        cache_controller,
+        pairing_manager.clone(),
+        None,
+    );
+
+    // 1. 发起配对申请
+    let req_body = serde_json::json!({
+        "client_id": "test-ext-1",
+        "browser_hint": "Chrome"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/pair/request")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::ORIGIN,
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+        )
+        .body(Body::from(req_body.to_string()))
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let session_id = data["session_id"].as_str().unwrap().to_string();
+    assert!(!session_id.is_empty());
+
+    // 2. 轮询待确认状态
+    let poll_body = serde_json::json!({
+        "session_id": session_id,
+        "client_id": "test-ext-1"
+    });
+    let poll_req = Request::builder()
+        .method("POST")
+        .uri("/pair/poll")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::ORIGIN,
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+        )
+        .body(Body::from(poll_body.to_string()))
+        .unwrap();
+    let poll_res = app.clone().oneshot(poll_req).await.unwrap();
+    assert_eq!(poll_res.status(), StatusCode::OK);
+    let poll_bytes = poll_res.into_body().collect().await.unwrap().to_bytes();
+    let poll_data: serde_json::Value = serde_json::from_slice(&poll_bytes).unwrap();
+    assert_eq!(poll_data["status"], "pending");
+
+    // 3. 桌面端批准
+    assert!(pairing_manager.approve(&session_id).await);
+
+    // 4. 再次轮询成功获得 Token
+    let poll_req2 = Request::builder()
+        .method("POST")
+        .uri("/pair/poll")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::ORIGIN,
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+        )
+        .body(Body::from(poll_body.to_string()))
+        .unwrap();
+    let poll_res2 = app.clone().oneshot(poll_req2).await.unwrap();
+    assert_eq!(poll_res2.status(), StatusCode::OK);
+    let poll_bytes2 = poll_res2.into_body().collect().await.unwrap().to_bytes();
+    let poll_data2: serde_json::Value = serde_json::from_slice(&poll_bytes2).unwrap();
+    assert_eq!(poll_data2["status"], "approved");
+    assert_eq!(poll_data2["token"], "secret-pairing-token");
 }

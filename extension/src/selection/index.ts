@@ -446,3 +446,106 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
 })
+
+// 选区动态划词悬浮图标逻辑（封闭式 Shadow DOM 隔离）
+let iconHost: HTMLElement | null = null
+
+function removeHoverIcon() {
+  if (iconHost) {
+    iconHost.remove()
+    iconHost = null
+  }
+}
+
+document.addEventListener('mouseup', (e) => {
+  // 如果点击发生在气泡内或图标内，不干扰
+  if (activeHost && activeHost.contains(e.target as Node)) return
+  if (iconHost && iconHost.contains(e.target as Node)) return
+
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed) {
+    removeHoverIcon()
+    return
+  }
+
+  const text = sel.toString().trim()
+  if (text.length < 2) {
+    removeHoverIcon()
+    return
+  }
+
+  // 检查是否发生在可编辑区域
+  const anchorNode = sel.anchorNode
+  if (anchorNode) {
+    const parent = anchorNode instanceof Element ? anchorNode : anchorNode.parentElement
+    if (parent?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) {
+      removeHoverIcon()
+      return
+    }
+  }
+
+  const range = sel.getRangeAt(0)
+  const rect = range.getBoundingClientRect()
+  if (rect.width === 0 && rect.height === 0) {
+    removeHoverIcon()
+    return
+  }
+
+  removeHoverIcon()
+
+  iconHost = document.createElement('div')
+  iconHost.id = 'transly-selection-hover-icon'
+  iconHost.setAttribute('data-no-translate', 'true')
+  iconHost.style.position = 'absolute'
+  iconHost.style.zIndex = '2147483646'
+  iconHost.style.left = `${window.scrollX + rect.right + 4}px`
+  iconHost.style.top = `${window.scrollY + rect.top - 20}px`
+
+  const iconShadow = iconHost.attachShadow({ mode: 'closed' })
+  const btn = document.createElement('div')
+  btn.style.width = '22px'
+  btn.style.height = '22px'
+  btn.style.borderRadius = '50%'
+  btn.style.background = '#4f46e5'
+  btn.style.color = '#ffffff'
+  btn.style.display = 'flex'
+  btn.style.alignItems = 'center'
+  btn.style.justifyContent = 'center'
+  btn.style.cursor = 'pointer'
+  btn.style.boxShadow = '0 2px 8px rgba(79, 70, 229, 0.4)'
+  btn.style.fontSize = '12px'
+  btn.style.fontWeight = 'bold'
+  btn.style.userSelect = 'none'
+  btn.textContent = '译'
+
+  btn.addEventListener('mousedown', (ev) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+  })
+
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    removeHoverIcon()
+
+    chrome.storage.local.get(['transly_target_lang', 'transly_engine'], (cfg) => {
+      showSelectionTranslation({
+        text,
+        target_lang: cfg.transly_target_lang || 'zh-CN',
+        engine: cfg.transly_engine || 'google',
+      }).catch((err) => {
+        console.warn('[Transly] 点击悬浮图标呼出气泡失败:', err)
+      })
+    })
+  })
+
+  iconShadow.appendChild(btn)
+  document.documentElement.appendChild(iconHost)
+})
+
+document.addEventListener('selectionchange', () => {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed) {
+    removeHoverIcon()
+  }
+})

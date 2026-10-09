@@ -35,6 +35,24 @@
   "btnRestore": {
     "message": "还原原文"
   },
+  "btnAutoPair": {
+    "message": "一键配对桌面端"
+  },
+  "pairingWaitingDesktop": {
+    "message": "请在桌面端点击“允许”..."
+  },
+  "pairingSuccess": {
+    "message": "配对成功 ✓"
+  },
+  "pairingRejected": {
+    "message": "桌面端已拒绝配对请求"
+  },
+  "pairingTimeout": {
+    "message": "配对超时，请重试"
+  },
+  "tokenManualToggle": {
+    "message": "手动输入 Token"
+  },
   "tokenPlaceholder": {
     "message": "粘贴桌面端配对 Token"
   },
@@ -97,6 +115,12 @@
   },
   "bubbleFailed": {
     "message": "翻译失败，请稍后重试"
+  },
+  "bubbleFailedGoogleNetwork": {
+    "message": "Google 翻译网络不可达，请在桌面端设置配置 DeepL / DeepSeek 后切换引擎"
+  },
+  "progressFailedGoogleNetwork": {
+    "message": "Google 翻译网络不可达，请在桌面端配置 DeepL / DeepSeek"
   },
   "bubbleEmptySelection": {
     "message": "未选中任何文本"

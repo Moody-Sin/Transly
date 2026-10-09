@@ -149,6 +149,8 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 
 let isObserving = false
 let currentObserver: MutationObserver | null = null
+let observerDebounceTimer: number | null = null
+const observerPendingNodes = new Set<Node>()
 let currentTargetLang = 'zh-CN'
 let currentEngine = 'google'
 
@@ -173,33 +175,37 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
   if (isObserving && currentObserver) return
   isObserving = true
 
-  const pendingNodes = new Set<Node>()
-  let debounceTimer: number | null = null
+  observerPendingNodes.clear()
+  if (observerDebounceTimer) {
+    clearTimeout(observerDebounceTimer)
+    observerDebounceTimer = null
+  }
 
   currentObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
         mutation.addedNodes.forEach((node) => {
           if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-            pendingNodes.add(node)
+            observerPendingNodes.add(node)
           }
         })
       } else if (mutation.type === 'characterData') {
         if (mutation.target.nodeType === Node.TEXT_NODE) {
           const textNode = mutation.target as Text
           if (!translatedTextSet.has(textNode)) {
-            pendingNodes.add(textNode)
+            observerPendingNodes.add(textNode)
           }
         }
       }
     }
 
-    if (pendingNodes.size > 0) {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = window.setTimeout(async () => {
+    if (observerPendingNodes.size > 0) {
+      if (observerDebounceTimer) clearTimeout(observerDebounceTimer)
+      observerDebounceTimer = window.setTimeout(async () => {
         const generation = currentGeneration
-        const nodesToProcess = Array.from(pendingNodes)
-        pendingNodes.clear()
+        const nodesToProcess = Array.from(observerPendingNodes)
+        observerPendingNodes.clear()
+        observerDebounceTimer = null
 
         // 增量批次是独立任务：重置计数基准，否则进度百分比与失败判定会被
         // 首屏任务的累计值污染（total 只增不减 → 永不收敛；
@@ -245,6 +251,11 @@ export function stopDynamicObserver() {
     currentObserver.disconnect()
     currentObserver = null
   }
+  if (observerDebounceTimer) {
+    clearTimeout(observerDebounceTimer)
+    observerDebounceTimer = null
+  }
+  observerPendingNodes.clear()
   isObserving = false
 }
 

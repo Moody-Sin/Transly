@@ -388,18 +388,34 @@ async function showSelectionTranslation(payload: {
   if (generation !== bubbleGeneration || !body.isConnected) return
 
   if (!res.ok) {
-    setBody(body, t('bubbleFailed'), 'error')
+    const isGoogle =
+      !payload.engine || payload.engine === 'google' || payload.engine === 'google_web'
+    const errorText = isGoogle ? t('bubbleFailedGoogleNetwork') : t('bubbleFailed')
+    setBody(body, errorText, 'error')
     return
   }
 
   const item = res.data?.items?.[0]
+  if (item?.status === 'failed') {
+    const isGoogle =
+      !payload.engine || payload.engine === 'google' || payload.engine === 'google_web'
+    const isNetwork = item.error_kind === 'network'
+    const errorText =
+      isGoogle && isNetwork ? t('bubbleFailedGoogleNetwork') : item.message || t('bubbleFailed')
+    setBody(body, errorText, 'error')
+    return
+  }
+
   const translated =
     item?.status === 'success' && item.text
       ? item.text
       : (res.data?.translations?.[0] as string | undefined)
 
   if (!translated) {
-    setBody(body, t('bubbleFailed'), 'error')
+    const isGoogle =
+      !payload.engine || payload.engine === 'google' || payload.engine === 'google_web'
+    const errorText = isGoogle ? t('bubbleFailedGoogleNetwork') : t('bubbleFailed')
+    setBody(body, errorText, 'error')
     return
   }
 

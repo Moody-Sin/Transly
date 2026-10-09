@@ -267,8 +267,92 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 })
 
+// 获取或生成持久客户端标识用于配对
+async function getOrCreateClientId(): Promise<string> {
+  const stored = await chrome.storage.local.get(['transly_client_id'])
+  if (stored.transly_client_id) {
+    return stored.transly_client_id
+  }
+  const clientId = 'ext-' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
+  await chrome.storage.local.set({ transly_client_id: clientId })
+  return clientId
+}
+
+async function performAutoPairing(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const clientId = await getOrCreateClientId()
+    const reqRes = await fetch(`${LOCAL_SERVER_URL}/pair/request`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        browser_hint: 'Chrome Extension',
+      }),
+    })
+
+    if (!reqRes.ok) {
+      return { ok: false, error: `发起配对失败 (HTTP ${reqRes.status})` }
+    }
+
+    const { session_id, expires_in } = (await reqRes.json()) as {
+      session_id: string
+      expires_in: number
+    }
+    const maxPolls = Math.min(expires_in || 60, 60)
+
+    for (let i = 0; i < maxPolls; i++) {
+      await new Promise((r) => setTimeout(r, 1000))
+      const pollRes = await fetch(`${LOCAL_SERVER_URL}/pair/poll`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session_id,
+          client_id: clientId,
+        }),
+      })
+
+      if (!pollRes.ok) {
+        continue
+      }
+
+      const pollData = (await pollRes.json()) as {
+        status: 'pending' | 'approved' | 'rejected' | 'expired'
+        token?: string
+      }
+
+      if (pollData.status === 'approved' && pollData.token) {
+        await chrome.storage.local.set({ transly_server_token: pollData.token })
+        return { ok: true }
+      }
+
+      if (pollData.status === 'rejected') {
+        return { ok: false, error: 'rejected' }
+      }
+
+      if (pollData.status === 'expired') {
+        return { ok: false, error: 'expired' }
+      }
+    }
+
+    return { ok: false, error: 'timeout' }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message }
+  }
+}
+
 // 后台转发请求至本地 127.0.0.1 桌面端翻译服务与状态查询
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'REQUEST_AUTO_PAIR') {
+    performAutoPairing()
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ ok: false, error: err.message }))
+    return true
+  }
+
   if (message.type === 'GET_TASK_PROGRESS') {
     const queryTabId = message.tabId
     const state = (queryTabId && tabProgressMap.get(queryTabId)) || null

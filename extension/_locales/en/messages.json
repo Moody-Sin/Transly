@@ -35,6 +35,24 @@
   "btnRestore": {
     "message": "Restore original"
   },
+  "btnAutoPair": {
+    "message": "Auto-pair with Desktop"
+  },
+  "pairingWaitingDesktop": {
+    "message": "Please click 'Allow' on desktop..."
+  },
+  "pairingSuccess": {
+    "message": "Paired successfully ✓"
+  },
+  "pairingRejected": {
+    "message": "Pairing request rejected on desktop"
+  },
+  "pairingTimeout": {
+    "message": "Pairing timed out, please retry"
+  },
+  "tokenManualToggle": {
+    "message": "Enter Token manually"
+  },
   "tokenPlaceholder": {
     "message": "Paste the desktop pairing token"
   },
@@ -97,6 +115,12 @@
   },
   "bubbleFailed": {
     "message": "Translation failed; please try again"
+  },
+  "bubbleFailedGoogleNetwork": {
+    "message": "Google Translation network unreachable. Configure DeepL / DeepSeek in desktop settings and switch engine."
+  },
+  "progressFailedGoogleNetwork": {
+    "message": "Google Translation unreachable. Configure DeepL / DeepSeek in desktop app."
   },
   "bubbleEmptySelection": {
     "message": "No text selected"

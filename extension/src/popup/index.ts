@@ -7,6 +7,8 @@ const btnRetry = document.getElementById('btn-retry') as HTMLButtonElement
 const btnRestore = document.getElementById('btn-restore') as HTMLButtonElement
 const inputToken = document.getElementById('input-token') as HTMLInputElement
 const btnSaveToken = document.getElementById('btn-save-token') as HTMLButtonElement
+const btnAutoPair = document.getElementById('btn-auto-pair') as HTMLButtonElement
+const pairingMessage = document.getElementById('pairing-message') as HTMLElement
 const selectEngine = document.getElementById('select-engine') as HTMLSelectElement
 const selectLang = document.getElementById('select-lang') as HTMLSelectElement
 const progressBox = document.getElementById('progress-box') as HTMLElement
@@ -55,12 +57,58 @@ btnSaveToken.addEventListener('click', () => {
   })
 })
 
+if (btnAutoPair) {
+  btnAutoPair.addEventListener('click', () => {
+    btnAutoPair.disabled = true
+    btnAutoPair.textContent = t('pairingWaitingDesktop')
+    if (pairingMessage) {
+      pairingMessage.style.display = 'block'
+      pairingMessage.style.color = '#4f46e5'
+      pairingMessage.textContent = t('pairingWaitingDesktop')
+    }
+
+    chrome.runtime.sendMessage({ type: 'REQUEST_AUTO_PAIR' }, (res) => {
+      btnAutoPair.disabled = false
+      btnAutoPair.textContent = t('btnAutoPair')
+
+      if (res && res.ok) {
+        if (pairingMessage) {
+          pairingMessage.style.color = '#10b981'
+          pairingMessage.textContent = t('pairingSuccess')
+          setTimeout(() => {
+            pairingMessage.style.display = 'none'
+          }, 3000)
+        }
+        chrome.storage.local.get(['transly_server_token'], (data) => {
+          if (data.transly_server_token) {
+            inputToken.value = data.transly_server_token
+          }
+        })
+        checkConnection()
+      } else {
+        const errType = res?.error
+        if (pairingMessage) {
+          pairingMessage.style.color = '#ef4444'
+          if (errType === 'rejected') {
+            pairingMessage.textContent = t('pairingRejected')
+          } else if (errType === 'timeout') {
+            pairingMessage.textContent = t('pairingTimeout')
+          } else {
+            pairingMessage.textContent = errType || t('pairingTimeout')
+          }
+        }
+      }
+    })
+  })
+}
+
 function checkConnection() {
   chrome.runtime.sendMessage({ type: 'CHECK_DESKTOP_SERVER' }, (response) => {
     if (!response || !response.serverRunning) {
       statusEl.textContent = t('connServerDown')
       statusEl.style.color = '#ef4444'
       btnTranslate.disabled = true
+      if (btnAutoPair) btnAutoPair.style.display = 'none'
       return
     }
 
@@ -68,14 +116,17 @@ function checkConnection() {
       statusEl.textContent = t('connTokenExpired')
       statusEl.style.color = '#f59e0b'
       btnTranslate.disabled = true
+      if (btnAutoPair) btnAutoPair.style.display = 'block'
     } else if (!response.paired) {
       statusEl.textContent = t('connUnpaired')
       statusEl.style.color = '#f59e0b'
       btnTranslate.disabled = true
+      if (btnAutoPair) btnAutoPair.style.display = 'block'
     } else {
       statusEl.textContent = t('connPaired')
       statusEl.style.color = '#10b981'
       btnTranslate.disabled = false
+      if (btnAutoPair) btnAutoPair.style.display = 'none'
     }
   })
 }
@@ -118,7 +169,11 @@ function renderProgressState(state: {
   } else if (state.status === 'finished') {
     progressText.textContent = t('progressFinished')
   } else if (state.status === 'failed') {
-    progressText.textContent = t('progressFailed', [String(failedCount || state.failedBatches)])
+    const isGoogle =
+      !selectEngine.value || selectEngine.value === 'google' || selectEngine.value === 'google_web'
+    progressText.textContent = isGoogle
+      ? t('progressFailedGoogleNetwork')
+      : t('progressFailed', [String(failedCount || state.failedBatches)])
   } else {
     progressText.textContent = t('progressTranslating')
   }

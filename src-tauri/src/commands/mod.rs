@@ -112,12 +112,21 @@ pub async fn translate(
         Ok(res) => {
             let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
-            let cache_target_engine = res.actual_engine();
-            if let Err(e) = cache_controller.set_if_current(start_gen, || {
-                cache.set(&text, &restored, &sl, &target_lang, cache_target_engine)
-            }) {
-                eprintln!("[Cache Write Warning] 桌面端翻译缓存写入失败: {e}");
-            }
+            let cache_target_engine = res.actual_engine().to_string();
+            let cache_arc = cache.inner().clone();
+            let controller = cache_controller.inner().clone();
+            // 译文在闭包后仍要交给术语库，故入闭包前先克隆一份
+            let restored_for_cache = restored.clone();
+            crate::cache_controller::write_cache_offloaded(controller, start_gen, move || {
+                cache_arc.set(
+                    &text,
+                    &restored_for_cache,
+                    &sl,
+                    &target_lang,
+                    &cache_target_engine,
+                )
+            })
+            .await;
             let g = glossary.read().await;
             Ok(TranslateOutcomeDto {
                 text: g.apply(&restored),
@@ -237,10 +246,17 @@ pub async fn translate_stream(
         );
     });
 
-    // 注册任务取消信号
+    // 注册任务取消信号。
+    //
+    // 键必须带上窗口标签：task_id 只是前端每窗口各自从 0 开始的局部计数
+    // （`useTaskRunner` 里是 `useRef(0)`），而主窗口与划词浮窗是两个独立窗口。
+    // 早期实现用全局 `HashMap<u32, _>`，浮窗发起取消时会直接杀掉主窗口
+    // 正在运行的同名任务，表现为毫无线索的「内部错误」。
+    let registry_key = (window.label().to_string(), task_id);
+
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     if let Ok(mut map) = deps.stream_registry.0.lock() {
-        map.insert(task_id, cancel_tx);
+        map.insert(registry_key.clone(), cancel_tx);
     }
 
     let stream_fut = active_engine.translate_stream(&req, on_chunk);
@@ -248,28 +264,50 @@ pub async fn translate_stream(
     let res = tokio::select! {
         outcome = stream_fut => {
             if let Ok(mut map) = deps.stream_registry.0.lock() {
-                map.remove(&task_id);
+                map.remove(&registry_key);
             }
             outcome
         }
-        _ = cancel_rx => {
+        // 必须只匹配 Ok(())：模式 `_ = cancel_rx` 会连 Err(RecvError) 一起吞掉，
+        // 而 Err 恰好在「同键 sender 被覆盖/丢弃」时发生——那属于注册表内部事件，
+        // 不该被当成用户主动取消，更不该因此把旧任务静默中止。
+        result = cancel_rx => {
             if let Ok(mut map) = deps.stream_registry.0.lock() {
-                map.remove(&task_id);
+                map.remove(&registry_key);
             }
-            return Err(TranslateErrorDto::from_error(&Error::Internal("流式任务已被前端主动取消".into())));
+            match result {
+                Ok(()) => return Err(TranslateErrorDto::from_error(&Error::Internal(
+                    "流式任务已被前端主动取消".into(),
+                ))),
+                // sender 因重复注册被覆盖而析构：按引擎结果继续等待即可，
+                // 但继续等待一个已无人持有的取消源没有意义，直接透传原始错误。
+                Err(_) => {
+                    return Err(TranslateErrorDto::from_error(&Error::Internal(
+                        "流式任务的取消通道已失效".into(),
+                    )))
+                }
+            }
         }
     };
 
     match res {
         Ok(res) => {
             let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
-            let cache_target_engine = res.actual_engine();
-            if let Err(e) = deps.cache_controller.set_if_current(start_gen, || {
-                deps.cache
-                    .set(&text, &restored, &sl, &target_lang, cache_target_engine)
-            }) {
-                eprintln!("[Cache Write Warning] 桌面端流式翻译缓存写入失败: {e}");
-            }
+            let cache_target_engine = res.actual_engine().to_string();
+            let cache_arc = Arc::clone(&deps.cache);
+            let controller = Arc::clone(&deps.cache_controller);
+            // 译文在闭包后仍要交给术语库，故入闭包前先克隆一份
+            let restored_for_cache = restored.clone();
+            crate::cache_controller::write_cache_offloaded(controller, start_gen, move || {
+                cache_arc.set(
+                    &text,
+                    &restored_for_cache,
+                    &sl,
+                    &target_lang,
+                    &cache_target_engine,
+                )
+            })
+            .await;
             let g = deps.glossary.read().await;
             Ok(TranslateOutcomeDto {
                 text: g.apply(&restored),
@@ -280,20 +318,29 @@ pub async fn translate_stream(
     }
 }
 
-/// 全局并发流式翻译任务取消注册表
+/// 流式任务的注册键：`(窗口标签, 窗口内序号)`。
+type StreamTaskKey = (String, u32);
+type StreamTaskSender = tokio::sync::oneshot::Sender<()>;
+
+/// 全局并发流式翻译任务取消注册表。
+///
+/// 键为 `(窗口标签, task_id)`：前端每个窗口的 `task_id` 都是各自从 0 开始的
+/// 局部计数，不带窗口维度会让一个窗口的取消请求误杀另一个窗口的任务。
+/// `tauri::Window` 属注入参数，不会出现在 specta 生成的前端签名中。
 #[derive(Clone, Default)]
 pub struct StreamTaskRegistry(
-    pub Arc<std::sync::Mutex<std::collections::HashMap<u32, tokio::sync::oneshot::Sender<()>>>>,
+    pub Arc<std::sync::Mutex<std::collections::HashMap<StreamTaskKey, StreamTaskSender>>>,
 );
 
 #[tauri::command]
 #[specta::specta]
 pub async fn cancel_stream_task(
     task_id: u32,
+    window: tauri::Window,
     registry: tauri::State<'_, Arc<StreamTaskRegistry>>,
 ) -> Result<(), String> {
     if let Ok(mut map) = registry.0.lock() {
-        if let Some(tx) = map.remove(&task_id) {
+        if let Some(tx) = map.remove(&(window.label().to_string(), task_id)) {
             let _ = tx.send(());
         }
     }
@@ -390,12 +437,17 @@ pub async fn delete_glossary_term(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32, String> {
+pub async fn clear_cache(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
+) -> Result<u32, String> {
+    // 必须走 CacheController 以递增 generation：否则在途请求会把刚清掉的记录写回。
     // DELETE 全表在 10 万条缓存下是长事务，必须移出主线程避免 UI 硬卡
     let cache_ref = cache.inner().clone();
+    let controller = cache_controller.inner().clone();
     tokio::task::spawn_blocking(move || {
-        cache_ref
-            .clear_all_cache()
+        controller
+            .clear_only(&cache_ref)
             .map(|n| n as u32)
             .map_err(|e| e.to_string())
     })
@@ -563,6 +615,22 @@ pub fn trigger_selection_replacement(
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     tauri::async_runtime::spawn(async move {
+        // 抑制标志必须覆盖**整个**流程（含第二阶段数秒的网络翻译）。
+        // 早期实现在一阶段结束（读到选区原文）就置回 false，而译文要到三阶段才写入，
+        // 中间这段窗口里剪贴板监听器会把选区原文当成用户新复制的内容再触发一次
+        // 浮窗翻译，同一段文本被翻译两次；更糟的是那次误触发会把去重缓存
+        // `last_clipboard` 改写成选区原文，导致用户随后手动复制同一段文本时不再触发。
+        //
+        // 用 RAII guard 保证任何提前 return 的路径都能正确复位，
+        // 否则翻译失败一次就会把剪贴板监听永久抑制。
+        struct SelFlagGuard(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for SelFlagGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _sel_guard = SelFlagGuard(Arc::clone(&sel_flag));
+
         // 第一阶段：原子获取模拟复制，读取所选文本并立即释放全局剪贴板锁
         let (detected_text, old_clipboard) = {
             let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
@@ -595,8 +663,6 @@ pub fn trigger_selection_replacement(
                 std::time::Duration::from_millis(300),
             )
             .await;
-
-            sel_flag.store(false, Ordering::SeqCst);
             // 离开本作用域自动释放 _guard 锁
             (detected, old_clipboard)
         };
@@ -653,18 +719,26 @@ pub fn trigger_selection_replacement(
                     Ok(res) => {
                         let restored =
                             transly_core::restore_code_blocks(&res.text, &preserved.stash);
-                        let cache_target_engine = res.actual_engine();
-                        if let Err(e) = deps.cache_controller.set_if_current(start_gen, || {
-                            deps.cache.set(
-                                clean,
-                                &restored,
-                                "auto",
-                                &target_lang,
-                                cache_target_engine,
-                            )
-                        }) {
-                            eprintln!("[Cache Write Warning] 划词原地替换缓存写入失败: {e}");
-                        }
+                        let cache_target_engine = res.actual_engine().to_string();
+                        let owned_text = clean.to_string();
+                        let owned_restored = restored.clone();
+                        let owned_target = target_lang.clone();
+                        let cache_arc = Arc::clone(&deps.cache);
+                        let controller = Arc::clone(&deps.cache_controller);
+                        crate::cache_controller::write_cache_offloaded(
+                            controller,
+                            start_gen,
+                            move || {
+                                cache_arc.set(
+                                    &owned_text,
+                                    &owned_restored,
+                                    "auto",
+                                    &owned_target,
+                                    &cache_target_engine,
+                                )
+                            },
+                        )
+                        .await;
                         let g = deps.glossary.read().await;
                         g.apply(&restored)
                     }
@@ -681,7 +755,7 @@ pub fn trigger_selection_replacement(
             let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
             sel_flag.store(true, Ordering::SeqCst);
 
-            if handle.clipboard().write_text(final_text).is_ok() {
+            if handle.clipboard().write_text(&final_text).is_ok() {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
                     #[cfg(target_os = "macos")]
@@ -697,10 +771,19 @@ pub fn trigger_selection_replacement(
                 tokio::time::sleep(std::time::Duration::from_millis(350)).await;
             }
 
-            // 恢复用户原有剪贴板内容
-            if let Some(old) = old_clipboard {
-                if let Err(e) = handle.clipboard().write_text(old) {
-                    eprintln!("[Clipboard Warning] 原地替换后恢复原剪贴板失败: {e}");
+            // 恢复用户原有剪贴板内容。
+            //
+            // 翻译阶段可能长达数秒，期间用户完全可能已在别的应用复制了新内容。
+            // 无条件写回 old_clipboard 会把那份新内容**彻底销毁**。
+            // 判据是「当前剪贴板是否仍等于本流程写入的译文」：
+            //   - 相等 → 期间无人干预，安全还原；
+            //   - 不等 → 已被外部改写，必须放弃还原，保留用户的新内容。
+            let current = handle.clipboard().read_text().ok();
+            if current.as_deref() == Some(final_text.as_str()) {
+                if let Some(old) = old_clipboard {
+                    if let Err(e) = handle.clipboard().write_text(old) {
+                        eprintln!("[Clipboard Warning] 原地替换后恢复原剪贴板失败: {e}");
+                    }
                 }
             }
 
@@ -913,12 +996,42 @@ pub async fn set_shortcut(
         ));
     }
 
-    // 持久化存储新快捷键
+    // 持久化存储新快捷键。
+    //
+    // 注册在前、持久化在后：若持久化失败，进程内的新快捷键已生效、旧快捷键已注销，
+    // 而 keyring 里仍是旧值。用户会看到「保存失败」，重启后快捷键却回退了——
+    // 进程行为与持久化配置不一致。因此持久化失败时必须对称回滚到旧快捷键。
     let to_save = clean.to_string();
-    tokio::task::spawn_blocking(move || crate::secrets::set_secret("custom_shortcut", &to_save))
-        .await
-        .map_err(|e| format!("快捷键调度异常: {e}"))?
-        .map_err(|e| format!("保存快捷键失败: {e}"))?;
+    let persist_res = tokio::task::spawn_blocking(move || {
+        crate::secrets::set_secret("custom_shortcut", &to_save)
+    })
+    .await
+    .map_err(|e| format!("快捷键调度异常: {e}"))?;
+
+    if let Err(e) = persist_res {
+        // 回滚：注销刚注册的新快捷键，恢复旧快捷键
+        let _ = app.global_shortcut().unregister(clean);
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_counter = selection_ctx.counter.clone();
+            let rollback_slot = pending_slot.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_translation(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_counter.clone(),
+                            rollback_slot.clone(),
+                        );
+                    }
+                },
+            );
+        }
+        return Err(format!("保存快捷键失败（已回滚到原快捷键）: {e}"));
+    }
 
     Ok(())
 }
@@ -1002,12 +1115,35 @@ pub async fn set_replace_shortcut(
     }
 
     let to_save = clean.to_string();
-    tokio::task::spawn_blocking(move || {
+    let persist_res = tokio::task::spawn_blocking(move || {
         crate::secrets::set_secret("custom_replace_shortcut", &to_save)
     })
     .await
-    .map_err(|e| format!("快捷键调度异常: {e}"))?
-    .map_err(|e| format!("保存快捷键失败: {e}"))?;
+    .map_err(|e| format!("快捷键调度异常: {e}"))?;
+
+    // 与 set_shortcut 同理：注册成功但持久化失败时必须对称回滚，
+    // 否则进程行为与 keyring 配置不一致，重启后快捷键回退。
+    if let Err(e) = persist_res {
+        let _ = app.global_shortcut().unregister(clean);
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_deps = deps.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_replacement(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_deps.clone(),
+                        );
+                    }
+                },
+            );
+        }
+        return Err(format!("保存快捷键失败（已回滚到原快捷键）: {e}"));
+    }
 
     Ok(())
 }
@@ -1215,6 +1351,62 @@ pub fn get_server_status(slot: tauri::State<'_, Arc<ServerStatusSlot>>) -> Serve
     slot.get()
 }
 
+/// 全局快捷键的注册状态。
+///
+/// `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
+/// 格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
+/// 莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ShortcutStatusDto {
+    /// 两个快捷键是否都注册成功
+    pub ok: bool,
+    /// 失败原因（注册成功时为 None）
+    pub reason: Option<String>,
+}
+
+/// 快捷键注册状态槽位。与 `ServerStatusSlot` 同构（Tauri 按 TypeId 存 state）。
+#[derive(Debug, Default)]
+pub struct ShortcutStatusSlot(pub std::sync::Mutex<Option<ShortcutStatusDto>>);
+
+impl ShortcutStatusSlot {
+    pub fn set_ok(&self) {
+        self.set(ShortcutStatusDto {
+            ok: true,
+            reason: None,
+        });
+    }
+
+    pub fn set_failed(&self, reason: String) {
+        self.set(ShortcutStatusDto {
+            ok: false,
+            reason: Some(reason),
+        });
+    }
+
+    pub fn set(&self, status: ShortcutStatusDto) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(status);
+        }
+    }
+
+    pub fn get(&self) -> ShortcutStatusDto {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|s| s.clone())
+            .unwrap_or(ShortcutStatusDto {
+                ok: false,
+                reason: Some("快捷键尚未完成注册".to_string()),
+            })
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_shortcut_status(slot: tauri::State<'_, Arc<ShortcutStatusSlot>>) -> ShortcutStatusDto {
+    slot.get()
+}
+
 fn validate_engine_name(engine: &str) -> Result<(), String> {
     match engine.to_lowercase().as_str() {
         "deepl" | "openai" | "deepseek" => Ok(()),
@@ -1246,6 +1438,21 @@ pub async fn save_llm_config(
 
     let url_val = base_url.unwrap_or_default().trim().to_string();
     let model_val = model.unwrap_or_default().trim().to_string();
+
+    // 端点校验：密钥会被明文发往该地址，因此必须限定协议。
+    // 允许任意 `http://` 意味着 API Key 可能以明文过网；
+    // 唯一的例外是本地回环（Ollama / vLLM 等本机部署，不出网卡）。
+    if !url_val.is_empty() {
+        let is_loopback = url_val.starts_with("http://127.0.0.1")
+            || url_val.starts_with("http://localhost")
+            || url_val.starts_with("http://[::1]");
+        if !url_val.starts_with("https://") && !is_loopback {
+            return Err(
+                "端点必须使用 https://（本地 Ollama 等本机服务可用 http://127.0.0.1 或 http://localhost）"
+                    .to_string(),
+            );
+        }
+    }
 
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         if url_val.is_empty() {

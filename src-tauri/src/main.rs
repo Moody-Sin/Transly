@@ -27,10 +27,17 @@ use src_tauri::commands::place_float_near_cursor;
 fn resolve_data_dir(identifier: &str) -> std::path::PathBuf {
     let dir = src_tauri::storage::app_data_dir(identifier);
     let _ = std::fs::create_dir_all(&dir);
+    // 先迁移最老版本的目录（<父目录>/Transly），再迁移漫游目录（%APPDATA%）。
+    // 顺序有讲究：两者都存在时以更早的历史数据为准，且迁移本身不覆盖已有新库。
     match src_tauri::storage::migrate_legacy_cache(&dir) {
         Ok(true) => println!("已将旧版缓存迁移至 {dir:?}"),
         Ok(false) => {}
         Err(e) => eprintln!("旧版缓存迁移失败（不影响启动）: {e}"),
+    }
+    match src_tauri::storage::migrate_roaming_cache(&dir) {
+        Ok(true) => println!("已将漫游目录缓存迁移至本机目录 {dir:?}"),
+        Ok(false) => {}
+        Err(e) => eprintln!("漫游目录缓存迁移失败（不影响启动）: {e}"),
     }
     dir
 }
@@ -118,6 +125,7 @@ fn main() {
     let counter_shared = request_counter.clone();
 
     let stream_task_registry = Arc::new(commands::StreamTaskRegistry::default());
+    let shortcut_status_slot = Arc::new(commands::ShortcutStatusSlot::default());
     let translation_deps = Arc::new(commands::TranslationDependencies {
         cache: cache.clone(),
         pool: pool.clone(),
@@ -138,6 +146,7 @@ fn main() {
         .manage(translation_deps)
         .manage(Arc::new(commands::FloatSticky::default()))
         .manage(stream_task_registry)
+        .manage(Arc::clone(&shortcut_status_slot))
         .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
         .manage(Arc::new(commands::SelectionContext {
@@ -221,7 +230,11 @@ fn main() {
             let app_handle = app.handle().clone();
             let sel_flag = selection_flag.clone();
             let counter = request_counter.clone();
-            let _ = app.global_shortcut().on_shortcut(
+            let selection_slot = shortcut_status_slot.clone();
+            let selection_accel = active_shortcut.clone();
+            // 注册失败必须可见：`Alt+Shift+D` 极易被其他软件占用，
+            // 静默丢弃会让用户看到「划词功能莫名其妙不工作」且毫无线索。
+            let selection_reg = app.global_shortcut().on_shortcut(
                 active_shortcut.as_str(),
                 move |_app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
@@ -234,6 +247,17 @@ fn main() {
                     }
                 },
             );
+            match selection_reg {
+                Ok(()) => {
+                    selection_slot.set_ok();
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[Shortcut Warning] 划词浮窗快捷键 {selection_accel} 注册失败：{err}"
+                    );
+                    selection_slot.set_failed(format!("{selection_accel}: {err}"));
+                }
+            }
 
             let replace_app_handle = app.handle().clone();
             let replace_sel_flag = selection_flag.clone();
@@ -241,7 +265,9 @@ fn main() {
                 .state::<Arc<commands::TranslationDependencies>>()
                 .inner()
                 .clone();
-            let _ = app.global_shortcut().on_shortcut(
+            let replace_accel = active_replace_shortcut.clone();
+            let replace_slot = shortcut_status_slot.clone();
+            let replace_reg = app.global_shortcut().on_shortcut(
                 active_replace_shortcut.as_str(),
                 move |_app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
@@ -253,6 +279,10 @@ fn main() {
                     }
                 },
             );
+            if let Err(err) = replace_reg {
+                eprintln!("[Shortcut Warning] 划词原地替换快捷键 {replace_accel} 注册失败：{err}");
+                replace_slot.set_failed(format!("{replace_accel}: {err}"));
+            }
 
             // 启动后台剪贴板变动监听任务
             let clip_handle = app.handle().clone();

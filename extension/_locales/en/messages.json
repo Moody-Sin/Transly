@@ -50,6 +50,36 @@
   "pairingTimeout": {
     "message": "Pairing timed out, please retry"
   },
+  "pairingDesktopUnreachable": {
+    "message": "Cannot reach the desktop app. Make sure Transly is running."
+  },
+  "pairingVerifyFailed": {
+    "message": "The desktop app responded unexpectedly. Restart Transly and retry."
+  },
+  "pairingFailedGeneric": {
+    "message": "Pairing failed, please retry"
+  },
+  "extTitle": {
+    "message": "Transly Immersive Translation"
+  },
+  "langNameZh": {
+    "message": "简体中文"
+  },
+  "langNameEn": {
+    "message": "English"
+  },
+  "langNameJa": {
+    "message": "日本語"
+  },
+  "langNameKo": {
+    "message": "한국어"
+  },
+  "langNameFr": {
+    "message": "Français"
+  },
+  "langNameDe": {
+    "message": "Deutsch"
+  },
   "tokenManualToggle": {
     "message": "Enter Token manually"
   },

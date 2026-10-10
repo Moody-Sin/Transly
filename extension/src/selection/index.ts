@@ -12,6 +12,7 @@
  *   因此整页翻译的 TreeWalker 不会把气泡自身的文案当成待翻译正文。
  */
 import { t } from '../i18n'
+import { countChars } from '../shared/batchPlan'
 
 const HOST_ID = 'transly-selection-bubble-host'
 
@@ -371,7 +372,9 @@ async function showSelectionTranslation(payload: {
   }
 
   const maxItemChars = await getMaxItemChars()
-  if (text.length > maxItemChars) {
+  // 必须按码点数比较（与服务端一致）：String.length 是 UTF-16 code unit 数，
+  // emoji/生僻字占 2 个 unit，会把服务端本可正常翻译的长选区误判为超长。
+  if (countChars(text) > maxItemChars) {
     setBody(body, t('bubbleTextTooLong'), 'error')
     return
   }

@@ -4,14 +4,14 @@
   "default_locale": "zh_CN",
   "version": "0.2.1",
   "description": "__MSG_extDescription__",
-  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus", "tabs"],
   "host_permissions": ["http://127.0.0.1:39281/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Transly 沉浸式翻译",
+    "default_title": "__MSG_extTitle__",
     "default_popup": "popup.html"
   }
 }

@@ -67,12 +67,12 @@ impl Glossary {
         // 提取模式串供 AhoCorasick 自动机构建
         let patterns: Vec<&str> = metas.iter().map(|m| m.source.as_str()).collect();
 
-        // 优先使用 LeftmostLongest 匹配策略保证最长前缀优先命中
-        // 如果所有术语都不区分大小写，或者混合构建：AhoCorasick 支持大小写折叠。
-        // 为了严格尊重每条术语各自独立的 match_case 选项：
-        // 我们构建一个 case-insensitive 自动机检索候选，后验校验 match_case 与 word_boundary。
+        // 采用 Standard 模式构建支持大小写折叠的自动机，配合 find_overlapping_iter
+        // 提取全部重叠候选区间，并在业务层后验过滤 match_case 与 word_boundary。
+        // 随后在候选池中执行贪婪 Leftmost-Longest 匹配，杜绝 LeftmostLongest
+        // 内部提前剪枝导致同形大小写敏感词或子词被静默吞掉的缺陷。
         let ac = match AhoCorasick::builder()
-            .match_kind(MatchKind::LeftmostLongest)
+            .match_kind(MatchKind::Standard)
             .ascii_case_insensitive(true)
             .build(&patterns)
         {
@@ -80,11 +80,18 @@ impl Glossary {
             Err(_) => return text.to_string(),
         };
 
-        let mut output = String::with_capacity(text.len());
-        let mut last_idx = 0;
+        struct CandidateMatch<'a> {
+            start: usize,
+            end: usize,
+            pattern_idx: usize,
+            target: &'a str,
+        }
 
-        for mat in ac.find_iter(text) {
-            let meta = metas[mat.pattern()];
+        let mut valid_matches = Vec::new();
+
+        for mat in ac.find_overlapping_iter(text) {
+            let pattern_idx = mat.pattern().as_usize();
+            let meta = metas[pattern_idx];
             let matched_slice = &text[mat.start()..mat.end()];
 
             // 1. 若要求区分大小写，检查是否与原始定义完全匹配
@@ -113,14 +120,33 @@ impl Glossary {
                 }
             }
 
-            // 校验通过：拼接上一段未匹配内容 + 目标替换文本
-            if mat.start() < last_idx {
-                // 防卫可能存在的重叠区段（因我们过滤掉了部分 match 导致游标推进顺序）
+            valid_matches.push(CandidateMatch {
+                start: mat.start(),
+                end: mat.end(),
+                pattern_idx,
+                target: &meta.target,
+            });
+        }
+
+        // 确定性贪婪排序：按起始位置升序；同起始位置按长度降序（长词优先）；同长度按模式优先级升序
+        valid_matches.sort_by(|a, b| {
+            a.start
+                .cmp(&b.start)
+                .then_with(|| (b.end - b.start).cmp(&(a.end - a.start)))
+                .then_with(|| a.pattern_idx.cmp(&b.pattern_idx))
+        });
+
+        let mut output = String::with_capacity(text.len());
+        let mut last_idx = 0;
+
+        for m in valid_matches {
+            if m.start < last_idx {
+                // 与先前已应用的长词或左侧词重叠，跳过
                 continue;
             }
-            output.push_str(&text[last_idx..mat.start()]);
-            output.push_str(&meta.target);
-            last_idx = mat.end();
+            output.push_str(&text[last_idx..m.start]);
+            output.push_str(m.target);
+            last_idx = m.end;
         }
 
         output.push_str(&text[last_idx..]);
@@ -219,5 +245,15 @@ mod tests {
         let text = "scatter the cat in bobcat";
         let result = glossary.apply(text);
         assert_eq!(result, "scatter the 猫 in bobcat");
+    }
+
+    #[test]
+    fn test_glossary_case_sensitive_and_insensitive_shadowing() {
+        let mut glossary = Glossary::new();
+        glossary.insert_with_options("Apple", "苹果公司", true);
+        glossary.insert_with_options("apple", "苹果水果", true);
+        let text = "I eat an apple from Apple";
+        let result = glossary.apply(text);
+        assert_eq!(result, "I eat an 苹果水果 from 苹果公司");
     }
 }

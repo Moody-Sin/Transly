@@ -600,19 +600,23 @@ pub fn trigger_selection_replacement(
 
         if let Some(text) = detected_text {
             let clean = text.trim();
-            if !clean.is_empty() {
+            if !clean.is_empty() && clean.chars().count() <= transly_core::MAX_ITEM_CHARS {
                 // 3. 智能推断目标语言（默认目标若为中文，中文对转英文；非中文对转中文）
                 let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
                 let engine = pool.default_engine();
+
+                // 保护代码块与行内标记符号
+                let preserved = transly_core::stash_code_blocks(clean);
                 let req = TranslationRequest {
-                    text: clean.to_string(),
+                    text: preserved.text.clone(),
                     source_lang: "auto".to_string(),
                     target_lang,
                 };
 
                 if let Ok(res) = engine.translate(&req).await {
+                    let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
                     let g = glossary.read().await;
-                    let final_text = g.apply(&res.text);
+                    let final_text = g.apply(&restored);
 
                     // 4. 将译文写入剪贴板并模拟粘贴覆盖原选区
                     if handle.clipboard().write_text(final_text).is_ok() {
@@ -643,6 +647,42 @@ pub fn trigger_selection_replacement(
 
         sel_flag.store(false, Ordering::SeqCst);
     });
+}
+
+/// 将浮窗移动到光标附近，并夹取到光标所在显示器的可视范围内。
+///
+/// 划词与剪贴板翻译的交互预期是「译文出现在选区附近」，不能沿用系统默认坐标；
+/// 光标或显示器信息不可用时保持系统默认位置，不阻断浮窗展示。
+pub fn place_float_near_cursor(win: &tauri::WebviewWindow) {
+    let (Ok(cursor), Ok(size)) = (win.cursor_position(), win.outer_size()) else {
+        return;
+    };
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+
+    let (min_x, min_y, max_x, max_y) = match monitor {
+        Some(m) => {
+            let pos = m.position();
+            let monitor_size = m.size();
+            (
+                pos.x as f64,
+                pos.y as f64,
+                pos.x as f64 + monitor_size.width as f64,
+                pos.y as f64 + monitor_size.height as f64,
+            )
+        }
+        None => (0.0, 0.0, f64::MAX, f64::MAX),
+    };
+
+    let width = size.width as f64;
+    let height = size.height as f64;
+    // 水平居中对齐光标，垂直放在光标下方，避开正在阅读的选区
+    let x = (cursor.x - width / 2.0).clamp(min_x, (max_x - width).max(min_x));
+    let y = (cursor.y + 20.0).clamp(min_y, (max_y - height).max(min_y));
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
 pub fn trigger_selection_translation(
@@ -705,6 +745,7 @@ pub fn trigger_selection_translation(
                     eprintln!("浮窗请求队列已满，丢弃最旧请求");
                 }
                 if let Some(float_win) = handle.get_webview_window("float") {
+                    place_float_near_cursor(&float_win);
                     let _ = float_win.show();
                     let _ = float_win.set_focus();
                     let _ = float_win.emit_to("float", "float-translate", req);
@@ -1159,6 +1200,44 @@ pub async fn get_llm_config(engine: String) -> Result<LlmConfigDto, String> {
     })
     .await
     .unwrap_or_else(|e| Err(format!("配置读取调度异常: {e}")))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_llm_style(
+    style: String,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+) -> Result<(), String> {
+    let s = style.trim().to_lowercase();
+    match s.as_str() {
+        "general" | "academic" | "literary" | "business" => {}
+        _ => return Err("无效的 LLM 翻译风格".to_string()),
+    }
+
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        crate::secrets::set_secret("llm_style", &s)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存 LLM 风格任务调度异常: {e}"))?
+    .map_err(|e| format!("写入 LLM 风格失败: {e}"))?;
+
+    pool.invalidate("openai").await;
+    pool.invalidate("deepseek").await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_llm_style() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::secrets::get_secret("llm_style")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "general".to_string())
+    })
+    .await
+    .map_err(|e| format!("读取 LLM 风格任务调度异常: {e}"))
 }
 
 #[tauri::command]

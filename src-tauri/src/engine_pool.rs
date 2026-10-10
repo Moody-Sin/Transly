@@ -119,16 +119,25 @@ impl EnginePool {
                         Some(custom_model)
                     };
 
+                    let style_str = get_key("llm_style");
+                    let style = match style_str.to_lowercase().as_str() {
+                        "academic" => transly_core::engine::openai::TranslationStyle::Academic,
+                        "literary" => transly_core::engine::openai::TranslationStyle::Literary,
+                        "business" => transly_core::engine::openai::TranslationStyle::Business,
+                        _ => transly_core::engine::openai::TranslationStyle::General,
+                    };
+
                     let llm: Arc<dyn TranslateEngine> = if id == "deepseek" {
                         let ds_url =
                             base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string());
                         let ds_model = model.unwrap_or_else(|| "deepseek-chat".to_string());
                         let mut engine =
-                            OpenAIEngine::new(key, Some(ds_url), Some(ds_model.clone()));
+                            OpenAIEngine::new(key, Some(ds_url), Some(ds_model.clone()))
+                                .with_style(style);
                         engine.set_engine_id(format!("deepseek:{ds_model}"));
                         Arc::new(engine)
                     } else {
-                        Arc::new(OpenAIEngine::new(key, base_url, model))
+                        Arc::new(OpenAIEngine::new(key, base_url, model).with_style(style))
                     };
                     Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
                 }

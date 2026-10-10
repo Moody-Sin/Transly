@@ -47,6 +47,17 @@
 - **桌面端翻译历史面板**：把一直存在但用户不可见的 `translation_cache` 表变为可视化「最近翻译」。主区新增「翻译 / 历史」顶层 Tab；历史页支持倒序分页浏览（每页 50 条，可加载更多）、单条复制、单条删除与刷新，空态给出「开启持久化缓存后记录会出现在这里」的引导。`transly-core` 新增 `CacheEntry` DTO 与 `list_recent` / `delete_entry`；命令层新增 `get_translation_history` / `delete_history_entry`（均下沉 `spawn_blocking`，SQLite 同步 I/O 不占 async 工作线程）。`created_at` 以 `u32` 纪元秒导出，规避 specta 将 `i64` 映射为 JS `BigInt` 导致的 `JSON.stringify` 崩溃（Lessons Learned 第 1 条）。该表按 `cache_key` 去重，故语义为「近期不重复的翻译记录」，而非逐次操作日志。
 
 ### 修复
+- **Tauri 2 窗口权限 ACL 缺失导致扩展自动配对时主窗口无法唤醒 (P1)**：在 `src-tauri/capabilities/default.json` 中补齐 `core:window:allow-show` 与 `core:window:allow-set-focus` 权限；主窗口常驻后台或关闭到托盘时，扩展一键配对请求可被可靠拉起置顶并聚焦。
+- **悬浮窗手动 Pin 状态在翻译完成时被自动粘滞机制覆盖关闭 (P1)**：`useTaskRunner` 粘滞判定接入 `isPinned` 配置，确保在翻译完成恢复 `idle` 时不会单方面向后端重置粘滞标志，保护用户手动置顶浮窗的操作不被意外冲掉。
+- **快捷键划词翻译遗漏光标位置计算导致浮窗弹出位置漂移 (P1)**：在 `trigger_selection_translation` 流程中补齐 `place_float_near_cursor` 调用，确保选区划词唤起浮窗时紧随光标所在显示器选区下方，并消除 `main.rs` 中的冗余重复实现。
+- **术语库 Aho-Corasick 大小写折叠与后验过滤冲突导致模式被静默吞掉 (P1)**：重构 `Glossary::apply` 算法，改用 `MatchKind::Standard` 配合 `find_overlapping_iter` 提取全候选区间并在业务层贪婪排序匹配，彻底杜绝全局大小写折叠导致同形大小写敏感词或子模式被提前剪枝丢弃的隐患。
+- **多引擎对比翻译模式 loading 状态聚合、请求竞态与取消支持补齐 (P2)**：在主界面对比翻译模式中引入 `isComparing` 聚合状态合并入 `isTranslating`，接入代际版本号隔离丢弃迟到响应，支持在途任务取消与防重复点击。
+- **LLM 领域风格选择（TranslationStyle）前后端参数打通 (P1)**：在命令层新增 `save_llm_style` 与 `get_llm_style` 命令并持久化至系统安全凭据库，`EnginePool` 动态装配风格至 `OpenAIEngine`，打通前端设置中心与底层翻译引擎。
+- **划词原地替换增加 Markdown 代码块保护与文本长度防线 (P2)**：在 `trigger_selection_replacement` 流程中接入 `transly_core::stash_code_blocks` 与 `restore_code_blocks`，防止代码段与变量名被误翻，并增加字符长度上限校验。
+- **流式 LLM SSE 解析跨网络 Chunk 多字节 UTF-8 截断乱码修复 (P2)**：改用字节缓冲区累计字节并在换行符处按行对齐解码，彻底杜绝中文等多字节字符被 TCP 分包拆开时产生 `\u{FFFD}` 乱码。
+- **FallbackEngine 流式降级补全 `on_chunk` 增量广播 (P2)**：流式主引擎报错降级时通过共享回调代理继续调用备用引擎流式接口，确保降级成功后打字机视图正常接收译文。
+- **后台剪贴板监听在禁用状态下降频休眠，减少常驻空唤醒 (P3)**：在监听关闭时将轮询休眠时间从 500ms 降频至 1500ms，大幅减少后台空唤醒与 CPU/电量损耗。
+- **翻译历史 CSV 导出增加电子表格公式注入防御 (P3)**：对以 `=,+,-,@,\t,\r` 开头的文本前置单引号转义，防御 CSV 电子表格公式注入攻击。
 - **扩展构建把共享模块拆成独立 chunk，Popup 与划词气泡会静默失效 (P1)**：`extension` 的构建是单次多入口（`rollupOptions.input` 含 4 个入口），`src/i18n` 被多个入口共享后会被 Rollup 提升为独立 chunk，`popup.js` / `selection.js` 于是以 `import { t } from "./assets/index-*.js"` 开头。但 `chrome.scripting.executeScript` 按**经典脚本**注入、`popup.html` 也用经典 `<script src>`，二者都不支持 ESM 导入 —— 扩展能正常加载、控制台无任何报错，但 Popup 与划词气泡全部失效。此前只有 3 个入口且恰好无共享模块，该缺陷一直被掩盖。现改为 `scripts/build.mjs` 逐入口独立构建（每个产物自包含），并在构建后**断言产物不含 ESM 导入、`dist/assets/` 不存在**，让该类回归无法再次静默通过。
 
 ## [0.2.1] - 2026-10-08

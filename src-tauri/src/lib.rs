@@ -41,6 +41,8 @@ macro_rules! app_command_builder {
             $crate::commands::delete_api_key,
             $crate::commands::save_llm_config,
             $crate::commands::get_llm_config,
+            $crate::commands::save_llm_style,
+            $crate::commands::get_llm_style,
             $crate::commands::get_shortcut,
             $crate::commands::set_shortcut,
             $crate::commands::get_replace_shortcut,

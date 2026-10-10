@@ -102,13 +102,21 @@ export default function HistoryPanel({ t, locale }: Props) {
       'Engine',
       'Time',
     ]
+    const sanitizeCsvField = (raw: string) => {
+      let val = raw
+      // 防御 Excel / 电子表格公式注入 (CSV Formula Injection)
+      if (/^[=+\-@\t\r]/.test(val)) {
+        val = `'${val}`
+      }
+      return `"${val.replace(/"/g, '""')}"`
+    }
     const rows = entries.map((e) => [
-      `"${e.source_text.replace(/"/g, '""')}"`,
-      `"${e.translated_text.replace(/"/g, '""')}"`,
-      e.source_lang,
-      e.target_lang,
-      e.engine,
-      new Date(e.created_at * 1000).toISOString(),
+      sanitizeCsvField(e.source_text),
+      sanitizeCsvField(e.translated_text),
+      sanitizeCsvField(e.source_lang),
+      sanitizeCsvField(e.target_lang),
+      sanitizeCsvField(e.engine),
+      `"${new Date(e.created_at * 1000).toISOString()}"`,
     ])
     const csvContent = '\uFEFF' + [header.join(','), ...rows.map((r) => r.join(','))].join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })

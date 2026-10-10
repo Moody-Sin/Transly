@@ -257,3 +257,17 @@
 1. **多模式替换必须使用单趟扫描自动机（如 `aho-corasick`）**：在原始输入文本上单趟线性扫描，命中区间后直接重写，已输出的替换内容绝不进入后续匹配，彻底杜绝级联误替换。
 2. **最长模式匹配优先（`MatchKind::LeftmostLongest`）**：自动机需确保长词先于短词前缀命中（如 `Deep Learning` 必先于 `Deep`）。
 3. **后验单词边界校验**：ASCII 词条匹配后需校验前后字符非 `[A-Za-z0-9_]`，兼顾多语种与大小写敏感独立开关。
+
+---
+
+## 18. Aho-Corasick 全局大小写折叠与后验过滤冲突导致模式被静默吞掉
+
+### 现象与问题
+- 术语库为兼顾部分「不区分大小写」词条，构建 `AhoCorasick` 时启用了 `ascii_case_insensitive(true)` 并使用 `MatchKind::LeftmostLongest`。
+- 但在消费命中时，又后验判断 `if meta.match_case && matched_slice != meta.source { continue; }`。
+- 当词库中同时存在大小写敏感词条（如 `"Apple"`）与同形词条（如小写的 `"apple"`）或短词条（如 `"app"`）时，自动机遇到小写文本 `"apple"` 时认为它命中了较靠前的模式 `"Apple"`。
+- 在后验逻辑中，由于大小写不匹配被直接 `continue` 跳过；但由于 `LeftmostLongest` 内部已将同一位置的其他重叠模式提前剪枝，后续的小写词条 `"apple"` 与子模式 `"app"` 完全得不到匹配机会，被静默吞掉！
+
+### 经验与规程
+1. **自动机内部剪枝不能与外部过滤条件错位**：若外部要对命中结果施加后验条件过滤，自动机不能在底层单方面执行贪婪剪枝（`LeftmostLongest`）。
+2. **全候选提取 + 业务层贪婪选择**：改用 `MatchKind::Standard` 与 `find_overlapping_iter` 提取全部候选重叠区间，在业务层完整校验（大小写一致性、单词边界）后再执行确定性的贪婪 Leftmost-Longest 替换，彻底消除同形模式被误杀隐患。

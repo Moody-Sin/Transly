@@ -273,7 +273,10 @@ async function getOrCreateClientId(): Promise<string> {
   if (stored.transly_client_id) {
     return stored.transly_client_id
   }
-  const clientId = 'ext-' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
+  const clientId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? `ext-${crypto.randomUUID()}`
+      : `ext-${Math.random().toString(36).substring(2, 15)}${Date.now().toString(36)}`
   await chrome.storage.local.set({ transly_client_id: clientId })
   return clientId
 }

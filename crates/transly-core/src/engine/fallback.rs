@@ -40,13 +40,22 @@ impl TranslateEngine for FallbackEngine {
         req: &TranslationRequest,
         on_chunk: super::StreamCallback,
     ) -> Result<TranslationResponse> {
-        match self.primary.translate_stream(req, on_chunk).await {
+        let callback = Arc::new(on_chunk);
+        let cb_primary = {
+            let cb = callback.clone();
+            Box::new(move |chunk: &str| cb(chunk))
+        };
+        match self.primary.translate_stream(req, cb_primary).await {
             Ok(res) => Ok(res),
             Err(primary_err) => {
                 if matches!(primary_err, Error::MissingCredentials(_)) {
                     return Err(primary_err);
                 }
-                match self.fallback.translate(req).await {
+                let cb_fallback = {
+                    let cb = callback.clone();
+                    Box::new(move |chunk: &str| cb(chunk))
+                };
+                match self.fallback.translate_stream(req, cb_fallback).await {
                     Ok(mut res) => {
                         if !res.engine.ends_with("(fallback)") {
                             res.engine = format!("{}(fallback)", res.engine);
@@ -194,6 +203,10 @@ mod tests {
         assert_eq!(res.text, "backup:hello");
         assert_eq!(res.engine, "backup(fallback)");
         assert_eq!(res.actual_engine(), "backup");
+        assert!(
+            !collected.lock().unwrap().is_empty(),
+            "降级至备用引擎时必须广播流式 chunk"
+        );
     }
 
     #[test]

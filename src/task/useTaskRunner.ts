@@ -42,7 +42,15 @@ const EMPTY: RunnerSnapshot = {
   effectiveTargetLang: null,
 }
 
-export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
+export interface UseTaskRunnerOptions {
+  isPinned?: boolean
+}
+
+export function useTaskRunner(
+  engine: string,
+  targetLang: string,
+  options?: UseTaskRunnerOptions,
+): TaskRunner {
   const [snapshot, setSnapshot] = useState<RunnerSnapshot>(EMPTY)
   // 供回调读取最新快照而不重建回调（retry 需同步判定当前是否允许重试）
   const snapshotRef = useRef(snapshot)
@@ -281,9 +289,11 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     [],
   )
 
-  // 翻译中/错误态时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
+  // 翻译中/错误态或用户手动钉住时粘滞浮窗（不失焦隐藏），终态且未钉住时恢复自动收起。
   // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
-  const needsSticky = isFloatWindow && (snapshot.state === 'running' || snapshot.error !== null)
+  const isPinned = Boolean(options?.isPinned)
+  const needsSticky =
+    isFloatWindow && (isPinned || snapshot.state === 'running' || snapshot.error !== null)
   useEffect(() => {
     if (!isFloatWindow) return
     commands.setFloatSticky(needsSticky).catch((err) => {

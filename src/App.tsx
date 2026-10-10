@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Languages,
   ArrowRight,
@@ -68,6 +68,7 @@ export default function App() {
   const [compareResults, setCompareResults] = useState<
     Array<{ engine: string; text: string; loading: boolean; error: string | null }>
   >([])
+  const compareGenRef = useRef(0)
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
     return (localStorage.getItem('transly_theme') as 'light' | 'dark' | 'system') || 'system'
   })
@@ -112,9 +113,10 @@ export default function App() {
   const isFloatWindow = window.location.hash === '#float'
 
   // 四类入口（输入框 / 划词 / 剪贴板 / 浮窗）共用同一任务状态机
-  const runner = useTaskRunner(engine, targetLang)
+  const runner = useTaskRunner(engine, targetLang, { isPinned: isFloatPinned })
   const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
-  const isTranslating = state === 'running'
+  const isComparing = isCompareMode && compareResults.some((r) => r.loading)
+  const isTranslating = isCompareMode ? isComparing : state === 'running'
 
   // 默认 Google 引擎在部分网络（如中国大陆）不可达：
   // 命中网络类错误时必须给出可执行的替代方案，而不是只报「检查网络」
@@ -224,6 +226,19 @@ export default function App() {
       })
       .catch((err) => {
         console.warn('[Transly] 读取划词替换快捷键失败：', err)
+      })
+
+    commands
+      .getLlmStyle()
+      .then((res) => {
+        if (res.status === 'ok') {
+          const val = res.data as 'general' | 'academic' | 'literary' | 'business'
+          setLlmStyle(val)
+          localStorage.setItem('transly_llm_style', val)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取 LLM 风格失败：', err)
       })
 
     loadGlossaryList()
@@ -862,7 +877,18 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     {isTranslating && (
                       <button
-                        onClick={runner.cancel}
+                        onClick={() => {
+                          if (isCompareMode) {
+                            compareGenRef.current += 1
+                            setCompareResults((prev) =>
+                              prev.map((item) =>
+                                item.loading ? { ...item, loading: false } : item,
+                              ),
+                            )
+                          } else {
+                            runner.cancel()
+                          }
+                        }}
                         className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
                       >
                         {t.task.btnCancel}
@@ -871,7 +897,8 @@ export default function App() {
                     <button
                       onClick={() => {
                         if (isCompareMode) {
-                          // 并发触发各引擎
+                          const activeGen = ++compareGenRef.current
+                          // 并发触发各引擎，带代际隔离
                           setCompareResults([
                             { engine: 'google', text: '', loading: true, error: null },
                             { engine: 'deepl', text: '', loading: true, error: null },
@@ -881,6 +908,7 @@ export default function App() {
                             commands
                               .translate(sourceText, 'auto', targetLang, engName)
                               .then((res) => {
+                                if (compareGenRef.current !== activeGen) return
                                 if (res.status === 'ok') {
                                   setCompareResults((prev) =>
                                     prev.map((item) =>
@@ -904,6 +932,7 @@ export default function App() {
                                 }
                               })
                               .catch((err) => {
+                                if (compareGenRef.current !== activeGen) return
                                 setCompareResults((prev) =>
                                   prev.map((item) =>
                                     item.engine === engName
@@ -1268,6 +1297,9 @@ export default function App() {
                     const val = e.target.value as 'general' | 'academic' | 'literary' | 'business'
                     setLlmStyle(val)
                     localStorage.setItem('transly_llm_style', val)
+                    commands.saveLlmStyle(val).catch((err) => {
+                      console.warn('[Transly] 保存 LLM 风格到后端失败:', err)
+                    })
                   }}
                   className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 cursor-pointer"
                 >

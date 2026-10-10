@@ -281,16 +281,16 @@ impl TranslateEngine for OpenAIEngine {
         use futures::StreamExt;
         let mut stream = resp.bytes_stream();
         let mut full_text = String::new();
-        let mut buffer = String::new();
+        let mut byte_buffer = Vec::new();
 
         while let Some(item) = stream.next().await {
             let bytes = item?;
-            let chunk_str = String::from_utf8_lossy(&bytes);
-            buffer.push_str(&chunk_str);
+            byte_buffer.extend_from_slice(&bytes);
 
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim().to_string();
-                buffer.drain(..=newline_pos);
+            while let Some(newline_pos) = byte_buffer.iter().position(|&b| b == b'\n') {
+                let line_bytes = &byte_buffer[..newline_pos];
+                let line = String::from_utf8_lossy(line_bytes).trim().to_string();
+                byte_buffer.drain(..=newline_pos);
 
                 if line.is_empty() {
                     continue;

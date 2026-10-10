@@ -60,7 +60,8 @@ macro_rules! app_command_builder {
             $crate::commands::ocr_clipboard_image,
             $crate::commands::set_clipboard_monitor,
             $crate::commands::get_clipboard_monitor,
-            $crate::commands::get_server_status
+            $crate::commands::get_server_status,
+            $crate::commands::get_shortcut_status
         ])
     };
 }

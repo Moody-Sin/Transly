@@ -10,8 +10,15 @@ use std::path::{Path, PathBuf};
 /// 旧版手拼 `%APPDATA%\Transly`，与沙箱、清理、多用户策略都对不上，
 /// macOS 上也不符合平台惯例。
 pub fn app_data_dir(identifier: &str) -> PathBuf {
+    // Windows 必须用 LOCALAPPDATA 而非 APPDATA。
+    //
+    // APPDATA 是**漫游**目录：域环境下会被组策略同步到用户登录的其它机器与备份介质。
+    // 把翻译历史与用户自建术语库放进漫游目录，等于在用户不知情时把这些数据复制出本机，
+    // 与「本地优先、零上报」的产品承诺直接冲突。LOCALAPPDATA 才是本机专属数据目录。
     #[cfg(target_os = "windows")]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from);
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from);
     #[cfg(target_os = "macos")]
     let base =
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
@@ -21,6 +28,61 @@ pub fn app_data_dir(identifier: &str) -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
 
     base.unwrap_or_else(std::env::temp_dir).join(identifier)
+}
+
+/// 把旧版漫游目录（`%APPDATA%/<identifier>`）下的缓存库迁移到本机目录。
+///
+/// 与 `migrate_legacy_cache` 同理，术语库与翻译缓存同处一个 SQLite 文件，
+/// 不迁移就等于丢掉用户自建术语。
+///
+/// 迁移是幂等且不覆盖的：新库已存在时一律跳过。
+pub fn migrate_roaming_cache(new_dir: &Path) -> std::io::Result<bool> {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(roaming_root) = std::env::var_os("APPDATA").map(PathBuf::from) else {
+            return Ok(false);
+        };
+        let Some(identifier) = new_dir.file_name() else {
+            return Ok(false);
+        };
+        let roaming_dir = roaming_root.join(identifier);
+        if roaming_dir == new_dir {
+            return Ok(false);
+        }
+        migrate_db_files(&roaming_dir, new_dir)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 非 Windows 平台不存在漫游目录概念
+        let _ = new_dir;
+        Ok(false)
+    }
+}
+
+/// 把 `from_dir` 下的 cache.db 系列文件整体迁移到 `to_dir`。
+///
+/// 三个文件作为**原子单元**处理：新目录已有主库即视为已完成迁移，
+/// 绝不单独搬运旁路文件——SQLite 的 WAL 不校验盐值，
+/// 陈旧 WAL 被回放进新库会造成静默的数据损坏。
+fn migrate_db_files(from_dir: &Path, to_dir: &Path) -> std::io::Result<bool> {
+    let from_db = from_dir.join("cache.db");
+    let to_db = to_dir.join("cache.db");
+
+    if to_db.exists() || !from_db.exists() {
+        return Ok(false);
+    }
+
+    std::fs::create_dir_all(to_dir)?;
+    let mut migrated = false;
+    for suffix in DB_SUFFIXES {
+        let from = from_dir.join(format!("cache.db{suffix}"));
+        let to = to_dir.join(format!("cache.db{suffix}"));
+        if from.exists() {
+            std::fs::rename(&from, &to)?;
+            migrated = true;
+        }
+    }
+    Ok(migrated)
 }
 
 /// 缓存库涉及的全部文件：主库与 WAL 模式的旁路文件。
@@ -42,17 +104,8 @@ pub fn migrate_legacy_cache(new_dir: &Path) -> std::io::Result<bool> {
         return Ok(false);
     }
 
-    let mut migrated = false;
-    for suffix in DB_SUFFIXES {
-        let from = legacy_dir.join(format!("cache.db{suffix}"));
-        let to = new_dir.join(format!("cache.db{suffix}"));
-        // 新库已存在即视为已完成迁移，绝不覆盖
-        if from.exists() && !to.exists() {
-            std::fs::rename(&from, &to)?;
-            migrated = true;
-        }
-    }
-    Ok(migrated)
+    // 三个文件必须作为**原子单元**整体判断（见 `migrate_db_files` 的说明）。
+    migrate_db_files(&legacy_dir, new_dir)
 }
 
 #[cfg(test)]
@@ -127,6 +180,62 @@ mod tests {
             b"current-db",
             "绝不能覆盖新库"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 回归：新目录已有主库但缺 `-wal` 时，旧目录遗留的 WAL **绝不能**被搬进去。
+    /// SQLite 的 WAL 不在主库文件头保存盐值、只校验页大小，陈旧 WAL 会被回放进
+    /// 新库并重放其中的页，造成静默的数据损坏（用户自建术语可能混入旧库内容）。
+    #[test]
+    fn test_migrate_never_mixes_stale_wal_into_new_db() {
+        let root = temp_dir("stalewal");
+        let legacy = root.join("Transly");
+        let new_dir = root.join("com.transly.desktop");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+
+        // 典型触发态：新库已在用（主库存在），旧版本回滚后留下 WAL 旁路文件
+        std::fs::write(new_dir.join("cache.db"), b"current-db").unwrap();
+        std::fs::write(legacy.join("cache.db"), b"legacy-db").unwrap();
+        std::fs::write(legacy.join("cache.db-wal"), b"stale-wal").unwrap();
+        std::fs::write(legacy.join("cache.db-shm"), b"stale-shm").unwrap();
+
+        let migrated = migrate_legacy_cache(&new_dir).unwrap();
+        assert!(!migrated, "主库已存在时整体判定为无需迁移");
+
+        assert!(
+            !new_dir.join("cache.db-wal").exists(),
+            "陈旧 WAL 绝不能被搬进新库（会导致数据损坏）"
+        );
+        assert!(
+            !new_dir.join("cache.db-shm").exists(),
+            "陈旧 SHM 绝不能被搬进新库"
+        );
+        assert_eq!(
+            std::fs::read(new_dir.join("cache.db")).unwrap(),
+            b"current-db"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 旧目录只有旁路文件而没有主库时，属于残留垃圾，不应被当作迁移源。
+    #[test]
+    fn test_migrate_ignores_orphan_sidecar_files() {
+        let root = temp_dir("orphan");
+        let legacy = root.join("Transly");
+        let new_dir = root.join("com.transly.desktop");
+        std::fs::create_dir_all(&legacy).unwrap();
+
+        // 只有 WAL 与 SHM，主库缺失 —— SQLite 不会把这种组合视作有效数据库
+        std::fs::write(legacy.join("cache.db-wal"), b"orphan-wal").unwrap();
+        std::fs::write(legacy.join("cache.db-shm"), b"orphan-shm").unwrap();
+
+        let migrated = migrate_legacy_cache(&new_dir).unwrap();
+        assert!(!migrated, "主库缺失时不应迁移任何文件");
+        assert!(!new_dir.join("cache.db-wal").exists());
+        assert!(!new_dir.join("cache.db").exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }

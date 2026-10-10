@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { planBatchRanges, type BatchLimits } from './batchPlan.ts'
+import { planBatchRanges, splitByViewport, type BatchLimits } from './batchPlan.ts'
 
 const LIMITS: BatchLimits = {
   maxBatchItems: 30,
@@ -70,5 +70,25 @@ test('上限为 0 或负数时退化为每项一批，不产出空区间', () =>
       [1, 2],
       [2, 3],
     ],
+  )
+})
+
+test('分流视口批次：首屏优先置顶，离屏保序延后，总集合不漏不重', () => {
+  // 模拟待翻译节点项
+  const items = [
+    { id: '1', inViewport: false, text: 'header offscreen' },
+    { id: '2', inViewport: true, text: 'hero title' },
+    { id: '3', inViewport: true, text: 'hero subtitle' },
+    { id: '4', inViewport: false, text: 'footer offscreen' },
+  ]
+  const { prioritized, inViewportCount, offscreenCount } = splitByViewport(items)
+
+  assert.equal(inViewportCount, 2)
+  assert.equal(offscreenCount, 2)
+  assert.equal(prioritized.length, 4)
+  assert.deepEqual(
+    prioritized.map((i) => i.id),
+    ['2', '3', '1', '4'],
+    '视口内项目必须排在前部且各自保持原有相对顺序',
   )
 })

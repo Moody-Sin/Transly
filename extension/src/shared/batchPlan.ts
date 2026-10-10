@@ -53,3 +53,36 @@ export function planBatchRanges(texts: string[], limits: BatchLimits): Array<[nu
   }
   return ranges
 }
+
+/**
+ * 视口调度优先级排序（首屏优先 Viewport-First）。
+ *
+ * 将收集到的待翻译项目分为视口内与视口外两组，
+ * 视口内项目优先排列在头部，视口外在后，各自保持文档原有前向顺序。
+ *
+ * @param items 包含 inViewport 标志的项目数组
+ */
+export function splitByViewport<T extends { inViewport?: boolean }>(
+  items: T[],
+): {
+  prioritized: T[]
+  inViewportCount: number
+  offscreenCount: number
+} {
+  const inViewport: T[] = []
+  const offscreen: T[] = []
+
+  for (const item of items) {
+    if (item.inViewport) {
+      inViewport.push(item)
+    } else {
+      offscreen.push(item)
+    }
+  }
+
+  return {
+    prioritized: [...inViewport, ...offscreen],
+    inViewportCount: inViewport.length,
+    offscreenCount: offscreen.length,
+  }
+}

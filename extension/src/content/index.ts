@@ -260,14 +260,48 @@ interface TextNodeEntry {
   id: string
   node: Text
   text: string
+  inViewport?: boolean
+}
+
+function isNodeInViewport(node: Text): boolean {
+  try {
+    const parent = node.parentElement
+    if (!parent) return false
+    const rect = parent.getBoundingClientRect()
+    return (
+      rect.bottom > 0 &&
+      rect.top < (window.innerHeight || document.documentElement.clientHeight) &&
+      rect.right > 0 &&
+      rect.left < (window.innerWidth || document.documentElement.clientWidth) &&
+      rect.width > 0 &&
+      rect.height > 0
+    )
+  } catch {
+    return false
+  }
 }
 
 // 维护失败文本节点映射，供局部重试与状态报告。
-// 强引用 Map 会随 SPA 导航与多次还原无限增长，并钉住已脱离文档的 Text 节点，
-// 因此容量必须封顶：超出时丢弃最旧项（其重试机会让位于近期失败）。
 const failedItemsMap = new Map<string, TextNodeEntry & { errorKind?: string }>()
 const MAX_FAILED_ITEMS = 2_000
 let nodeSequenceId = 0
+
+/**
+ * 判断是否为叶子富文本容器（例如 <p>、<li> 等段落，包含行内标签子节点）
+ */
+export function isLeafRichTextContainer(el: Element): boolean {
+  const tag = el.tagName.toUpperCase()
+  if (!['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TD', 'TH'].includes(tag)) {
+    return false
+  }
+  for (const child of Array.from(el.children)) {
+    const childTag = child.tagName.toUpperCase()
+    if (!['A', 'SPAN', 'STRONG', 'EM', 'B', 'I', 'CODE', 'MARK', 'SMALL'].includes(childTag)) {
+      return false
+    }
+  }
+  return true
+}
 
 function rememberFailed(entry: TextNodeEntry & { errorKind?: string }) {
   failedItemsMap.delete(entry.id)
@@ -293,7 +327,14 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
       const text = textNode.nodeValue?.trim()
       if (text && text.length >= 2 && !/^[\d\s.,/#!$%^&*;:{}=\-_`~()]+$/.test(text)) {
         nodeSequenceId += 1
-        return [{ id: `node_${nodeSequenceId}`, node: textNode, text: textNode.nodeValue || '' }]
+        return [
+          {
+            id: `node_${nodeSequenceId}`,
+            node: textNode,
+            text: textNode.nodeValue || '',
+            inViewport: isNodeInViewport(textNode),
+          },
+        ]
       }
     }
     return []
@@ -318,10 +359,12 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
   let currentNode = walker.nextNode()
   while (currentNode) {
     nodeSequenceId += 1
+    const textNode = currentNode as Text
     entries.push({
       id: `node_${nodeSequenceId}`,
-      node: currentNode as Text,
-      text: currentNode.nodeValue || '',
+      node: textNode,
+      text: textNode.nodeValue || '',
+      inViewport: isNodeInViewport(textNode),
     })
     currentNode = walker.nextNode()
   }
@@ -452,7 +495,22 @@ interface BatchResponsePayload {
   }>
 }
 
-import { planBatchRanges, type BatchLimits } from '../shared/batchPlan'
+import { planBatchRanges, splitByViewport, type BatchLimits } from '../shared/batchPlan'
+import { buildRichTextComposite, restoreRichTextComposite, type TextPart } from '../shared/richText'
+
+// 供单元测试与段落保真翻译调用的富文本装箱与拆箱包装
+export function processRichTextParagraph(
+  parts: TextPart[],
+  translated: string,
+): Map<string, string> | null {
+  const composite = buildRichTextComposite(parts)
+  const baseIds = parts.filter((_, i) => i % 2 === 0).map((p) => p.id)
+  const placeholderToId = new Map<string, string>()
+  for (const [id, ph] of composite.idToPlaceholder) {
+    placeholderToId.set(ph, id)
+  }
+  return restoreRichTextComposite(translated, baseIds, placeholderToId)
+}
 
 /**
  * 当前任务使用的批量上限。
@@ -777,7 +835,11 @@ export async function translateFullPage(
   await refreshBatchLimits()
   if (taskGeneration !== currentGeneration) return
 
-  const entries = currentTaskEntries
+  // 视口感知调度（首屏优先 Viewport-First）：
+  // 将当前视口内可见文本优先置顶先发请求，极速呈现首屏译文；离屏内容平滑后置处理
+  const { prioritized } = splitByViewport(currentTaskEntries)
+  currentTaskEntries = prioritized
+  const entries = prioritized
   currentTaskTotal = entries.length
   currentTaskCompleted = 0
 

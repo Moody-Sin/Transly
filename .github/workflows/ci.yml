@@ -67,7 +67,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: 安装前端依赖
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
       - name: 校验 Specta 类型绑定同步
         run: |
           pnpm run generate:bindings
@@ -82,6 +82,33 @@ jobs:
         run: pnpm run test:task
       - name: 浏览器插件构建校验
         run: pnpm --filter transly-extension run build
+
+  repo-hygiene:
+    name: 仓库卫生检查（构建产物 / 大文件）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # PROJECT_RULES 的 CI 清单要求「禁止提交文件检查（大文件、node_modules）」，
+      # 此前只有文档声明而无任何自动化守护。
+      - name: 禁止跟踪构建产物与依赖目录
+        run: |
+          offenders=$(git ls-files | grep -E '(^|/)(node_modules|target|dist|dist-firefox|\.superpowers)/' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::以下构建产物/依赖目录被错误跟踪："
+            echo "$offenders"
+            exit 1
+          fi
+          echo "未发现被跟踪的构建产物"
+      - name: 禁止跟踪超大文件（>1MB）
+        run: |
+          # Cargo.lock / pnpm-lock.yaml 等锁文件属正常，此处只拦真正的大文件
+          big=$(git ls-files -z | xargs -0 -r ls -l 2>/dev/null | awk '$5 > 1048576 {print $5" "$9}')
+          if [ -n "$big" ]; then
+            echo "::error::以下文件超过 1MB："
+            echo "$big"
+            exit 1
+          fi
+          echo "未发现超大文件"
 
   security-scan:
     name: 安全密钥扫描 (Gitleaks)

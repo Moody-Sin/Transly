@@ -46,7 +46,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring
 
       - name: 安装前端依赖
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: 生成强类型绑定
         run: pnpm run generate:bindings
@@ -79,13 +79,23 @@ jobs:
 
       - name: 构建扩展
         run: |
-          pnpm install
+          pnpm install --frozen-lockfile
+          # 从 git tag 注入版本号：manifest.json 里的硬编码版本会随 tag 变化而漂移，
+          # 导致 Chrome Web Store 以「版本号未递增」拒绝上传。
+          # tag 形如 v0.3.0，需剥离前缀 v 才是合法 manifest version。
+          export TRANSLY_EXT_VERSION="${GITHUB_REF_NAME#v}"
+          echo "扩展版本号：$TRANSLY_EXT_VERSION"
           pnpm --filter transly-extension run build
+          pnpm --filter transly-extension run build:firefox
 
       - name: 压缩扩展产物
         run: |
           cd extension/dist
           zip -r ../../transly-extension-${{ github.ref_name }}.zip ./*
+          cd ../..
+          # Firefox 专属产物（gecko ID 与 background.scripts 兼容层）
+          cd extension/dist-firefox
+          zip -r ../../transly-extension-firefox-${{ github.ref_name }}.zip ./*
           cd ../..
 
       - name: 上传扩展发布产物至 GitHub Release
@@ -94,4 +104,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: transly-extension-${{ github.ref_name }}.zip
+          files: |
+            transly-extension-${{ github.ref_name }}.zip
+            transly-extension-firefox-${{ github.ref_name }}.zip

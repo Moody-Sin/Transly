@@ -5,12 +5,34 @@ use serde::{Deserialize, Serialize};
 use super::{TranslateEngine, TranslationRequest, TranslationResponse};
 use crate::{Error, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranslationStyle {
+    #[default]
+    General,
+    Academic,
+    Literary,
+    Business,
+}
+
+impl TranslationStyle {
+    pub fn prompt_modifier(&self) -> &'static str {
+        match self {
+            Self::General => "Translate the given text directly and accurately without any explanations.",
+            Self::Academic => "Adopt a formal, academic tone. Preserve technical terminology, mathematical notation, and precise phrasing rigorously without any explanations.",
+            Self::Literary => "Adopt an expressive, natural, and idiomatic literary style. Preserve nuances, flow, and cultural context while maintaining fidelity without any explanations.",
+            Self::Business => "Adopt a professional, polite, and executive business tone suitable for formal workplace correspondence without any explanations.",
+        }
+    }
+}
+
 pub struct OpenAIEngine {
     client: Client,
     api_key: String,
     base_url: String,
     model: String,
     engine_id: String,
+    style: TranslationStyle,
 }
 
 #[derive(Serialize)]
@@ -81,7 +103,21 @@ impl OpenAIEngine {
             base_url: base,
             model,
             engine_id,
+            style: TranslationStyle::General,
         }
+    }
+
+    pub fn set_style(&mut self, style: TranslationStyle) {
+        self.style = style;
+    }
+
+    pub fn with_style(mut self, style: TranslationStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    pub fn style(&self) -> TranslationStyle {
+        self.style
     }
 
     pub fn set_engine_id(&mut self, id: impl Into<String>) {
@@ -97,6 +133,13 @@ impl OpenAIEngine {
         );
         engine.engine_id = "deepseek:deepseek-chat".to_string();
         engine
+    }
+
+    pub fn build_system_prompt(&self, target_lang: &str) -> String {
+        format!(
+            "You are a professional translator. Direct target language: '{target_lang}'. {modifier} Do not explain, greet, or wrap in markdown fences. Keep original line breaks and formatting identical.",
+            modifier = self.style.prompt_modifier()
+        )
     }
 }
 
@@ -127,10 +170,7 @@ impl TranslateEngine for OpenAIEngine {
             return Err(Error::MissingCredentials("API Key 不能为空".into()));
         }
 
-        let system_prompt = format!(
-            "You are a professional, accurate translator. Translate the given text directly into target language '{tl}' without any explanations, pleasantries, or markdown decoration. Keep original line breaks and formatting identical.",
-            tl = req.target_lang
-        );
+        let system_prompt = self.build_system_prompt(&req.target_lang);
 
         let body = ChatCompletionRequest {
             model: &self.model,
@@ -144,7 +184,11 @@ impl TranslateEngine for OpenAIEngine {
                     content: &req.text,
                 },
             ],
-            temperature: 0.2,
+            temperature: match self.style {
+                TranslationStyle::Academic => 0.1,
+                TranslationStyle::General | TranslationStyle::Business => 0.2,
+                TranslationStyle::Literary => 0.4,
+            },
             stream: false,
         };
 
@@ -193,10 +237,7 @@ impl TranslateEngine for OpenAIEngine {
             return Err(Error::MissingCredentials("API Key 不能为空".into()));
         }
 
-        let system_prompt = format!(
-            "You are a professional, accurate translator. Translate the given text directly into target language '{tl}' without any explanations, pleasantries, or markdown decoration. Keep original line breaks and formatting identical.",
-            tl = req.target_lang
-        );
+        let system_prompt = self.build_system_prompt(&req.target_lang);
 
         let body = ChatCompletionRequest {
             model: &self.model,
@@ -210,7 +251,11 @@ impl TranslateEngine for OpenAIEngine {
                     content: &req.text,
                 },
             ],
-            temperature: 0.2,
+            temperature: match self.style {
+                TranslationStyle::Academic => 0.1,
+                TranslationStyle::General | TranslationStyle::Business => 0.2,
+                TranslationStyle::Literary => 0.4,
+            },
             stream: true,
         };
 
@@ -332,5 +377,26 @@ mod tests {
         assert_eq!(ds.base_url, "https://api.deepseek.com");
         assert_eq!(ds.model, "deepseek-chat");
         assert_eq!(ds.id(), "deepseek:deepseek-chat");
+    }
+
+    #[test]
+    fn test_translation_style_prompts() {
+        let engine = OpenAIEngine::new("key", None, None);
+        assert_eq!(engine.style(), TranslationStyle::General);
+
+        let general_prompt = engine.build_system_prompt("zh-CN");
+        assert!(general_prompt.contains("Translate the given text directly and accurately"));
+
+        let academic = engine.with_style(TranslationStyle::Academic);
+        let academic_prompt = academic.build_system_prompt("zh-CN");
+        assert!(academic_prompt.contains("formal, academic tone"));
+
+        let literary = academic.with_style(TranslationStyle::Literary);
+        let literary_prompt = literary.build_system_prompt("en");
+        assert!(literary_prompt.contains("expressive, natural, and idiomatic"));
+
+        let business = literary.with_style(TranslationStyle::Business);
+        let business_prompt = business.build_system_prompt("ja");
+        assert!(business_prompt.contains("professional, polite, and executive business tone"));
     }
 }

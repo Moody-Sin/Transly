@@ -554,16 +554,34 @@ async function sendBatch(
   engine: string,
 ): Promise<{ ok: boolean; data?: BatchResponsePayload; error?: string; status?: number }> {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      {
-        type: 'TRANSLATE_BATCH',
-        items,
-        source_lang: 'auto',
-        target_lang: targetLang,
-        engine,
-      },
-      resolve,
-    )
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: 'TRANSLATE_BATCH',
+          items,
+          source_lang: 'auto',
+          target_lang: targetLang,
+          engine,
+        },
+        (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve({
+              ok: false,
+              error: chrome.runtime.lastError?.message || '扩展后台通信中断或未响应',
+              status: 503,
+            })
+          } else {
+            resolve(res)
+          }
+        },
+      )
+    } catch (err) {
+      resolve({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        status: 503,
+      })
+    }
   })
 }
 

@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 pub const PAIRING_SESSION_TTL_SECS: u64 = 60;
+/// 最大允许同时存在的未决配对会话数，防止恶意本地客户端泛洪耗尽内存
+pub const MAX_PENDING_SESSIONS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,6 +59,19 @@ impl PairingManager {
         let mut lock = self.sessions.write().await;
         // 清理所有已过期的会话，以及同一 client_id 的旧会话
         lock.retain(|_, s| s.expires_at > now && s.client_id != client_id);
+
+        // 防泛洪保护：若当前未决会话达到或超过硬上限，淘汰最早创建的会话
+        while lock.len() >= MAX_PENDING_SESSIONS {
+            if let Some(oldest_key) = lock
+                .iter()
+                .min_by_key(|(_, s)| s.created_at)
+                .map(|(k, _)| k.clone())
+            {
+                lock.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
 
         let session = PairingSession {
             session_id: session_id.clone(),

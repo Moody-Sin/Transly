@@ -564,88 +564,106 @@ pub fn trigger_selection_replacement(
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     tauri::async_runtime::spawn(async move {
-        // 获取互斥锁排队，避免划词悬浮与原地替换同时模拟读写剪贴板发生数据竞态
-        let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+        // 第一阶段：原子获取模拟复制，读取所选文本并立即释放全局剪贴板锁
+        let (detected_text, old_clipboard) = {
+            let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+            sel_flag.store(true, Ordering::SeqCst);
 
-        // 0. 备份原剪贴板
-        let old_clipboard = handle.clipboard().read_text().ok();
+            // 0. 备份原剪贴板
+            let old_clipboard = handle.clipboard().read_text().ok();
 
-        // 抑制剪贴板监听
-        sel_flag.store(true, Ordering::SeqCst);
+            // 1. 模拟 Ctrl+C
+            if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                #[cfg(target_os = "macos")]
+                let modifier = Key::Meta;
+                #[cfg(not(target_os = "macos"))]
+                let modifier = Key::Control;
 
-        // 1. 模拟 Ctrl+C
-        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
-            #[cfg(target_os = "macos")]
-            let modifier = Key::Meta;
-            #[cfg(not(target_os = "macos"))]
-            let modifier = Key::Control;
+                let _ = enigo.key(modifier, Direction::Press);
+                let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+                let _ = enigo.key(modifier, Direction::Release);
+            }
 
-            let _ = enigo.key(modifier, Direction::Press);
-            let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-            let _ = enigo.key(modifier, Direction::Release);
+            // 2. 自适应轮询读取选中文本（单次 15ms，长文本自适应上限放宽至 300ms，内容变化立即放行）
+            let clipboard_reader = {
+                let h = handle.clone();
+                move || h.clipboard().read_text().ok()
+            };
+            let detected = crate::clipboard_gate::poll_clipboard_change(
+                old_clipboard.as_deref(),
+                clipboard_reader,
+                std::time::Duration::from_millis(15),
+                std::time::Duration::from_millis(300),
+            )
+            .await;
+
+            sel_flag.store(false, Ordering::SeqCst);
+            // 离开本作用域自动释放 _guard 锁
+            (detected, old_clipboard)
+        };
+
+        let Some(text) = detected_text else {
+            return;
+        };
+        let clean = text.trim();
+        if clean.is_empty() || clean.chars().count() > transly_core::MAX_ITEM_CHARS {
+            return;
         }
 
-        // 2. 自适应轮询读取选中文本（单次 15ms，长文本自适应上限放宽至 300ms，内容变化立即放行）
-        let clipboard_reader = {
-            let h = handle.clone();
-            move || h.clipboard().read_text().ok()
+        // 第二阶段：无锁执行网络翻译与术语库处理（网络耗时不阻塞其他快捷键与剪贴板监听）
+        let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
+        let engine = pool.default_engine();
+
+        // 保护代码块与行内标记符号
+        let preserved = transly_core::stash_code_blocks(clean);
+        let req = TranslationRequest {
+            text: preserved.text.clone(),
+            source_lang: "auto".to_string(),
+            target_lang,
         };
-        let detected_text = crate::clipboard_gate::poll_clipboard_change(
-            old_clipboard.as_deref(),
-            clipboard_reader,
-            std::time::Duration::from_millis(15),
-            std::time::Duration::from_millis(300),
-        )
-        .await;
 
-        if let Some(text) = detected_text {
-            let clean = text.trim();
-            if !clean.is_empty() && clean.chars().count() <= transly_core::MAX_ITEM_CHARS {
-                // 3. 智能推断目标语言（默认目标若为中文，中文对转英文；非中文对转中文）
-                let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
-                let engine = pool.default_engine();
+        let final_text = match engine.translate(&req).await {
+            Ok(res) => {
+                let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
+                let g = glossary.read().await;
+                g.apply(&restored)
+            }
+            Err(e) => {
+                eprintln!("[Selection Replacement Warning] 翻译失败: {e}");
+                return;
+            }
+        };
 
-                // 保护代码块与行内标记符号
-                let preserved = transly_core::stash_code_blocks(clean);
-                let req = TranslationRequest {
-                    text: preserved.text.clone(),
-                    source_lang: "auto".to_string(),
-                    target_lang,
-                };
+        // 第三阶段：重新获取剪贴板锁，写入译文并模拟粘贴覆盖原选区
+        {
+            let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+            sel_flag.store(true, Ordering::SeqCst);
 
-                if let Ok(res) = engine.translate(&req).await {
-                    let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
-                    let g = glossary.read().await;
-                    let final_text = g.apply(&restored);
+            if handle.clipboard().write_text(final_text).is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                    #[cfg(target_os = "macos")]
+                    let modifier = Key::Meta;
+                    #[cfg(not(target_os = "macos"))]
+                    let modifier = Key::Control;
 
-                    // 4. 将译文写入剪贴板并模拟粘贴覆盖原选区
-                    if handle.clipboard().write_text(final_text).is_ok() {
-                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
-                            #[cfg(target_os = "macos")]
-                            let modifier = Key::Meta;
-                            #[cfg(not(target_os = "macos"))]
-                            let modifier = Key::Control;
+                    let _ = enigo.key(modifier, Direction::Press);
+                    let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+                    let _ = enigo.key(modifier, Direction::Release);
+                }
+                // 留出应用接收粘贴事件的窗口时间（放宽至 350ms，确保异步应用如 VSCode/Slack 成功消费）
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            }
 
-                            let _ = enigo.key(modifier, Direction::Press);
-                            let _ = enigo.key(Key::Unicode('v'), Direction::Click);
-                            let _ = enigo.key(modifier, Direction::Release);
-                        }
-                        // 留出应用接收粘贴事件的窗口时间
-                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                    }
+            // 恢复用户原有剪贴板内容
+            if let Some(old) = old_clipboard {
+                if let Err(e) = handle.clipboard().write_text(old) {
+                    eprintln!("[Clipboard Warning] 原地替换后恢复原剪贴板失败: {e}");
                 }
             }
-        }
 
-        // 5. 恢复用户原有剪贴板内容
-        if let Some(old_clipboard) = old_clipboard {
-            if let Err(e) = handle.clipboard().write_text(old_clipboard) {
-                eprintln!("[Clipboard Warning] 原地替换后恢复原剪贴板失败: {e}");
-            }
+            sel_flag.store(false, Ordering::SeqCst);
         }
-
-        sel_flag.store(false, Ordering::SeqCst);
     });
 }
 
@@ -828,6 +846,26 @@ pub async fn set_shortcut(
         });
 
     if let Err(e) = register_res {
+        // 注册失败时原子回滚：重新注册旧快捷键，防止快捷键状态永久丢失
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_counter = selection_ctx.counter.clone();
+            let rollback_slot = pending_slot.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_translation(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_counter.clone(),
+                            rollback_slot.clone(),
+                        );
+                    }
+                },
+            );
+        }
         return Err(format!(
             "快捷键注册失败，可能按键格式不合法或被系统占用: {e}"
         ));
@@ -905,6 +943,26 @@ pub async fn set_replace_shortcut(
         });
 
     if let Err(e) = register_res {
+        // 注册失败时原子回滚：重新注册旧快捷键，防止快捷键状态永久丢失
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_pool = pool.inner().clone();
+            let rollback_glossary = glossary.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_replacement(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_pool.clone(),
+                            rollback_glossary.clone(),
+                        );
+                    }
+                },
+            );
+        }
         return Err(format!(
             "划词替换快捷键注册失败，可能按键格式不合法或被系统占用: {e}"
         ));

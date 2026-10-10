@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Languages,
   ArrowRight,
@@ -69,6 +69,58 @@ export default function App() {
     Array<{ engine: string; text: string; loading: boolean; error: string | null }>
   >([])
   const compareGenRef = useRef(0)
+  const compareDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const triggerCompareTranslate = useCallback(
+    (textToTranslate: string) => {
+      const trimmed = textToTranslate.trim()
+      if (!trimmed) {
+        setCompareResults([])
+        return
+      }
+      const activeGen = ++compareGenRef.current
+      setCompareResults([
+        { engine: 'google', text: '', loading: true, error: null },
+        { engine: 'deepl', text: '', loading: true, error: null },
+        { engine: 'deepseek', text: '', loading: true, error: null },
+      ])
+      ;['google', 'deepl', 'deepseek'].forEach((engName) => {
+        commands
+          .translate(trimmed, 'auto', targetLang, engName)
+          .then((res) => {
+            if (compareGenRef.current !== activeGen) return
+            if (res.status === 'ok') {
+              setCompareResults((prev) =>
+                prev.map((item) =>
+                  item.engine === engName ? { ...item, text: res.data.text, loading: false } : item,
+                ),
+              )
+            } else {
+              setCompareResults((prev) =>
+                prev.map((item) =>
+                  item.engine === engName
+                    ? {
+                        ...item,
+                        error: t.error[res.error.kind] || res.error.message,
+                        loading: false,
+                      }
+                    : item,
+                ),
+              )
+            }
+          })
+          .catch((err) => {
+            if (compareGenRef.current !== activeGen) return
+            setCompareResults((prev) =>
+              prev.map((item) =>
+                item.engine === engName ? { ...item, error: String(err), loading: false } : item,
+              ),
+            )
+          })
+      })
+    },
+    [targetLang, t.error],
+  )
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
     return (localStorage.getItem('transly_theme') as 'light' | 'dark' | 'system') || 'system'
   })
@@ -514,6 +566,8 @@ export default function App() {
   const handleClearSource = () => {
     setSourceText('')
     runner.cancel()
+    if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
+    setCompareResults([])
   }
 
   const handleCopy = () => {
@@ -762,13 +816,25 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <div className="flex items-center rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-0.5 text-xs">
                   <button
-                    onClick={() => setIsCompareMode(false)}
+                    onClick={() => {
+                      setIsCompareMode(false)
+                      if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
+                      if (sourceText.trim()) {
+                        runner.run(sourceText, { source: 'input', debounceMs: 0 })
+                      }
+                    }}
                     className={`rounded px-2 py-0.5 ${!isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
                   >
                     {t.translation.modeSingle}
                   </button>
                   <button
-                    onClick={() => setIsCompareMode(true)}
+                    onClick={() => {
+                      setIsCompareMode(true)
+                      runner.cancel()
+                      if (sourceText.trim()) {
+                        triggerCompareTranslate(sourceText)
+                      }
+                    }}
                     className={`rounded px-2 py-0.5 ${isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
                   >
                     {t.translation.modeCompare}
@@ -808,8 +874,15 @@ export default function App() {
                   onChange={(e) => {
                     const v = e.target.value
                     setSourceText(v)
-                    // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
-                    runner.run(v, { source: 'input', debounceMs: 500 })
+                    if (isCompareMode) {
+                      if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
+                      compareDebounceRef.current = setTimeout(() => {
+                        triggerCompareTranslate(v)
+                      }, 500)
+                    } else {
+                      // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
+                      runner.run(v, { source: 'input', debounceMs: 500 })
+                    }
                   }}
                   placeholder={t.translation.inputPlaceholder}
                   className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
@@ -897,51 +970,7 @@ export default function App() {
                     <button
                       onClick={() => {
                         if (isCompareMode) {
-                          const activeGen = ++compareGenRef.current
-                          // 并发触发各引擎，带代际隔离
-                          setCompareResults([
-                            { engine: 'google', text: '', loading: true, error: null },
-                            { engine: 'deepl', text: '', loading: true, error: null },
-                            { engine: 'deepseek', text: '', loading: true, error: null },
-                          ])
-                          ;['google', 'deepl', 'deepseek'].forEach((engName) => {
-                            commands
-                              .translate(sourceText, 'auto', targetLang, engName)
-                              .then((res) => {
-                                if (compareGenRef.current !== activeGen) return
-                                if (res.status === 'ok') {
-                                  setCompareResults((prev) =>
-                                    prev.map((item) =>
-                                      item.engine === engName
-                                        ? { ...item, text: res.data.text, loading: false }
-                                        : item,
-                                    ),
-                                  )
-                                } else {
-                                  setCompareResults((prev) =>
-                                    prev.map((item) =>
-                                      item.engine === engName
-                                        ? {
-                                            ...item,
-                                            error: t.error[res.error.kind] || res.error.message,
-                                            loading: false,
-                                          }
-                                        : item,
-                                    ),
-                                  )
-                                }
-                              })
-                              .catch((err) => {
-                                if (compareGenRef.current !== activeGen) return
-                                setCompareResults((prev) =>
-                                  prev.map((item) =>
-                                    item.engine === engName
-                                      ? { ...item, error: String(err), loading: false }
-                                      : item,
-                                  ),
-                                )
-                              })
-                          })
+                          triggerCompareTranslate(sourceText)
                         } else {
                           runner.run(sourceText, { source: 'input' })
                         }

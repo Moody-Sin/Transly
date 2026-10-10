@@ -81,15 +81,24 @@ struct StreamChatCompletionResponse {
 }
 
 impl OpenAIEngine {
+    pub fn normalize_base_url(url: &str) -> String {
+        let trimmed = url.trim().trim_end_matches('/');
+        if let Some(stripped) = trimmed.strip_suffix("/chat/completions") {
+            stripped.trim_end_matches('/').to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
     pub fn new(
         api_key: impl Into<String>,
         base_url: Option<String>,
         model: Option<String>,
     ) -> Self {
         let base = base_url
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
-            .trim_end_matches('/')
-            .to_string();
+            .map(|u| Self::normalize_base_url(&u))
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         let model = model.unwrap_or_else(|| "gpt-4o-mini".to_string());
         let engine_id = format!("openai:{model}");
@@ -283,7 +292,7 @@ impl TranslateEngine for OpenAIEngine {
         let mut full_text = String::new();
         let mut byte_buffer = Vec::new();
 
-        while let Some(item) = stream.next().await {
+        'stream_loop: while let Some(item) = stream.next().await {
             let bytes = item?;
             byte_buffer.extend_from_slice(&bytes);
 
@@ -299,7 +308,7 @@ impl TranslateEngine for OpenAIEngine {
                 if let Some(data) = line.strip_prefix("data:") {
                     let data = data.trim();
                     if data == "[DONE]" {
-                        break;
+                        break 'stream_loop;
                     }
                     if let Ok(parsed) = serde_json::from_str::<StreamChatCompletionResponse>(data) {
                         for choice in parsed.choices {
@@ -361,6 +370,26 @@ impl TranslateEngine for OpenAIEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_base_url_strips_chat_completions() {
+        assert_eq!(
+            OpenAIEngine::normalize_base_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            OpenAIEngine::normalize_base_url("https://api.openai.com/v1/"),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            OpenAIEngine::normalize_base_url("https://api.openai.com/v1/chat/completions"),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            OpenAIEngine::normalize_base_url("https://api.openai.com/v1/chat/completions/"),
+            "https://api.openai.com/v1"
+        );
+    }
 
     #[test]
     fn test_openai_engine_initialization() {

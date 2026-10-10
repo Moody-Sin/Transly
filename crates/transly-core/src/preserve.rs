@@ -87,13 +87,33 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
     }
 }
 
-/// 将占位符精确还原为原代码块
+/// 将占位符精确还原为原代码块，包含对大模型偶发空格变形的容错兜底
 pub fn restore_code_blocks(input: &str, stash: &[String]) -> String {
     let mut result = input.to_string();
+    // 1. 优先执行完全精确匹配替换
     for (idx, original) in stash.iter().enumerate() {
         let placeholder = format!("⟦TRANSLY_CODE_{idx}⟧");
         result = result.replace(&placeholder, original);
     }
+
+    // 2. 二级容错：大模型翻译时偶发在特殊括线内引入空格（如 ⟦ TRANSLY_CODE_0 ⟧）
+    if result.contains("⟦") && result.contains("⟧") {
+        if let Ok(re) = regex::Regex::new(r"⟦\s*TRANSLY_CODE_(\d+)\s*⟧") {
+            result = re
+                .replace_all(&result, |caps: &regex::Captures| {
+                    if let Some(m) = caps.get(1) {
+                        if let Ok(idx) = m.as_str().parse::<usize>() {
+                            if let Some(orig) = stash.get(idx) {
+                                return orig.clone();
+                            }
+                        }
+                    }
+                    caps.get(0).map(|c| c.as_str()).unwrap_or("").to_string()
+                })
+                .into_owned();
+        }
+    }
+
     result
 }
 
@@ -128,6 +148,21 @@ mod tests {
 
         let restored = restore_code_blocks(&preserved.text, &preserved.stash);
         assert_eq!(restored, input);
+    }
+
+    #[test]
+    fn test_restore_with_llm_whitespace_variation() {
+        let stash = vec![
+            "`let x = 1;`".to_string(),
+            "```\nprintln!();\n```".to_string(),
+        ];
+        // 模拟 LLM 引入空格的译文
+        let translated = "Here is ⟦ TRANSLY_CODE_0 ⟧ and block ⟦TRANSLY_CODE_1 ⟧.";
+        let restored = restore_code_blocks(translated, &stash);
+        assert_eq!(
+            restored,
+            "Here is `let x = 1;` and block ```\nprintln!();\n```."
+        );
     }
 
     #[test]

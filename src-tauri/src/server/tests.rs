@@ -660,6 +660,37 @@ async fn test_pairing_reject_and_client_mismatch() {
 }
 
 #[tokio::test]
+async fn test_pairing_manager_max_capacity_flooding_defense() {
+    let pairing_mgr = Arc::new(pairing::PairingManager::new());
+    let mut session_ids = Vec::new();
+
+    // 连续创建超出 MAX_PENDING_SESSIONS 的会话
+    for i in 0..(pairing::MAX_PENDING_SESSIONS + 5) {
+        let (sid, _) = pairing_mgr
+            .create_session(format!("client-{i}"), None)
+            .await;
+        session_ids.push(sid);
+    }
+
+    // 最早创建的 5 个会话必须已被防泛洪淘汰淘汰
+    for sid in &session_ids[..5] {
+        let res = pairing_mgr.poll_session(sid, "client-x", "token").await;
+        assert_eq!(res, pairing::PairingPollResult::Expired);
+    }
+
+    // 最新创建的会话依然正常 Pending
+    let latest_sid = session_ids.last().unwrap();
+    let res = pairing_mgr
+        .poll_session(
+            latest_sid,
+            &format!("client-{}", pairing::MAX_PENDING_SESSIONS + 4),
+            "token",
+        )
+        .await;
+    assert_eq!(res, pairing::PairingPollResult::Pending);
+}
+
+#[tokio::test]
 async fn test_pairing_http_endpoints_roundtrip() {
     let cache = TranslationCache::in_memory().unwrap();
     let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(

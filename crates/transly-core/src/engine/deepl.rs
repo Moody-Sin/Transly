@@ -52,35 +52,53 @@ impl DeepLEngine {
         }
     }
 
-    fn normalize_target_lang(lang: &str) -> &str {
+    fn normalize_target_lang(lang: &str) -> &'static str {
         match lang.to_lowercase().as_str() {
             "zh" | "zh-cn" | "zh-hans" => "ZH",
+            "zh-tw" | "zh-hant" => "ZH-HANT",
             "en" | "en-us" => "EN-US",
             "en-gb" => "EN-GB",
+            "pt" | "pt-pt" => "PT-PT",
+            "pt-br" => "PT-BR",
             "ja" => "JA",
             "de" => "DE",
             "fr" => "FR",
             "es" => "ES",
             "ru" => "RU",
             "ko" => "KO",
-            _ => lang,
+            "it" => "IT",
+            "nl" => "NL",
+            "pl" => "PL",
+            "ar" => "AR",
+            "sv" => "SV",
+            "tr" => "TR",
+            "uk" => "UK",
+            _ => "ZH",
         }
     }
 
-    fn normalize_source_lang(lang: &str) -> Option<&str> {
+    fn normalize_source_lang(lang: &str) -> Option<&'static str> {
         if lang.is_empty() || lang == "auto" {
             None
         } else {
             match lang.to_lowercase().as_str() {
-                "zh" | "zh-cn" | "zh-hans" => Some("ZH"),
-                "en" => Some("EN"),
+                "zh" | "zh-cn" | "zh-hans" | "zh-tw" | "zh-hant" => Some("ZH"),
+                "en" | "en-us" | "en-gb" => Some("EN"),
+                "pt" | "pt-br" | "pt-pt" => Some("PT"),
                 "ja" => Some("JA"),
                 "de" => Some("DE"),
                 "fr" => Some("FR"),
                 "es" => Some("ES"),
                 "ru" => Some("RU"),
                 "ko" => Some("KO"),
-                _ => Some(lang),
+                "it" => Some("IT"),
+                "nl" => Some("NL"),
+                "pl" => Some("PL"),
+                "ar" => Some("AR"),
+                "sv" => Some("SV"),
+                "tr" => Some("TR"),
+                "uk" => Some("UK"),
+                _ => None,
             }
         }
     }
@@ -235,6 +253,20 @@ impl TranslateEngine for DeepLEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_deepl_language_normalization() {
+        assert_eq!(DeepLEngine::normalize_target_lang("zh-CN"), "ZH");
+        assert_eq!(DeepLEngine::normalize_target_lang("zh-TW"), "ZH-HANT");
+        assert_eq!(DeepLEngine::normalize_target_lang("zh-Hant"), "ZH-HANT");
+        assert_eq!(DeepLEngine::normalize_target_lang("pt"), "PT-PT");
+        assert_eq!(DeepLEngine::normalize_target_lang("pt-BR"), "PT-BR");
+
+        assert_eq!(DeepLEngine::normalize_source_lang("auto"), None);
+        assert_eq!(DeepLEngine::normalize_source_lang("zh-TW"), Some("ZH"));
+        assert_eq!(DeepLEngine::normalize_source_lang("pt-BR"), Some("PT"));
+        assert_eq!(DeepLEngine::normalize_source_lang("en-US"), Some("EN"));
+    }
 
     #[test]
     fn test_deepl_engine_endpoint() {

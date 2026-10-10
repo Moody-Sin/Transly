@@ -8,6 +8,11 @@
 ## [未发布]
 
 ### 优化与增强
+- **OpenAI 兼容引擎 Base URL 自动规整容错 (P1)**：在 `crates/transly-core` 的 `OpenAIEngine` 中增加 `normalize_base_url`，自动识别并剥离用户粘贴输入的 `/chat/completions` 与尾部斜杠，杜绝拼接出 `.../chat/completions/chat/completions` 404 路径；添加对应单测。
+- **多引擎对比翻译模式即输即译与防抖调度升级 (P1)**：在桌面端主界面（`src/App.tsx`）中升级多引擎对比翻译体验，输入框打字由独立防抖定时器自动触发多引擎并发对比更新，切换模式时无缝衔接且在对比模式下不再无谓触发单引擎翻译，消除交互割裂与额度空耗。
+- **扩展端 `sendBatch` 通信未定义防御加固 (P2)**：在 `extension/src/content/index.ts` 中增强对 Service Worker 通信回调的防御性校验，捕获 `chrome.runtime.lastError` 与 `undefined` 响应，统一映射为结构化失败响应 `{ ok: false, error: ..., status: 503 }`，杜绝未捕获异常。
+- **代码占位符抵抗大语言模型空格变动的松弛容错还原 (P1)**：在 `crates/transly-core` 的 `preserve` 模块中强化 `restore_code_blocks`，在严格匹配基础上引入 `⟦\s*TRANSLY_CODE_(\d+)\s*⟧` 正则二级容错提取与还原，彻底解决部分大模型在特殊括线内引入空格导致代码块无法还原丢失的隐患；添加对应单测。
+- **扩展配对管理器并发会话硬上限防泛洪 (P2)**：在平台层 `src-tauri` 的 `pairing.rs` 中引入 `MAX_PENDING_SESSIONS = 16` 硬上限，创建会话时自动淘汰最早创建的会话，有效防止本地恶意脚本高频泛洪导致内存与广播事件暴涨；在 `server/tests.rs` 补充单测。
 - **LLM 翻译专业领域风格预设 (P2)**：在 `crates/transly-core` 的 `OpenAIEngine` 中引入 `TranslationStyle` 枚举，支持【通用直译】、【学术技术】（严格锁定专业术语与代码标识符）、【文学润色】（流畅地道）与【商务公文】四种 Prompt 风格模板并自适应调节采样温度；桌面端设置中心新增全局风格选择器。
 - **本地离线模型 (Ollama) 一键预置向导 (P2)**：在设置中心的 OpenAI 自定义端点配置区域提供一键填入本地 Ollama 默认 API 端点（`http://localhost:11434/v1`）与默认模型（`qwen2.5:7b`），方便离线安全翻译用户零门槛直连本地模型。
 - **SQLite 翻译缓存读写分离并发解耦 (P1)**：将 `crates/transly-core` 中的 `TranslationCache` 升级为读写双连接分离架构（`File` 模式下采用独立 `writer` 互斥写连接与 `reader` 只读并发连接）。在 SQLite WAL 模式下，整页翻译的大批量事务写盘与用户前台的高频历史查询/缓存命中完全解耦、互不阻塞，杜绝锁争用卡顿。
@@ -47,6 +52,11 @@
 - **桌面端翻译历史面板**：把一直存在但用户不可见的 `translation_cache` 表变为可视化「最近翻译」。主区新增「翻译 / 历史」顶层 Tab；历史页支持倒序分页浏览（每页 50 条，可加载更多）、单条复制、单条删除与刷新，空态给出「开启持久化缓存后记录会出现在这里」的引导。`transly-core` 新增 `CacheEntry` DTO 与 `list_recent` / `delete_entry`；命令层新增 `get_translation_history` / `delete_history_entry`（均下沉 `spawn_blocking`，SQLite 同步 I/O 不占 async 工作线程）。`created_at` 以 `u32` 纪元秒导出，规避 specta 将 `i64` 映射为 JS `BigInt` 导致的 `JSON.stringify` 崩溃（Lessons Learned 第 1 条）。该表按 `cache_key` 去重，故语义为「近期不重复的翻译记录」，而非逐次操作日志。
 
 ### 修复
+- **OpenAI / DeepSeek 流式 SSE 解析器循环控制流缺陷修复 (P0)**：修复 `crates/transly-core` 的 `OpenAIEngine::translate_stream` 中内层 `break` 仅跳出按行扫描循环、外层网络字节流等待循环未中止的问题。引入 `'stream_loop` 循环标签并在收到 `data: [DONE]` 时显式退出外层循环，彻底消除 HTTP Keep-Alive 连接下长文本流式翻译挂起阻塞 30 秒直到客户端超时的严重缺陷。
+- **全局快捷键重新注册失败原子回滚保障 (P1)**：在 `src-tauri` 的 `set_shortcut` 与 `set_replace_shortcut` 命令中，若新快捷键因系统热键冲突或格式非法导致注册失败，自动回滚重新注册 `old_shortcut`，彻底防止原快捷键被意外注销导致按键功能永久丢失。
+- **原地替换剪贴板锁临界区三阶段拆分消除假死死锁风险 (P0)**：重构 `src-tauri` 中的 `trigger_selection_replacement` 流程，将原来“模拟复制 $\to$ 网络翻译 $\to$ 模拟粘贴”全程持有 `CLIPBOARD_SIMULATION_MUTEX` 互斥锁拆分为三阶段独立作用域。网络翻译过程完全在无锁状态下并发运行，彻底消除网络卡顿或大模型生成慢时挂死划词悬浮窗与剪贴板监听的死锁假死风险。
+- **原地替换模拟粘贴时延防外部应用竞态优化 (P1)**：在 `trigger_selection_replacement` 中将模拟 `Ctrl+V` 后恢复旧剪贴板的时延从 120ms 放宽至 350ms，彻底消除 VS Code、Notion、Slack 等基于异步事件循环的编辑器应用尚未读到剪贴板即被写回旧内容覆盖的竞态。
+- **DeepL 繁体中文与葡萄牙语目标代码规范化映射 (P1)**：在 `crates/transly-core` 的 `DeepLEngine` 中补齐 `"zh-tw" | "zh-hant" => "ZH-HANT"` 与 `"pt" => "PT-PT"` 大写规范化映射，并在兜底分支将代码统一大写，解决向 DeepL 官方 API 传入小写导致 400 Bad Request 的问题；添加单测锁定。
 - **Tauri 2 窗口权限 ACL 缺失导致扩展自动配对时主窗口无法唤醒 (P1)**：在 `src-tauri/capabilities/default.json` 中补齐 `core:window:allow-show` 与 `core:window:allow-set-focus` 权限；主窗口常驻后台或关闭到托盘时，扩展一键配对请求可被可靠拉起置顶并聚焦。
 - **悬浮窗手动 Pin 状态在翻译完成时被自动粘滞机制覆盖关闭 (P1)**：`useTaskRunner` 粘滞判定接入 `isPinned` 配置，确保在翻译完成恢复 `idle` 时不会单方面向后端重置粘滞标志，保护用户手动置顶浮窗的操作不被意外冲掉。
 - **快捷键划词翻译遗漏光标位置计算导致浮窗弹出位置漂移 (P1)**：在 `trigger_selection_translation` 流程中补齐 `place_float_near_cursor` 调用，确保选区划词唤起浮窗时紧随光标所在显示器选区下方，并消除 `main.rs` 中的冗余重复实现。

@@ -17,6 +17,13 @@
 - **`%APPDATA%` 为漫游目录，隐私数据会被同步出本机 (P2)**：域环境下翻译历史与自建术语库会被组策略同步到其它机器与备份介质，与「本地优先、零上报」承诺冲突。现改用 `%LOCALAPPDATA%`，并新增漫游目录一次性迁移（幂等、不覆盖），避免升级丢数据。
 
 ### 优化与增强
+- **LLM 翻译风格与持久化缓存隔离**：`OpenAIEngine` 实例标识与响应的实际引擎标识接入 `TranslationStyle` 后缀（如 `openai:gpt-4o-mini:academic`），彻底解决切换翻译风格后被旧通用风格缓存劫持的缺陷；添加独立隔离命中单测。
+- **SSE 流式数据帧解析优化与多字节安全解码**：在 `OpenAIEngine::translate_stream` 中重构字节流处理算法，基于换行符执行游标单趟扫描，将原每行 `drain` 的 $\mathcal{O}(n^2)$ 内存搬移优化为单趟单次缩容，并在严格换行边界上执行安全 UTF-8 解码，杜绝跨网络 chunk 多字节字符被 `from_utf8_lossy` 截断损坏。
+- **OpenAI / DeepSeek 批量翻译受控并发加速**：在 `OpenAIEngine` 中原生实现 `translate_batch_tolerant`，基于 `futures::stream::buffer_unordered(5)` 实施 5 路并发受控异步分发。将原本 30 项整批 45 秒以上的长耗时降低至 8~10 秒内，并在单项失败时保持故障隔离；支持批量能力声明。
+- **本地离线模型 (Ollama) 本地回环免 Key 适配**：`OpenAIEngine` 自动识别 `localhost` / `127.0.0.1` / `[::1]` 本地回环端点，无需用户提供任何 API Key 即可直接发起请求，配合 `is_api_key_configured` 对本地端点的免配置放行，极大提升隐私用户的本地离线大模型使用体验。
+- **扩展端 DOM 布局抖动消除与 WeakMap 视口缓存**：在 `extension/src/content/index.ts` 中引入 `WeakMap<Element, boolean>` 对父容器的包围盒几何检测进行单趟记忆，避免长页面数千个文本节点连续触发强制同步重排（Forced Synchronous Layout），显著降低主线程卡顿。
+- **浏览器扩展富文本段落行内标签保真闭环**：完善 `richText.ts` 闭合标签 `⟦T_N⟧...⟦/T_N⟧` 提取与还原算法，在 `content/index.ts` 遍历时智能识别叶子富文本容器，将含有行内 `<a>`、`<span>`、`<strong>`、`<code>` 的段落整句打包翻译，并在返回后精准拆解回填，彻底杜绝跨语种语序倒装时碎片翻译破版缺陷；占位丢失时平滑安全降级。
+- **桌面端悬浮迷你窗 Escape 键极速关闭支持**：在 `src/App.tsx` 中为 `#float` 迷你悬浮窗口添加全局 `Escape` 按键监听，按下瞬间安全隐藏窗口，提升键盘操作流的便捷性。
 - **离线语言检测与智能对转西欧拉丁语系防偏转 (P0)**：在 `crates/transly-core` 的 `detector` 模块中细分主要西欧拉丁语系（法、德、西等）的特征重音字母与常用功能词检测。修复当用户默认目标语言为英文时输入欧系小语种（如法文 `Bonjour`）被无差别误判为英文而强行对转为中文的缺陷，确保外翻英场景准确路由；添加对应单测。
 - **划词原地替换集成持久化缓存与历史沉淀 (P0)**：在 `src-tauri` 的 `trigger_selection_replacement` 流程中注入 `TranslationDependencies`，在无锁第二阶段优先查询 `TranslationCache`，并在翻译成功后安全写入缓存与历史记录；彻底消除原本原地替换完全绕过缓存与无历史沉淀的问题。
 - **批量翻译引擎逐项容错隔离 (P1)**：在 `crates/transly-core` 的 `TranslateEngine` trait 中引入 `translate_batch_tolerant` 规范，并在 `FallbackEngine` 与服务端 `server/mod.rs` 中完整实现。当整批 30 项中个别单项出现网络抖动或超长异常时，自动平滑隔离故障项，确保其余成功项正常返回并写入缓存，杜绝“一处报错整批 30 项全军覆没”。

@@ -148,6 +148,15 @@ fn main() {
     let sel_flag_shared = selection_flag.clone();
     let counter_shared = request_counter.clone();
 
+    let stream_task_registry = Arc::new(commands::StreamTaskRegistry::default());
+    let translation_deps = Arc::new(commands::TranslationDependencies {
+        cache: cache.clone(),
+        pool: pool.clone(),
+        glossary: glossary.clone(),
+        cache_controller: cache_controller.clone(),
+        stream_registry: stream_task_registry.clone(),
+    });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -157,8 +166,9 @@ fn main() {
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
         .manage(pairing_manager)
+        .manage(translation_deps)
         .manage(Arc::new(commands::FloatSticky::default()))
-        .manage(Arc::new(commands::StreamTaskRegistry::default()))
+        .manage(stream_task_registry)
         .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
         .manage(Arc::new(commands::SelectionContext {

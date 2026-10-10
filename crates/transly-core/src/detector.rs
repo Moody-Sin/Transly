@@ -65,8 +65,8 @@ pub fn detect_language(text: &str) -> Option<&'static str> {
     // 注意：汉字单个字符蕴含的信息密度远高于单个拉丁字母（一个词通常仅 2~4 个汉字，对应英文 5~15 个字母）。
     // 在技术文档、代码注释场景（如："请使用 resolve_smart_target_lang 进行推断"），
     // 汉字字符虽然较少，但语义主体明确是中文。
-    // 因此给予 CJK 汉字 2.5 倍权重折算，兼顾纯英文与中英夹杂技术文本准确识别。
-    let weighted_cjk = (cjk_count as f64) * 2.5;
+    // 因此给予 CJK 汉字 4.0 倍权重折算，兼顾纯英文与中英夹杂长标识符技术文本准确识别。
+    let weighted_cjk = (cjk_count as f64) * 4.0;
     let latin_score = latin_count as f64;
 
     if weighted_cjk > latin_score {

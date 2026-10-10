@@ -12,7 +12,6 @@ pub mod validation;
 pub use cache::{CacheEntry, TranslationCache};
 pub use config::AppConfig;
 pub use detector::{detect_language, resolve_smart_target_lang};
-pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};
 pub use engine::{
     lookup_cache_with_fallback, plan_batch_ranges, BatchItemRequest, BatchItemResult, DeepLEngine,
     EngineCapabilities, FallbackEngine, GoogleWebEngine, OpenAIEngine, TranslateEngine,
@@ -24,6 +23,7 @@ pub use glossary::Glossary;
 pub use ocr::{
     build_candidate_languages, clamp_dimensions, rgba_to_bgra_in_place, OcrErrorDto, OcrErrorKind,
 };
+pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};
 pub use task::{classify_error, TaskError};
 pub use validation::{
     validate_engine_id, validate_language_code, validate_language_pair, validate_translation_input,

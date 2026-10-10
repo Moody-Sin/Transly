@@ -135,6 +135,15 @@ pub struct StreamChunkPayload {
     pub chunk: String,
 }
 
+#[derive(Clone)]
+pub struct TranslationDependencies {
+    pub cache: Arc<TranslationCache>,
+    pub pool: Arc<EnginePool>,
+    pub glossary: Arc<RwLock<Glossary>>,
+    pub cache_controller: Arc<crate::cache_controller::CacheController>,
+    pub stream_registry: Arc<StreamTaskRegistry>,
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 #[specta::specta]
@@ -145,11 +154,7 @@ pub async fn translate_stream(
     target_lang: String,
     engine_name: Option<String>,
     window: tauri::Window,
-    cache: tauri::State<'_, Arc<TranslationCache>>,
-    pool: tauri::State<'_, Arc<EnginePool>>,
-    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
-    cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
-    stream_registry: tauri::State<'_, Arc<StreamTaskRegistry>>,
+    deps: tauri::State<'_, Arc<TranslationDependencies>>,
 ) -> Result<TranslateOutcomeDto, TranslateErrorDto> {
     use tauri::Emitter;
 
@@ -167,17 +172,17 @@ pub async fn translate_stream(
     }
 
     let active_engine = if let Some(ref name) = engine_name {
-        pool.get_engine(name).await
+        deps.pool.get_engine(name).await
     } else {
-        pool.default_engine()
+        deps.pool.default_engine()
     };
 
-    let (cache_enabled, start_gen) = cache_controller.snapshot();
+    let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
 
     // 1. 若开启缓存，优先查缓存
     if cache_enabled {
         let cached_res = {
-            let cache_ref = cache.inner().clone();
+            let cache_ref = deps.cache.clone();
             let engine_clone = active_engine.clone();
             let t = text.clone();
             let s = sl.clone();
@@ -196,7 +201,7 @@ pub async fn translate_stream(
         };
 
         if let Some((cached_text, used_engine)) = cached_res {
-            let g = glossary.read().await;
+            let g = deps.glossary.read().await;
             let applied = g.apply(&cached_text);
             // 命中缓存时直接分发完整 chunk，让打字机视图立即就绪
             let _ = window.emit(
@@ -234,7 +239,7 @@ pub async fn translate_stream(
 
     // 注册任务取消信号
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    if let Ok(mut map) = stream_registry.0.lock() {
+    if let Ok(mut map) = deps.stream_registry.0.lock() {
         map.insert(task_id, cancel_tx);
     }
 
@@ -242,13 +247,13 @@ pub async fn translate_stream(
 
     let res = tokio::select! {
         outcome = stream_fut => {
-            if let Ok(mut map) = stream_registry.0.lock() {
+            if let Ok(mut map) = deps.stream_registry.0.lock() {
                 map.remove(&task_id);
             }
             outcome
         }
         _ = cancel_rx => {
-            if let Ok(mut map) = stream_registry.0.lock() {
+            if let Ok(mut map) = deps.stream_registry.0.lock() {
                 map.remove(&task_id);
             }
             return Err(TranslateErrorDto::from_error(&Error::Internal("流式任务已被前端主动取消".into())));
@@ -259,12 +264,13 @@ pub async fn translate_stream(
         Ok(res) => {
             let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             let cache_target_engine = res.actual_engine();
-            if let Err(e) = cache_controller.set_if_current(start_gen, || {
-                cache.set(&text, &restored, &sl, &target_lang, cache_target_engine)
+            if let Err(e) = deps.cache_controller.set_if_current(start_gen, || {
+                deps.cache
+                    .set(&text, &restored, &sl, &target_lang, cache_target_engine)
             }) {
                 eprintln!("[Cache Write Warning] 桌面端流式翻译缓存写入失败: {e}");
             }
-            let g = glossary.read().await;
+            let g = deps.glossary.read().await;
             Ok(TranslateOutcomeDto {
                 text: g.apply(&restored),
                 engine: res.engine,
@@ -276,7 +282,9 @@ pub async fn translate_stream(
 
 /// 全局并发流式翻译任务取消注册表
 #[derive(Clone, Default)]
-pub struct StreamTaskRegistry(pub Arc<std::sync::Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>>);
+pub struct StreamTaskRegistry(
+    pub Arc<std::sync::Mutex<std::collections::HashMap<u32, tokio::sync::oneshot::Sender<()>>>>,
+);
 
 #[tauri::command]
 #[specta::specta]

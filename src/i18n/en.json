@@ -36,7 +36,11 @@
     "speak": "Read Aloud",
     "clearText": "Clear Text",
     "charCount": "{n} chars",
-    "btnClose": "Close"
+    "btnClose": "Close",
+    "modeSingle": "Single Engine",
+    "modeCompare": "Compare Engines",
+    "exportGlossaryCsv": "Export CSV",
+    "importGlossaryCsv": "Import CSV"
   },
   "history": {
     "tabTranslate": "Translate",

@@ -9,6 +9,7 @@ pub struct PreservedText {
 }
 
 /// 提取文本中的代码块并用安全占位符替换
+#[allow(clippy::while_let_on_iterator)]
 pub fn stash_code_blocks(input: &str) -> PreservedText {
     let mut stash = Vec::new();
     let mut output = String::with_capacity(input.len());
@@ -45,7 +46,8 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
         if ch == '`' {
             let start = idx;
             let mut end = None;
-            while let Some((i, c)) = chars.next() {
+            let mut inner_chars = chars.clone();
+            while let Some((i, c)) = inner_chars.next() {
                 if c == '`' {
                     end = Some(i + 1);
                     break;
@@ -56,6 +58,14 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
             }
 
             if let Some(e) = end {
+                // 推进主迭代器到 e 对应的字符
+                while let Some(&(i, _)) = chars.peek() {
+                    if i < e {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
                 let code_content = &input[start..e];
                 let placeholder = format!("⟦TRANSLY_CODE_{}⟧", stash.len());
                 stash.push(code_content.to_string());
@@ -100,7 +110,9 @@ mod tests {
         assert!(!preserved.text.contains("println!"));
 
         // 模拟翻译（占位符保持不变）
-        let translated = preserved.text.replace("请阅读以下代码：", "Please read the code:");
+        let translated = preserved
+            .text
+            .replace("请阅读以下代码：", "Please read the code:");
         let restored = restore_code_blocks(&translated, &preserved.stash);
         assert!(restored.starts_with("Please read the code:"));
         assert!(restored.contains("```rust\nfn main() {\n    println!(\"Hello\");\n}\n```"));

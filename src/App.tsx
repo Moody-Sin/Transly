@@ -64,6 +64,10 @@ export default function App() {
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
   const [isFloatPinned, setIsFloatPinned] = useState(false)
+  const [isCompareMode, setIsCompareMode] = useState(false)
+  const [compareResults, setCompareResults] = useState<
+    Array<{ engine: string; text: string; loading: boolean; error: string | null }>
+  >([])
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
     return (localStorage.getItem('transly_theme') as 'light' | 'dark' | 'system') || 'system'
   })
@@ -735,17 +739,35 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">{t.translation.engineSelect}:</span>
-                <select
-                  value={engine}
-                  onChange={(e) => setEngine(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
-                >
-                  <option value="google">{t.translation.engineGoogle}</option>
-                  <option value="deepl">{t.translation.engineDeepl}</option>
-                  <option value="deepseek">{t.translation.engineDeepseek}</option>
-                  <option value="openai">{t.translation.engineOpenai}</option>
-                </select>
+                <div className="flex items-center rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-0.5 text-xs">
+                  <button
+                    onClick={() => setIsCompareMode(false)}
+                    className={`rounded px-2 py-0.5 ${!isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
+                  >
+                    {t.translation.modeSingle}
+                  </button>
+                  <button
+                    onClick={() => setIsCompareMode(true)}
+                    className={`rounded px-2 py-0.5 ${isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
+                  >
+                    {t.translation.modeCompare}
+                  </button>
+                </div>
+                {!isCompareMode && (
+                  <>
+                    <span className="text-xs text-slate-500">{t.translation.engineSelect}:</span>
+                    <select
+                      value={engine}
+                      onChange={(e) => setEngine(e.target.value)}
+                      className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+                    >
+                      <option value="google">{t.translation.engineGoogle}</option>
+                      <option value="deepl">{t.translation.engineDeepl}</option>
+                      <option value="deepseek">{t.translation.engineDeepseek}</option>
+                      <option value="openai">{t.translation.engineOpenai}</option>
+                    </select>
+                  </>
+                )}
               </div>
 
               {capabilities && (
@@ -841,7 +863,54 @@ export default function App() {
                       </button>
                     )}
                     <button
-                      onClick={() => runner.run(sourceText, { source: 'input' })}
+                      onClick={() => {
+                        if (isCompareMode) {
+                          // 并发触发各引擎
+                          setCompareResults([
+                            { engine: 'google', text: '', loading: true, error: null },
+                            { engine: 'deepl', text: '', loading: true, error: null },
+                            { engine: 'deepseek', text: '', loading: true, error: null },
+                          ])
+                          ;['google', 'deepl', 'deepseek'].forEach((engName) => {
+                            commands
+                              .translate(sourceText, 'auto', targetLang, engName)
+                              .then((res) => {
+                                if (res.status === 'ok') {
+                                  setCompareResults((prev) =>
+                                    prev.map((item) =>
+                                      item.engine === engName
+                                        ? { ...item, text: res.data.text, loading: false }
+                                        : item,
+                                    ),
+                                  )
+                                } else {
+                                  setCompareResults((prev) =>
+                                    prev.map((item) =>
+                                      item.engine === engName
+                                        ? {
+                                            ...item,
+                                            error: t.error[res.error.kind] || res.error.message,
+                                            loading: false,
+                                          }
+                                        : item,
+                                    ),
+                                  )
+                                }
+                              })
+                              .catch((err) => {
+                                setCompareResults((prev) =>
+                                  prev.map((item) =>
+                                    item.engine === engName
+                                      ? { ...item, error: String(err), loading: false }
+                                      : item,
+                                  ),
+                                )
+                              })
+                          })
+                        } else {
+                          runner.run(sourceText, { source: 'input' })
+                        }
+                      }}
                       disabled={isTranslating || !sourceText.trim()}
                       className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
                     >
@@ -851,53 +920,109 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex-1 overflow-auto text-sm text-slate-800 whitespace-pre-wrap">
-                  {translatedText ? (
-                    <span>
-                      {translatedText}
-                      {isTranslating && (
-                        <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-500 animate-pulse align-middle" />
-                      )}
-                    </span>
-                  ) : isTranslating ? (
-                    <span className="text-slate-400 flex items-center gap-1.5">
-                      <span className="inline-block w-1.5 h-3.5 bg-indigo-500 animate-pulse" />
-                      {t.translation.translating}
-                    </span>
-                  ) : (
-                    <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
-                  )}
-                </div>
-                <div className="mt-2 flex items-center justify-between">
-                  {usedEngine && (
-                    <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
-                  )}
-                  {translatedText && (
-                    <div className="flex items-center gap-1.5 justify-end">
-                      <button
-                        onClick={() => handleSpeak(translatedText, targetLang)}
-                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                        title={t.translation.speak}
-                      >
-                        <Volume2 className="h-3.5 w-3.5" />
-                        <span>{t.translation.speak}</span>
-                      </button>
-                      <button
-                        onClick={handleCopy}
-                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                      >
-                        {copied ? (
-                          <Check className="h-3.5 w-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
+              {!isCompareMode ? (
+                <div className="flex flex-col rounded-lg border border-slate-200 bg-white dark:bg-slate-900 p-3 shadow-sm">
+                  <div className="flex-1 overflow-auto text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap">
+                    {translatedText ? (
+                      <span>
+                        {translatedText}
+                        {isTranslating && (
+                          <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-500 animate-pulse align-middle" />
                         )}
-                        <span>{copied ? t.translation.copied : t.translation.copy}</span>
-                      </button>
-                    </div>
-                  )}
+                      </span>
+                    ) : isTranslating ? (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="inline-block w-1.5 h-3.5 bg-indigo-500 animate-pulse" />
+                        {t.translation.translating}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
+                    )}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    {usedEngine && (
+                      <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
+                    )}
+                    {translatedText && (
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <button
+                          onClick={() => handleSpeak(translatedText, targetLang)}
+                          className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                          title={t.translation.speak}
+                        >
+                          <Volume2 className="h-3.5 w-3.5" />
+                          <span>{t.translation.speak}</span>
+                        </button>
+                        <button
+                          onClick={handleCopy}
+                          className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                        >
+                          {copied ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                          <span>{copied ? t.translation.copied : t.translation.copy}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="flex flex-col gap-2 overflow-y-auto">
+                  {['google', 'deepl', 'deepseek'].map((engName) => (
+                    <div
+                      key={engName}
+                      className="flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 shadow-sm"
+                    >
+                      <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1 mb-1.5">
+                        <span className="text-[11px] font-semibold uppercase text-indigo-600 dark:text-indigo-400">
+                          {engName}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              const item = compareResults.find((r) => r.engine === engName)
+                              if (item?.text) handleSpeak(item.text, targetLang)
+                            }}
+                            className="p-1 text-slate-400 hover:text-slate-600"
+                            title={t.translation.speak}
+                          >
+                            <Volume2 className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              const item = compareResults.find((r) => r.engine === engName)
+                              if (item?.text) navigator.clipboard.writeText(item.text)
+                            }}
+                            className="p-1 text-slate-400 hover:text-slate-600"
+                            title={t.translation.copy}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-xs text-slate-700 dark:text-slate-200 min-h-[40px]">
+                        {compareResults.find((r) => r.engine === engName)?.loading ? (
+                          <span className="text-slate-400 animate-pulse">
+                            {t.translation.translating}
+                          </span>
+                        ) : compareResults.find((r) => r.engine === engName)?.error ? (
+                          <span className="text-rose-500">
+                            {compareResults.find((r) => r.engine === engName)?.error}
+                          </span>
+                        ) : (
+                          compareResults.find((r) => r.engine === engName)?.text || (
+                            <span className="text-slate-400">
+                              {t.translation.outputPlaceholder}
+                            </span>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1215,7 +1340,70 @@ export default function App() {
 
               {/* 术语库管理 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
-                <span className="font-medium text-slate-700">{t.settings.glossaryTitle}</span>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    {t.settings.glossaryTitle}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        if (glossaryList.length === 0) return
+                        const header = 'source,target,match_case\n'
+                        const body = glossaryList
+                          .map((g) => `"${g.source}","${g.target}",${g.match_case}`)
+                          .join('\n')
+                        const blob = new Blob([header + body], { type: 'text/csv' })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `transly-glossary-${new Date().toISOString().slice(0, 10)}.csv`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50"
+                      title={t.translation.exportGlossaryCsv}
+                    >
+                      {t.translation.exportGlossaryCsv}
+                    </button>
+                    <label className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 cursor-pointer">
+                      <span>{t.translation.importGlossaryCsv}</span>
+                      <input
+                        type="file"
+                        accept=".csv"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          if (!file) return
+                          const reader = new FileReader()
+                          reader.onload = async (evt) => {
+                            const text = evt.target?.result as string
+                            if (!text) return
+                            const lines = text.split(/\r?\n/)
+                            for (const line of lines) {
+                              const trimmed = line.trim()
+                              if (!trimmed || trimmed.startsWith('source,')) continue
+                              const parts = trimmed.split(',')
+                              if (parts.length >= 2) {
+                                const src = parts[0].replace(/^"|"$/g, '').trim()
+                                const tgt = parts[1].replace(/^"|"$/g, '').trim()
+                                const mc = parts[2] ? parts[2].trim() !== 'false' : true
+                                if (src && tgt) {
+                                  try {
+                                    await commands.addGlossaryTerm(src, tgt, mc)
+                                  } catch (err) {
+                                    console.warn('[Transly] 导入术语失败:', err)
+                                  }
+                                }
+                              }
+                            }
+                            loadGlossaryList()
+                          }
+                          reader.readAsText(file)
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <input
                     type="text"

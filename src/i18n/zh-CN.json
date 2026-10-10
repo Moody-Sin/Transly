@@ -36,7 +36,11 @@
     "speak": "朗读发音",
     "clearText": "清空内容",
     "charCount": "{n} 字符",
-    "btnClose": "关闭"
+    "btnClose": "关闭",
+    "modeSingle": "单引擎",
+    "modeCompare": "多引擎对比",
+    "exportGlossaryCsv": "导出 CSV",
+    "importGlossaryCsv": "导入 CSV"
   },
   "history": {
     "tabTranslate": "翻译",

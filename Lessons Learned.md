@@ -409,3 +409,20 @@
 1. **门禁命令禁止追加 `|| true`**。若某条命令在特定环境确实无法执行（如未装 cargo），用显式的存在性判断（`command -v cargo >/dev/null 2>&1 && ...`）而不是吞掉退出码。
 2. **文档声称的门禁必须逐条在配置文件里核对**，不能因为「文档写了」就认为「已经生效」。本次核对发现文档声称 9 项 CI 检查中，「禁止提交文件检查」是唯一纯空头的一项。
 3. **修复一个「没生效」的问题后，要复查修复本身是否真的生效**。安装钩子 ≠ 门禁生效，中间还差「不吞退出码」这一步。
+
+---
+
+## 29. Tauri 应用不能用 `cargo build` 产出可运行二进制
+
+### 现象与问题
+- 用 `cargo build --release` 构建后启动，窗口显示 `ERR_CONNECTION_REFUSED` / localhost 拒绝连接。
+- 排查发现二进制里**既没有嵌入前端资源，也没有 `devUrl` 字符串**：`cargo build` 只编译 Rust，不会执行 Tauri 的资源打包流程。
+- 前端资源由 `tauri build` 在编译期通过 `generate_context!` 嵌入，且产物落在
+  `target/<profile>/build/src-tauri-*/out/tauri-codegen-assets/`。该目录**按内容哈希命名**，
+  `cargo build` 不会刷新它——我实测时它仍是三天前的 72KB 旧产物，而当前 dist 是 325KB。
+- 更隐蔽的是：`cargo build` 会把 `devUrl` 编译进二进制，于是运行时去连一个从未启动的 dev server。
+
+### 经验与规程
+1. **验证 Tauri 应用必须用 `pnpm tauri build`**（或 `tauri dev`），`cargo build` 的产物只适用于 `cargo test` / `clippy` 这类不涉及前端资源的场景。
+2. 判断二进制是否含最新前端：检查 `tauri-codegen-assets` 目录下的文件时间戳与体积，而不是只看 `target/release/*.exe` 的时间。
+3. `tauri build --no-bundle` 可跳过安装包生成，适合需要快速拿到可运行二进制做真机验证的场景。

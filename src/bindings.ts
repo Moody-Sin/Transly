@@ -50,6 +50,7 @@ export const commands = {
 	setClipboardMonitor: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_clipboard_monitor", { enabled })),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
 	getServerStatus: () => __TAURI_INVOKE<ServerStatus>("get_server_status"),
+	getShortcutStatus: () => __TAURI_INVOKE<ShortcutStatusDto>("get_shortcut_status"),
 };
 
 /* Types */
@@ -126,6 +127,20 @@ export type ServerStatus =
 { state: "running" } | 
 /**  未能启动，附原因（如端口被占用、系统凭据不可用） */
 { state: "failed"; reason: string };
+
+/**
+ *  全局快捷键的注册状态。
+ * 
+ *  `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
+ *  格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
+ *  莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+ */
+export type ShortcutStatusDto = {
+	/**  两个快捷键是否都注册成功 */
+	ok: boolean,
+	/**  失败原因（注册成功时为 None） */
+	reason: string | null,
+};
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */
 export type TranslateErrorDto = {

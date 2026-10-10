@@ -94,6 +94,14 @@ export function useTaskRunner(
       let detected: string | null = null
       try {
         const detectRes = await commands.detectTextLanguage(text)
+
+        // 代际闸门必须同时覆盖「请求投递」，不能只挡响应回流。
+        // detectTextLanguage 是一次 IPC 往返，其间用户可能已继续输入并触发
+        // run()/cancel()：代际被作废、后端 cancelStreamTask 因任务尚未注册而
+        // 是 no-op。若此处不复查就继续投递请求，后端会完整跑一次 LLM——
+        // 用户看不到任何结果，但 API 已计费，且这条译文还会被写进缓存与历史。
+        if (gen !== genRef.current) return
+
         if (detectRes.status === 'ok' && detectRes.data) {
           detected = detectRes.data
           const isTargetChinese =
@@ -164,12 +172,17 @@ export function useTaskRunner(
 
   const run = useCallback(
     (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => {
-      if (!text.trim()) return
-      // 新输入立即作废上一代：清掉待触发的防抖，物理取消旧任务，并让在途响应失效
+      // 空串（如用户全选删除）同样要走完整的作废流程。
+      // 旧实现在此直接 return，导致上一次按键留下的防抖定时器不会被清除、
+      // 在途任务也不会被取消——输入框已清空，右侧却冒出了旧文本的译文。
+      // 注意取消/清防抖必须排在空串守卫之前。
       clearDebounce()
       const oldTaskId = genRef.current
       genRef.current += 1
       commands.cancelStreamTask(oldTaskId).catch(() => {})
+
+      if (!text.trim()) return
+
       const source = opts?.source ?? 'input'
       const delay = opts?.debounceMs ?? 0
       if (delay > 0) {

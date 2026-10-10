@@ -24,9 +24,13 @@ export function extractPlaceholderTokens(text: string): string[] {
 
 /**
  * 将离散的段落碎片聚合为带占位符的单一句子。
- * 约定：第一项通常为主干起始，中间各项为行内标签包裹的子文本。
+ * 约定：偶数项为主干文本，奇数项为行内标签包裹的子文本。
+ * 当 enclosed 为 true 时生成闭合标记 ⟦T_i⟧...⟦/T_i⟧ 以同时翻译行内子文本。
  */
-export function buildRichTextComposite(parts: TextPart[]): RichTextComposite {
+export function buildRichTextComposite(
+  parts: TextPart[],
+  enclosed: boolean = false,
+): RichTextComposite {
   const placeholders = new Map<string, string>()
   const idToPlaceholder = new Map<string, string>()
 
@@ -41,13 +45,15 @@ export function buildRichTextComposite(parts: TextPart[]): RichTextComposite {
   let compositeText = ''
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i]
-    // 偶数索引通常是常规文本节点，奇数索引或者是特定标记作为行内占位项
-    // 这里将中间需要保护的独立 part（通常长度较短、在行内标签内）以 ⟦T_i⟧ 占位
     if (i % 2 === 1) {
       const ph = `⟦T_${i}⟧`
       placeholders.set(ph, part.text)
       idToPlaceholder.set(part.id, ph)
-      compositeText += ph
+      if (enclosed) {
+        compositeText += `⟦T_${i}⟧${part.text}⟦/T_${i}⟧`
+      } else {
+        compositeText += ph
+      }
     } else {
       compositeText += part.text
     }
@@ -62,6 +68,7 @@ export function buildRichTextComposite(parts: TextPart[]): RichTextComposite {
 
 /**
  * 解析翻译后的复合句子，根据占位符切分并还原每个部分对应的译文。
+ * 若占位符包含闭合标记 ⟦/T_i⟧，则提取行内子文本译文；否则设为空值标记。
  * 若占位符在翻译过程中被引擎吞掉，返回 null 触发安全回退。
  */
 export function restoreRichTextComposite(
@@ -91,8 +98,21 @@ export function restoreRichTextComposite(
       result.set(baseIds[baseIndex], before)
       baseIndex += 1
     }
-    result.set(targetId, '') // 标记该占位符节点
+
     remaining = remaining.slice(idx + ph.length)
+
+    // 检查是否存在闭合标签 ⟦/T_N⟧ 提取行内译文
+    const idMatch = ph.match(/⟦T_(\d+)⟧/)
+    const closeToken = idMatch ? `⟦/T_${idMatch[1]}⟧` : null
+
+    if (closeToken && remaining.includes(closeToken)) {
+      const closeIdx = remaining.indexOf(closeToken)
+      const innerTranslated = remaining.slice(0, closeIdx)
+      result.set(targetId, innerTranslated)
+      remaining = remaining.slice(closeIdx + closeToken.length)
+    } else {
+      result.set(targetId, '')
+    }
   }
 
   if (baseIndex < baseIds.length) {

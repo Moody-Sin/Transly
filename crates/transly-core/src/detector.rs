@@ -129,6 +129,9 @@ fn detect_latin_sublanguage(text: &str) -> &'static str {
 /// 典型应用场景：
 /// - 用户默认目标语言为中文（zh-CN）：当输入中文时，自动对转为英文（en）；当输入英文或其它外文时，保持翻译为中文（zh-CN）。
 /// - 用户默认目标语言为英文（en）：当输入英文时，自动对转为中文（zh-CN）；当输入非英文时，保持翻译为英文（en）。
+///
+/// 对转只在用户目标语言为中/英时生效。用户显式选择其它目标语言（日/法/德等）
+/// 属于明确的定向翻译意图，此时必须尊重用户选择，不得反向对转。
 pub fn resolve_smart_target_lang(source_text: &str, user_target_lang: &str) -> String {
     let clean_target = user_target_lang.trim();
     let detected = match detect_language(source_text) {
@@ -152,13 +155,11 @@ pub fn resolve_smart_target_lang(source_text: &str, user_target_lang: &str) -> S
             clean_target.to_string()
         }
     } else {
-        // 其他目标语言（如日文、法文等）：
-        // 若检测到的源语言恰好与目标语言一致，则反向对转为中文或英文
-        if detected.eq_ignore_ascii_case(clean_target) {
-            "zh-CN".to_string()
-        } else {
-            clean_target.to_string()
-        }
+        // 用户显式选择了非中英的目标语言：尊重该选择，不做反向对转。
+        // 旧实现在此把「检测语言 == 目标语言」一律改写为中文，导致
+        // 目标设为日语时日文输入被改译成中文——该分支正是「多语言对转偏转」
+        // 修复时遗漏的路径。
+        clean_target.to_string()
     }
 }
 
@@ -255,5 +256,62 @@ mod tests {
     fn test_resolve_smart_target_lang_fallback_on_unrecognized() {
         assert_eq!(resolve_smart_target_lang("12345 ???", "zh-CN"), "zh-CN");
         assert_eq!(resolve_smart_target_lang("", "en"), "en");
+    }
+
+    /// 回归：用户显式选择非中英目标语言时必须被尊重。
+    ///
+    /// 「修复多语言对转偏转」那次只覆盖了 `target=en` 的拉丁语系路径，
+    /// 遗漏了 `target=ja/fr/de` 分支——那里把「检测语言 == 目标语言」
+    /// 一律改写为中文。本用例以表驱动方式覆盖全部目标语言，防止再次漏改分支。
+    #[test]
+    fn test_resolve_smart_target_lang_respects_explicit_non_chinese_target() {
+        // (源文本, 目标语言, 期望结果)
+        let cases: &[(&str, &str, &str)] = &[
+            // 目标与源语言相同：这是定向翻译意图，绝不能被改写成中文
+            ("こんにちは、元気ですか", "ja", "ja"),
+            ("Bonjour tout le monde", "fr", "fr"),
+            ("Guten Tag, wie geht es", "de", "de"),
+            ("Hola amigo, buenos dias", "es", "es"),
+            ("Здравствуйте, как дела", "ru", "ru"),
+            // 源语言与目标不同：同样保持用户选择
+            ("こんにちは", "zh-CN", "zh-CN"),
+            ("Hello world", "ja", "ja"),
+            ("Hello world", "de", "de"),
+            // 带地区后缀的目标语言代码
+            ("こんにちは", "ja-JP", "ja-JP"),
+            ("Bonjour", "fr-FR", "fr-FR"),
+        ];
+
+        for (text, target, expected) in cases {
+            assert_eq!(
+                resolve_smart_target_lang(text, target),
+                *expected,
+                "目标语言 {target} 下的源文本 {text:?} 目标语言被错误改写"
+            );
+        }
+    }
+
+    /// 中英双向对转语义本身必须保持不变，防止修复其它分支时被误伤。
+    #[test]
+    fn test_resolve_smart_target_lang_bidirectional_pair_preserved() {
+        // 目标中文 + 中文输入 → 对转为英文
+        assert_eq!(resolve_smart_target_lang("今天天气很好", "zh-CN"), "en");
+        assert_eq!(resolve_smart_target_lang("今天天气很好", "zh"), "en");
+        // 目标中文 + 英文输入 → 保持中文
+        assert_eq!(
+            resolve_smart_target_lang("The weather is nice", "zh-CN"),
+            "zh-CN"
+        );
+        // 目标英文 + 英文输入 → 对转为中文
+        assert_eq!(
+            resolve_smart_target_lang("The weather is nice", "en"),
+            "zh-CN"
+        );
+        // 目标英文 + 其它语种输入 → 保持英文
+        assert_eq!(
+            resolve_smart_target_lang("Bonjour tout le monde", "en"),
+            "en"
+        );
+        assert_eq!(resolve_smart_target_lang("こんにちは", "en"), "en");
     }
 }

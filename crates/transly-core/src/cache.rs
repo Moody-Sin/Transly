@@ -413,12 +413,24 @@ impl TranslationCache {
         }
 
         self.with_reader(|conn| {
-            let pattern = format!("%{trimmed}%");
+            // LIKE 的 `%` / `_` 是通配符，用户输入的关键词若原样拼接会被当作模式：
+            // 搜 "al_ha" 会误命中 "alXha"，搜 "100%pct" 中的 % 会匹配任意字符。
+            // 搜索技术文档时 snake_case 标识符极常见，必须转义并声明 ESCAPE 字符。
+            let escaped: String = trimmed
+                .chars()
+                .flat_map(|c| match c {
+                    '\\' => vec!['\\', '\\'],
+                    '%' => vec!['\\', '%'],
+                    '_' => vec!['\\', '_'],
+                    other => vec![other],
+                })
+                .collect();
+            let pattern = format!("%{escaped}%");
             let mut stmt = conn.prepare_cached(
                 r#"
                 SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
                 FROM translation_cache
-                WHERE source_text LIKE ?1 OR translated_text LIKE ?1
+                WHERE source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\'
                 ORDER BY created_at DESC, rowid DESC
                 LIMIT ?2 OFFSET ?3
                 "#,
@@ -519,6 +531,35 @@ mod tests {
             cache.get("three", "en", "zh-CN", "deepl").unwrap(),
             Some("三".to_string())
         );
+    }
+
+    /// 回归：LIKE 模式中的 `%` 与 `_` 是通配符，用户输入的关键词若原样拼接会被
+    /// 当作模式。搜索技术文档时 snake_case 标识符极常见，误命中稳定复现。
+    #[test]
+    fn test_search_escapes_like_wildcards() {
+        let cache = TranslationCache::in_memory().unwrap();
+        cache.set("alpha", "阿尔法", "en", "zh-CN", "m").unwrap();
+        cache.set("alXha", "假命中", "en", "zh-CN", "m").unwrap();
+        cache.set("pct", "100% 完成", "en", "zh-CN", "m").unwrap();
+        cache.set("al_ha", "精确命中", "en", "zh-CN", "m").unwrap();
+
+        // `_` 必须按字面量匹配，不得把 alXha 也带出来
+        let hits = cache.search("al_ha", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1, "下划线不得作为单字符通配符");
+        assert_eq!(hits[0].source_text, "al_ha");
+
+        // `%` 必须按字面量匹配，不得匹配空格
+        let hits = cache.search("100%pct", 10, 0).unwrap();
+        assert!(hits.is_empty(), "百分号不得作为任意字符通配符：{hits:?}");
+
+        // 普通关键词仍走子串模糊匹配
+        let hits = cache.search("alpha", 10, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source_text, "alpha");
+
+        // 反斜杠本身也被正确转义，不得引发 SQL 语义变化
+        let hits = cache.search("a\\lpha", 10, 0).unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]

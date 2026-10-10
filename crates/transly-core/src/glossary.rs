@@ -1,5 +1,7 @@
 use aho_corasick::{AhoCorasick, MatchKind};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 struct TermMeta {
@@ -9,9 +11,62 @@ struct TermMeta {
     word_boundary: bool,
 }
 
-#[derive(Debug, Default, Clone)]
+/// 预编译的匹配器：AC 自动机 + 与 pattern 下标对齐的确定性元数据表。
+#[derive(Debug)]
+struct Compiled {
+    ac: AhoCorasick,
+    metas: Vec<TermMeta>,
+}
+
+#[derive(Debug, Default)]
 pub struct Glossary {
     terms: HashMap<String, TermMeta>,
+    /// 词条集合变更后置位；`apply` 重建后复位，避免每次调用都重编自动机。
+    dirty: AtomicBool,
+    compiled: RwLock<Option<Arc<Compiled>>>,
+}
+
+impl Clone for Glossary {
+    fn clone(&self) -> Self {
+        // 克隆只携带词条，预编译缓存整体丢弃（调用方通常随即失效重建）。
+        Self {
+            terms: self.terms.clone(),
+            dirty: AtomicBool::new(true),
+            compiled: RwLock::new(None),
+        }
+    }
+}
+
+/// 判定字符是否构成"词内字符"。
+#[inline]
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// 该词条所属书写系统是否存在词边界概念。
+///
+/// 中日韩书写系统不使用空格分词，「机器」与「机器学习」在字符层面完全相邻，
+/// 无法靠前后字符区分。对这类语言做字符级边界判定会让词条彻底无法命中
+/// （「机器学习和机器视觉」中两个「机器」都会被判为词内而拒绝）。
+///
+/// 术语库的既定语义是「全局强制优先精确匹配」（见 README），因此对无词边界
+/// 的书写系统一律不做边界判定——需要精确命中的复合术语应由用户录入完整词条。
+///
+/// 而拉丁字母扩展（café / naïve）、西里尔、希腊等书写系统有明确词边界，
+/// 必须参与边界判定，否则会腰斩出「a 咖啡teria」这样的破损译文。
+fn has_word_boundaries(src: &str) -> bool {
+    !src.chars().any(is_cjk)
+}
+
+#[inline]
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x30FF        // 平假名 / 片假名
+        | 0x3400..=0x4DBF      // 汉字扩展 A
+        | 0x4E00..=0x9FFF      // 汉字基本区
+        | 0xF900..=0xFAFF      // 汉字兼容表意文字
+        | 0xAC00..=0xD7A3      // 谚文音节
+    )
 }
 
 impl Glossary {
@@ -36,17 +91,9 @@ impl Glossary {
             return;
         }
 
-        let starts_with_ascii = src
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_alphanumeric() || c == '_')
-            .unwrap_or(false);
-        let ends_with_ascii = src
-            .chars()
-            .next_back()
-            .map(|c| c.is_ascii_alphanumeric() || c == '_')
-            .unwrap_or(false);
-        let word_boundary = starts_with_ascii && ends_with_ascii;
+        let word_boundary = has_word_boundaries(&src)
+            && src.chars().next().map(is_word_char).unwrap_or(false)
+            && src.chars().next_back().map(is_word_char).unwrap_or(false);
 
         self.terms.insert(
             src.clone(),
@@ -57,15 +104,30 @@ impl Glossary {
                 word_boundary,
             },
         );
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
-    pub fn apply(&self, text: &str) -> String {
-        if self.terms.is_empty() || text.is_empty() {
-            return text.to_string();
+    /// 词条集合未变更时复用已编译自动机；否则重建并回填缓存。
+    fn ensure_compiled(&self) -> Option<Arc<Compiled>> {
+        if !self.dirty.load(Ordering::Relaxed) {
+            if let Ok(guard) = self.compiled.read() {
+                if let Some(c) = guard.as_ref() {
+                    return Some(Arc::clone(c));
+                }
+            }
         }
 
+        let built = Arc::new(self.build_compiled()?);
+        if let Ok(mut guard) = self.compiled.write() {
+            *guard = Some(Arc::clone(&built));
+        }
+        self.dirty.store(false, Ordering::Relaxed);
+        Some(built)
+    }
+
+    fn build_compiled(&self) -> Option<Compiled> {
         // 确定性排序：按模式长度降序，同长按字典序升序（长词优先策略）
-        let mut metas: Vec<&TermMeta> = self.terms.values().collect();
+        let mut metas: Vec<TermMeta> = self.terms.values().cloned().collect();
         metas.sort_by(|a, b| {
             b.source
                 .len()
@@ -73,21 +135,31 @@ impl Glossary {
                 .then_with(|| a.source.cmp(&b.source))
         });
 
-        // 提取模式串供 AhoCorasick 自动机构建
         let patterns: Vec<&str> = metas.iter().map(|m| m.source.as_str()).collect();
 
         // 采用 Standard 模式构建支持大小写折叠的自动机，配合 find_overlapping_iter
         // 提取全部重叠候选区间，并在业务层后验过滤 match_case 与 word_boundary。
         // 随后在候选池中执行贪婪 Leftmost-Longest 匹配，杜绝 LeftmostLongest
         // 内部提前剪枝导致同形大小写敏感词或子词被静默吞掉的缺陷。
-        let ac = match AhoCorasick::builder()
+        let ac = AhoCorasick::builder()
             .match_kind(MatchKind::Standard)
             .ascii_case_insensitive(true)
             .build(&patterns)
-        {
-            Ok(ac) => ac,
-            Err(_) => return text.to_string(),
+            .ok()?;
+
+        Some(Compiled { ac, metas })
+    }
+
+    pub fn apply(&self, text: &str) -> String {
+        if self.terms.is_empty() || text.is_empty() {
+            return text.to_string();
+        }
+
+        let compiled = match self.ensure_compiled() {
+            Some(c) => c,
+            None => return text.to_string(),
         };
+        let Compiled { ac, metas } = &*compiled;
 
         struct CandidateMatch<'a> {
             start: usize,
@@ -100,7 +172,7 @@ impl Glossary {
 
         for mat in ac.find_overlapping_iter(text) {
             let pattern_idx = mat.pattern().as_usize();
-            let meta = metas[pattern_idx];
+            let meta = &metas[pattern_idx];
             let matched_slice = &text[mat.start()..mat.end()];
 
             // 1. 若要求区分大小写，检查是否与原始定义完全匹配
@@ -114,14 +186,14 @@ impl Glossary {
                     true
                 } else {
                     let prev_char = text[..mat.start()].chars().next_back().unwrap_or(' ');
-                    !prev_char.is_ascii_alphanumeric() && prev_char != '_'
+                    !is_word_char(prev_char)
                 };
 
                 let is_right_boundary = if mat.end() >= text.len() {
                     true
                 } else {
                     let next_char = text[mat.end()..].chars().next().unwrap_or(' ');
-                    !next_char.is_ascii_alphanumeric() && next_char != '_'
+                    !is_word_char(next_char)
                 };
 
                 if !is_left_boundary || !is_right_boundary {
@@ -272,5 +344,71 @@ mod tests {
         let text = "I eat an apple from Apple";
         let result = glossary.apply(text);
         assert_eq!(result, "I eat an 苹果水果 from 苹果公司");
+    }
+
+    /// 回归：中日韩书写系统无词边界，术语按「全局强制」语义生效。
+    ///
+    /// 早期实现用 `is_ascii_*` 判定词边界，虽然中文词条因此退化为「不做边界
+    /// 检查」而碰巧可用，但同样地把有明确词边界的拉丁扩展（café）也一并放过，
+    /// 导致「caféteria」被腰斩。正确做法是按书写系统区分，而不是按 ASCII 区分。
+    #[test]
+    fn test_glossary_cjk_forced_replacement() {
+        let mut glossary = Glossary::new();
+        glossary.insert("机器", "装置");
+
+        assert_eq!(
+            glossary.apply("机器学习和机器视觉"),
+            "装置学习和装置视觉",
+            "无词边界书写系统按全局强制语义替换"
+        );
+        assert_eq!(glossary.apply("这台机器很好"), "这台装置很好");
+        assert_eq!(glossary.apply("机器。"), "装置。");
+    }
+
+    /// 回归：拉丁扩展词（如 café）存在明确词边界，不应在单词内部被腰斩。
+    #[test]
+    fn test_glossary_non_ascii_latin_boundary() {
+        let mut glossary = Glossary::new();
+        glossary.insert("café", "咖啡");
+
+        assert_eq!(
+            glossary.apply("a caféteria menu"),
+            "a caféteria menu",
+            "café 不得命中更长单词 caféteria 的内部"
+        );
+        assert_eq!(glossary.apply("I want a café"), "I want a 咖啡");
+        assert_eq!(glossary.apply("the café, and café"), "the 咖啡, and 咖啡");
+    }
+
+    /// 预编译缓存不得掩盖后续的词条变更。
+    #[test]
+    fn test_glossary_cache_invalidated_on_insert() {
+        let mut glossary = Glossary::new();
+        glossary.insert("alpha", "甲");
+        assert_eq!(glossary.apply("alpha beta"), "甲 beta");
+
+        // 复用已编译自动机后再新增词条，新词条必须立即生效
+        glossary.insert("beta", "乙");
+        assert_eq!(glossary.apply("alpha beta"), "甲 乙");
+
+        // 长词优先策略在缓存命中后依然成立
+        glossary.insert("beta gamma", "乙丙");
+        assert_eq!(glossary.apply("alpha beta gamma"), "甲 乙丙");
+    }
+
+    #[test]
+    fn test_glossary_clone_resets_compiled_cache() {
+        let mut glossary = Glossary::new();
+        glossary.insert("cat", "猫");
+        assert_eq!(glossary.apply("cat"), "猫");
+
+        let cloned = glossary.clone();
+        assert_eq!(cloned.apply("cat"), "猫");
+
+        // 克隆体与原体互不影响
+        let mut cloned2 = cloned.clone();
+        cloned2.insert("cat", "猫咪");
+        assert_eq!(cloned2.apply("cat"), "猫咪");
+        assert_eq!(cloned.apply("cat"), "猫");
     }
 }

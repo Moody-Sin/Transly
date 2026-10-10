@@ -12,11 +12,11 @@ pub struct GoogleWebEngine {
 impl GoogleWebEngine {
     pub fn new() -> Self {
         Self {
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
-                .build()
-                .unwrap_or_default(),
+            client: super::build_timed_client(
+                Client::builder()
+                    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"),
+                std::time::Duration::from_secs(10),
+            ),
         }
     }
     pub fn parse_gtx_response(json: &Value, engine_id: &str) -> Result<TranslationResponse> {

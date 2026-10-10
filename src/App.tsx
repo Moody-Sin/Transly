@@ -430,6 +430,18 @@ export default function App() {
     }
   }, [isFloatWindow])
 
+  // 迷你悬浮窗 Escape 键极速关闭交互
+  useEffect(() => {
+    if (!isFloatWindow) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        getCurrentWindow().hide()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isFloatWindow])
+
   // 依赖必须是稳定的 sessionId：依赖整个 pairingRequest 对象时，
   // 倒计时每秒重建一次对象，也会把 setInterval 每秒 clear 一次再重建。
   const pairingSessionId = pairingRequest?.sessionId ?? null

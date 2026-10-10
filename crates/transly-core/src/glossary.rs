@@ -36,8 +36,17 @@ impl Glossary {
             return;
         }
 
-        let is_ascii_word =
-            !src.is_empty() && src.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let starts_with_ascii = src
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphanumeric() || c == '_')
+            .unwrap_or(false);
+        let ends_with_ascii = src
+            .chars()
+            .next_back()
+            .map(|c| c.is_ascii_alphanumeric() || c == '_')
+            .unwrap_or(false);
+        let word_boundary = starts_with_ascii && ends_with_ascii;
 
         self.terms.insert(
             src.clone(),
@@ -45,7 +54,7 @@ impl Glossary {
                 source: src,
                 target: tgt,
                 match_case,
-                word_boundary: is_ascii_word,
+                word_boundary,
             },
         );
     }
@@ -240,11 +249,19 @@ mod tests {
     fn test_glossary_boundary_check() {
         let mut glossary = Glossary::new();
         glossary.insert("cat", "猫");
+        glossary.insert("deep learning", "深度学习");
 
         // 单词内部子串不应匹配，独立词才匹配
         let text = "scatter the cat in bobcat";
         let result = glossary.apply(text);
         assert_eq!(result, "scatter the 猫 in bobcat");
+
+        // 包含空格的复合短语同样受到首尾单词边界保护
+        let phrase_text = "nondeep learning and deep learningpro versus real deep learning here";
+        assert_eq!(
+            glossary.apply(phrase_text),
+            "nondeep learning and deep learningpro versus real 深度学习 here"
+        );
     }
 
     #[test]

@@ -43,6 +43,7 @@ impl TranslationCache {
         let writer = Connection::open(p)?;
         writer.execute_batch(
             r#"
+            PRAGMA busy_timeout = 5000;
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             CREATE TABLE IF NOT EXISTS translation_cache (
@@ -72,6 +73,7 @@ impl TranslationCache {
         )?;
         reader.execute_batch(
             r#"
+            PRAGMA busy_timeout = 5000;
             PRAGMA query_only = ON;
             PRAGMA synchronous = NORMAL;
             "#,

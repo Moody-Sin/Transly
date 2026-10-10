@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css}\" \"extension/src/**/*.ts\" \"extension/_locales/**/*.json\" extension/popup.html",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css}\" \"extension/src/**/*.ts\" \"extension/_locales/**/*.json\" extension/popup.html",
-    "test:task": "node --experimental-strip-types --test \"src/task/*.test.ts\" \"extension/src/shared/*.test.ts\"",
+    "test:task": "node --experimental-strip-types --test \"src/task/*.test.ts\" \"src/utils/*.test.ts\" \"extension/src/shared/*.test.ts\"",
     "build:extension": "pnpm --filter transly-extension run build",
     "build:extension:firefox": "pnpm --filter transly-extension run build && pnpm --filter transly-extension run build:firefox"
   },

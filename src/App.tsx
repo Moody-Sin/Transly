@@ -23,6 +23,7 @@ import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
 import ShortcutRecorder from './ShortcutRecorder'
+import { speakText } from './utils/speech'
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>('zh-CN')
@@ -297,11 +298,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // 监听本地浏览器插件配对请求
+    // 监听本地浏览器插件配对请求（仅主窗口响应并展示，浮窗静默忽略）
     let unlisten: (() => void) | undefined
     listen<{ session_id: string; browser_hint?: string }>(
       'transly://pairing-requested',
       async (event) => {
+        if (isFloatWindow) return
         setPairingRequest({
           sessionId: event.payload.session_id,
           browserHint: event.payload.browser_hint,
@@ -322,7 +324,7 @@ export default function App() {
     return () => {
       if (unlisten) unlisten()
     }
-  }, [])
+  }, [isFloatWindow])
 
   useEffect(() => {
     if (!pairingRequest) return
@@ -578,11 +580,7 @@ export default function App() {
   }
 
   const handleSpeak = (text: string, lang: string) => {
-    if (!('speechSynthesis' in window) || !text.trim()) return
-    window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text.trim())
-    utterance.lang = lang
-    window.speechSynthesis.speak(utterance)
+    speakText(text, lang, runner.snapshot.detectedLang)
   }
 
   const handleOcrClipboard = async () => {
@@ -610,10 +608,16 @@ export default function App() {
   if (isFloatWindow) {
     return (
       <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-indigo-100 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-md select-none text-slate-800 dark:text-slate-100">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
-          <div className="flex items-center gap-1.5">
+        <div
+          data-tauri-drag-region
+          className="flex cursor-move items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2"
+        >
+          <div data-tauri-drag-region className="flex items-center gap-1.5">
             <Languages className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+            <span
+              data-tauri-drag-region
+              className="text-xs font-semibold text-slate-800 dark:text-slate-200"
+            >
               {t.float.title}
             </span>
           </div>

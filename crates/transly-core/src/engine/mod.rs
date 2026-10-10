@@ -127,6 +127,24 @@ pub trait TranslateEngine: Send + Sync {
         }
         Ok(results)
     }
+
+    /// 逐项批量翻译（支持部分成功与部分失败容错隔离）。
+    /// 默认实现优先调用 translate_batch，若整体失败则回退至逐项翻译以隔离故障项。
+    async fn translate_batch_tolerant(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Vec<Result<TranslationResponse>> {
+        match self.translate_batch(requests).await {
+            Ok(results) => results.into_iter().map(Ok).collect(),
+            Err(_) => {
+                let mut tolerant = Vec::with_capacity(requests.len());
+                for req in requests {
+                    tolerant.push(self.translate(req).await);
+                }
+                tolerant
+            }
+        }
+    }
 }
 
 /// 单次批量请求的硬上限（项数）。

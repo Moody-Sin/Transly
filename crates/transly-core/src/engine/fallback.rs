@@ -115,6 +115,37 @@ impl TranslateEngine for FallbackEngine {
             }
         }
     }
+
+    async fn translate_batch_tolerant(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Vec<Result<TranslationResponse>> {
+        let primary_results = self.primary.translate_batch_tolerant(requests).await;
+        let mut final_results = Vec::with_capacity(requests.len());
+
+        for (idx, res) in primary_results.into_iter().enumerate() {
+            match res {
+                Ok(ok_res) => final_results.push(Ok(ok_res)),
+                Err(primary_err) => {
+                    if matches!(primary_err, Error::MissingCredentials(_)) {
+                        final_results.push(Err(primary_err));
+                        continue;
+                    }
+                    match self.fallback.translate(&requests[idx]).await {
+                        Ok(mut fb_res) => {
+                            if !fb_res.engine.ends_with("(fallback)") {
+                                fb_res.engine = format!("{}(fallback)", fb_res.engine);
+                            }
+                            final_results.push(Ok(fb_res));
+                        }
+                        Err(_) => final_results.push(Err(primary_err)),
+                    }
+                }
+            }
+        }
+
+        final_results
+    }
 }
 
 #[cfg(test)]

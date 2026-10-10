@@ -51,18 +51,29 @@ impl OcrErrorDto {
     }
 }
 
-/// 构建去重候选识别语言列表（优先对齐源语言预期，避免中文界面绑定）
+/// 构建去重候选识别语言列表（优先对齐源语言预期，兼顾中英双向与系统语言包）
 pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
-    let primary = if target_lang.trim() == "zh-CN" {
-        "en-US"
-    } else {
-        "system"
-    };
+    let clean = target_lang.trim().to_lowercase();
+    let is_target_zh = clean == "zh"
+        || clean == "zh-cn"
+        || clean == "zh-hans"
+        || clean == "zh-tw"
+        || clean == "zh-hant";
 
-    let mut list = Vec::with_capacity(2);
-    for cand in [primary, "system", "en-US"] {
-        if !list.contains(&cand) {
-            list.push(cand);
+    let mut list = Vec::with_capacity(4);
+    if is_target_zh {
+        // 目标是中文：优先英文与系统语言，后验中文语言包兜底
+        for cand in ["en-US", "system", "zh-Hans-CN", "zh-CN"] {
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
+        }
+    } else {
+        // 目标是非中文：优先中文与系统语言，后验英文语言包兜底
+        for cand in ["zh-Hans-CN", "zh-CN", "system", "en-US"] {
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
         }
     }
     list
@@ -117,13 +128,13 @@ mod tests {
     #[test]
     fn test_build_candidate_languages_zh_cn() {
         let candidates = build_candidate_languages("zh-CN");
-        assert_eq!(candidates, vec!["en-US", "system"]);
+        assert_eq!(candidates, vec!["en-US", "system", "zh-Hans-CN", "zh-CN"]);
     }
 
     #[test]
     fn test_build_candidate_languages_non_zh() {
         let candidates = build_candidate_languages("en");
-        assert_eq!(candidates, vec!["system", "en-US"]);
+        assert_eq!(candidates, vec!["zh-Hans-CN", "zh-CN", "system", "en-US"]);
     }
 
     #[test]

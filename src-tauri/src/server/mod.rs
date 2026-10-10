@@ -460,21 +460,25 @@ async fn translate_batch_handler(
         }
     }
 
-    // 2. 对未命中缓存的项发起批量引擎翻译并写回缓存
+    // 2. 对未命中缓存的项发起容错批量引擎翻译并写回缓存
     if !missing_requests.is_empty() {
-        match active_engine.translate_batch(&missing_requests).await {
-            Ok(results) => {
-                // 安全防范：验证引擎返回条数与请求条数完全一致
-                if results.len() != missing_requests.len() {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-                // 构造批量写入项，通过单次事务批量写入缓存，避免循环频繁加锁与隐式事务开销
-                let mut batch_cache_entries = Vec::with_capacity(results.len());
-                for (req_idx, res) in results.into_iter().enumerate() {
-                    let original_idx = missing_indices[req_idx];
-                    let original_item = &unified_items[original_idx];
-                    let actual_engine = res.actual_engine().to_string();
+        let results = active_engine
+            .translate_batch_tolerant(&missing_requests)
+            .await;
+        // 安全防范：验证引擎返回条数与请求条数完全一致
+        if results.len() != missing_requests.len() {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
 
+        // 构造批量写入项，通过单次事务批量写入缓存，避免循环频繁加锁与隐式事务开销
+        let mut batch_cache_entries = Vec::with_capacity(results.len());
+        for (req_idx, item_res) in results.into_iter().enumerate() {
+            let original_idx = missing_indices[req_idx];
+            let original_item = &unified_items[original_idx];
+
+            match item_res {
+                Ok(res) => {
+                    let actual_engine = res.actual_engine().to_string();
                     item_results[original_idx] = Some(BatchItemResult::Success {
                         id: original_item.id.clone(),
                         text: res.text.clone(),
@@ -484,35 +488,31 @@ async fn translate_batch_handler(
 
                     batch_cache_entries.push((original_item.text.clone(), res.text, actual_engine));
                 }
-
-                // 写回时通过同一同步门禁 set_if_current 校验版本并执行事务批量写入
-                if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
-                    let entries = batch_cache_entries.iter().map(|(txt, trans, eng)| {
-                        (
-                            txt.as_str(),
-                            trans.as_str(),
-                            source.as_str(),
-                            target.as_str(),
-                            eng.as_str(),
-                        )
+                Err(e) => {
+                    item_results[original_idx] = Some(BatchItemResult::Failed {
+                        id: original_item.id.clone(),
+                        error_kind: e.kind(),
+                        message: e.to_string(),
                     });
-                    state.cache.set_batch(entries)
-                }) {
-                    eprintln!("[Cache Write Warning] 扩展批量翻译缓存批量写入失败: {e}");
                 }
             }
-            Err(e) => {
-                // 逐项标记失败，支持部分失败结构化反馈
-                let kind = e.kind();
-                let msg = e.to_string();
-                for &orig_idx in &missing_indices {
-                    let original_item = &unified_items[orig_idx];
-                    item_results[orig_idx] = Some(BatchItemResult::Failed {
-                        id: original_item.id.clone(),
-                        error_kind: kind,
-                        message: msg.clone(),
-                    });
-                }
+        }
+
+        // 写回时通过同一同步门禁 set_if_current 校验版本并执行事务批量写入成功项
+        if !batch_cache_entries.is_empty() {
+            if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
+                let entries = batch_cache_entries.iter().map(|(txt, trans, eng)| {
+                    (
+                        txt.as_str(),
+                        trans.as_str(),
+                        source.as_str(),
+                        target.as_str(),
+                        eng.as_str(),
+                    )
+                });
+                state.cache.set_batch(entries)
+            }) {
+                eprintln!("[Cache Write Warning] 扩展批量翻译缓存批量写入失败: {e}");
             }
         }
     }

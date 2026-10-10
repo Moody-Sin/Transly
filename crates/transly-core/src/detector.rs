@@ -72,9 +72,55 @@ pub fn detect_language(text: &str) -> Option<&'static str> {
     if weighted_cjk > latin_score {
         Some("zh-CN")
     } else if latin_count > 0 {
-        Some("en")
+        Some(detect_latin_sublanguage(text))
     } else {
         None
+    }
+}
+
+/// 针对拉丁字母文本细分检测主要西欧语系（法、德、西等），避免全部无差别归入英文
+fn detect_latin_sublanguage(text: &str) -> &'static str {
+    let mut de_score = 0usize;
+    let mut fr_score = 0usize;
+    let mut es_score = 0usize;
+
+    for ch in text.chars() {
+        match ch {
+            'ä' | 'Ä' | 'ö' | 'Ö' | 'ü' | 'Ü' | 'ß' => de_score += 3,
+            'é' | 'É' | 'è' | 'È' | 'ê' | 'Ê' | 'à' | 'À' | 'ç' | 'Ç' | 'ù' | 'Ù' | 'ô' | 'Ô' => {
+                fr_score += 3
+            }
+            'ñ' | 'Ñ' | '¿' | '¡' => es_score += 3,
+            _ => {}
+        }
+    }
+
+    for word in text.split(|c: char| !c.is_alphabetic()) {
+        if word.is_empty() {
+            continue;
+        }
+        let w = word.to_lowercase();
+        match w.as_str() {
+            "bonjour" | "merci" | "oui" | "avec" | "dans" | "pour" | "vous" | "nous" | "elle"
+            | "sont" => fr_score += 5,
+            "guten" | "danke" | "bitte" | "nicht" | "oder" | "aber" | "sehr" | "wenn" | "auch" => {
+                de_score += 5
+            }
+            "hola" | "gracias" | "amigo" | "buenos" | "dias" | "como" | "pero" | "todos" => {
+                es_score += 5
+            }
+            _ => {}
+        }
+    }
+
+    if de_score > 0 && de_score >= fr_score && de_score >= es_score {
+        "de"
+    } else if fr_score > 0 && fr_score >= de_score && fr_score >= es_score {
+        "fr"
+    } else if es_score > 0 {
+        "es"
+    } else {
+        "en"
     }
 }
 
@@ -184,6 +230,25 @@ mod tests {
         assert_eq!(resolve_smart_target_lang("Hello world", "en"), "zh-CN");
         assert_eq!(resolve_smart_target_lang("你好世界", "en"), "en");
         assert_eq!(resolve_smart_target_lang("こんにちは", "en"), "en");
+    }
+
+    #[test]
+    fn test_detect_language_european_latin() {
+        assert_eq!(detect_language("Bonjour tout le monde"), Some("fr"));
+        assert_eq!(detect_language("Guten Tag, wie geht es Ihnen?"), Some("de"));
+        assert_eq!(detect_language("Hola amigo, buenos dias"), Some("es"));
+        assert_eq!(detect_language("über Straße"), Some("de"));
+    }
+
+    #[test]
+    fn test_resolve_smart_target_lang_european_when_target_is_english() {
+        // 用户目标语言为英文，输入法文或德文时，意图为外翻英，必须保持目标为英文，不得误转为中文
+        assert_eq!(
+            resolve_smart_target_lang("Bonjour tout le monde", "en"),
+            "en"
+        );
+        assert_eq!(resolve_smart_target_lang("Guten Tag", "en"), "en");
+        assert_eq!(resolve_smart_target_lang("Hola amigo", "en"), "en");
     }
 
     #[test]

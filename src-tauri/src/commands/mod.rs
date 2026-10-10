@@ -556,8 +556,7 @@ pub struct SelectionContext {
 pub fn trigger_selection_replacement(
     handle: tauri::AppHandle,
     sel_flag: Arc<std::sync::atomic::AtomicBool>,
-    pool: Arc<EnginePool>,
-    glossary: Arc<RwLock<Glossary>>,
+    deps: Arc<TranslationDependencies>,
 ) {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
     use std::sync::atomic::Ordering;
@@ -611,26 +610,69 @@ pub fn trigger_selection_replacement(
         }
 
         // 第二阶段：无锁执行网络翻译与术语库处理（网络耗时不阻塞其他快捷键与剪贴板监听）
+        let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
         let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
-        let engine = pool.default_engine();
+        let active_engine = deps.pool.default_engine();
 
-        // 保护代码块与行内标记符号
-        let preserved = transly_core::stash_code_blocks(clean);
-        let req = TranslationRequest {
-            text: preserved.text.clone(),
-            source_lang: "auto".to_string(),
-            target_lang,
-        };
+        // 优先查缓存
+        let mut final_text = None;
+        if cache_enabled {
+            let cache_ref = deps.cache.clone();
+            let engine_clone = active_engine.clone();
+            let t = clean.to_string();
+            let tl = target_lang.clone();
+            let hit = tokio::task::spawn_blocking(move || {
+                transly_core::lookup_cache_with_fallback(
+                    &cache_ref,
+                    engine_clone.as_ref(),
+                    &t,
+                    "auto",
+                    &tl,
+                )
+            })
+            .await
+            .unwrap_or(None);
 
-        let final_text = match engine.translate(&req).await {
-            Ok(res) => {
-                let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
-                let g = glossary.read().await;
-                g.apply(&restored)
+            if let Some((cached_text, _used_engine)) = hit {
+                let g = deps.glossary.read().await;
+                final_text = Some(g.apply(&cached_text));
             }
-            Err(e) => {
-                eprintln!("[Selection Replacement Warning] 翻译失败: {e}");
-                return;
+        }
+
+        let final_text = match final_text {
+            Some(cached) => cached,
+            None => {
+                let preserved = transly_core::stash_code_blocks(clean);
+                let req = TranslationRequest {
+                    text: preserved.text.clone(),
+                    source_lang: "auto".to_string(),
+                    target_lang: target_lang.clone(),
+                };
+
+                match active_engine.translate(&req).await {
+                    Ok(res) => {
+                        let restored =
+                            transly_core::restore_code_blocks(&res.text, &preserved.stash);
+                        let cache_target_engine = res.actual_engine();
+                        if let Err(e) = deps.cache_controller.set_if_current(start_gen, || {
+                            deps.cache.set(
+                                clean,
+                                &restored,
+                                "auto",
+                                &target_lang,
+                                cache_target_engine,
+                            )
+                        }) {
+                            eprintln!("[Cache Write Warning] 划词原地替换缓存写入失败: {e}");
+                        }
+                        let g = deps.glossary.read().await;
+                        g.apply(&restored)
+                    }
+                    Err(e) => {
+                        eprintln!("[Selection Replacement Warning] 划词原地替换翻译失败: {e}");
+                        return;
+                    }
+                }
             }
         };
 
@@ -901,8 +943,7 @@ pub async fn set_replace_shortcut(
     shortcut: String,
     app: tauri::AppHandle,
     selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
-    pool: tauri::State<'_, Arc<EnginePool>>,
-    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+    deps: tauri::State<'_, Arc<TranslationDependencies>>,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -926,19 +967,13 @@ pub async fn set_replace_shortcut(
 
     let app_h = app.clone();
     let sel_flag = selection_ctx.sel_flag.clone();
-    let pool_ref = pool.inner().clone();
-    let glossary_ref = glossary.inner().clone();
+    let deps_ref = deps.inner().clone();
 
     let register_res = app
         .global_shortcut()
         .on_shortcut(clean, move |_app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
-                trigger_selection_replacement(
-                    app_h.clone(),
-                    sel_flag.clone(),
-                    pool_ref.clone(),
-                    glossary_ref.clone(),
-                );
+                trigger_selection_replacement(app_h.clone(), sel_flag.clone(), deps_ref.clone());
             }
         });
 
@@ -947,8 +982,7 @@ pub async fn set_replace_shortcut(
         if old_shortcut != clean {
             let rollback_h = app.clone();
             let rollback_sel_flag = selection_ctx.sel_flag.clone();
-            let rollback_pool = pool.inner().clone();
-            let rollback_glossary = glossary.inner().clone();
+            let rollback_deps = deps.inner().clone();
             let _ = app.global_shortcut().on_shortcut(
                 old_shortcut.as_str(),
                 move |_app, _shortcut, event| {
@@ -956,8 +990,7 @@ pub async fn set_replace_shortcut(
                         trigger_selection_replacement(
                             rollback_h.clone(),
                             rollback_sel_flag.clone(),
-                            rollback_pool.clone(),
-                            rollback_glossary.clone(),
+                            rollback_deps.clone(),
                         );
                     }
                 },

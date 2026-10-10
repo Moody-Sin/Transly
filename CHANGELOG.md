@@ -8,6 +8,17 @@
 ## [未发布]
 
 ### 优化与增强
+- **离线语言检测与智能对转西欧拉丁语系防偏转 (P0)**：在 `crates/transly-core` 的 `detector` 模块中细分主要西欧拉丁语系（法、德、西等）的特征重音字母与常用功能词检测。修复当用户默认目标语言为英文时输入欧系小语种（如法文 `Bonjour`）被无差别误判为英文而强行对转为中文的缺陷，确保外翻英场景准确路由；添加对应单测。
+- **划词原地替换集成持久化缓存与历史沉淀 (P0)**：在 `src-tauri` 的 `trigger_selection_replacement` 流程中注入 `TranslationDependencies`，在无锁第二阶段优先查询 `TranslationCache`，并在翻译成功后安全写入缓存与历史记录；彻底消除原本原地替换完全绕过缓存与无历史沉淀的问题。
+- **批量翻译引擎逐项容错隔离 (P1)**：在 `crates/transly-core` 的 `TranslateEngine` trait 中引入 `translate_batch_tolerant` 规范，并在 `FallbackEngine` 与服务端 `server/mod.rs` 中完整实现。当整批 30 项中个别单项出现网络抖动或超长异常时，自动平滑隔离故障项，确保其余成功项正常返回并写入缓存，杜绝“一处报错整批 30 项全军覆没”。
+- **无边框悬浮迷你窗鼠标自由拖拽支持 (P2)**：在桌面端前端 `src/App.tsx` 的悬浮迷你窗（`#float`）Header 容器中添加 `data-tauri-drag-region` 属性与 `cursor-move` 视觉交互，允许用户按住浮窗顶栏自由拖拽移动窗口，解决弹出位置遮挡待读文本却无法挪开的体验痛点。
+- **浏览器扩展配对确认浮层窗口隔离 (P2)**：在 `src/App.tsx` 中为 `transly://pairing-requested` 广播事件增加 `if (isFloatWindow) return;` 门禁，确保扩展自动配对请求仅在主窗口渲染，杜绝在 380×240 的微型悬浮窗内弹出裁剪破版卡片。
+- **统一 Web Speech TTS 发音代码规范化 (P2)**：创建 `src/utils/speech.ts` 共享发音模块，自动将源语言为 `"auto"` 或非标代码的文本根据字符区段特征规范化为合法的 BCP-47 区域标记（如 `zh-CN`、`en-US`、`ja-JP`），消除浏览器原生发音静默失效缺陷并在主窗口与历史面板中复用；添加对应单测。
+- **SQLite 翻译缓存 busy_timeout 锁并发防御 (P2)**：在 `crates/transly-core` 的 `TranslationCache` 初始化中为读写连接配置 `PRAGMA busy_timeout = 5000;`，将 SQLite 默认 0ms 锁超时提升为 5 秒自适应等待，防止后台任务与高并发整页翻译并发写事务冲突报错。
+- **SQLite 冷启动后台异步维护 (P2)**：将 `src-tauri/src/main.rs` 启动阶段的 `cleanup_older_than_days` 与 `trim_to_max_items` 移至 `tauri::async_runtime::spawn_blocking` 异步执行，消除主线程冷启动磁盘扫描 I/O 阻塞。
+- **术语库复合短语首尾单词边界判定优化 (P2)**：在 `crates/transly-core` 的 `Glossary` 中优化 `word_boundary` 判定规则，支持带空格的多词复合短语（如 `"large language model"`）独立校验首尾字符的非单词边界，杜绝词组内部因空格导致边界校验意外失效；添加对应单测。
+- **Google 网页翻译请求伪装浏览器 User-Agent (P2)**：为 `GoogleWebEngine` 配置现代标准浏览器 User-Agent 标头，降低因使用默认客户端标头被 Google GTX 接口临时 429 拦截的风险。
+- **Windows 原生 OCR 候选识别语言扩充 (P2)**：在 `crates/transly-core/src/ocr/mod.rs` 中为 Windows 原生 OCR 候选列表补充 `"zh-Hans-CN"` 与 `"zh-CN"`，显著提升非中文系统用户对中文图片截图的文字识别率。
 - **OpenAI 兼容引擎 Base URL 自动规整容错 (P1)**：在 `crates/transly-core` 的 `OpenAIEngine` 中增加 `normalize_base_url`，自动识别并剥离用户粘贴输入的 `/chat/completions` 与尾部斜杠，杜绝拼接出 `.../chat/completions/chat/completions` 404 路径；添加对应单测。
 - **多引擎对比翻译模式即输即译与防抖调度升级 (P1)**：在桌面端主界面（`src/App.tsx`）中升级多引擎对比翻译体验，输入框打字由独立防抖定时器自动触发多引擎并发对比更新，切换模式时无缝衔接且在对比模式下不再无谓触发单引擎翻译，消除交互割裂与额度空耗。
 - **扩展端 `sendBatch` 通信未定义防御加固 (P2)**：在 `extension/src/content/index.ts` 中增强对 Service Worker 通信回调的防御性校验，捕获 `chrome.runtime.lastError` 与 `undefined` 响应，统一映射为结构化失败响应 `{ ok: false, error: ..., status: 503 }`，杜绝未捕获异常。

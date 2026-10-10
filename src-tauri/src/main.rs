@@ -48,9 +48,12 @@ fn main() {
     // 初始化持久化翻译缓存（目录见 resolve_data_dir）
     let cache = TranslationCache::open_default(resolve_data_dir(&context.config().identifier));
 
-    // 启动时自动做轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）
-    let _ = cache.cleanup_older_than_days(90);
-    let _ = cache.trim_to_max_items(100_000);
+    // 启动时将轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）投递至后台线程，避免阻塞主线程冷启动
+    let startup_cache = cache.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = startup_cache.cleanup_older_than_days(90);
+        let _ = startup_cache.trim_to_max_items(100_000);
+    });
 
     // 初始化全局术语库并从 SQLite 加载持久化规则
     let mut initial_glossary = Glossary::new();
@@ -234,8 +237,10 @@ fn main() {
 
             let replace_app_handle = app.handle().clone();
             let replace_sel_flag = selection_flag.clone();
-            let replace_pool = app.state::<Arc<EnginePool>>().inner().clone();
-            let replace_glossary = app.state::<Arc<RwLock<Glossary>>>().inner().clone();
+            let replace_deps = app
+                .state::<Arc<commands::TranslationDependencies>>()
+                .inner()
+                .clone();
             let _ = app.global_shortcut().on_shortcut(
                 active_replace_shortcut.as_str(),
                 move |_app, _shortcut, event| {
@@ -243,8 +248,7 @@ fn main() {
                         commands::trigger_selection_replacement(
                             replace_app_handle.clone(),
                             replace_sel_flag.clone(),
-                            replace_pool.clone(),
-                            replace_glossary.clone(),
+                            replace_deps.clone(),
                         );
                     }
                 },

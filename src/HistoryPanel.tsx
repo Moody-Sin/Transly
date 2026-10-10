@@ -3,6 +3,7 @@ import { Copy, Check, Trash2, RefreshCw, Search, Download, Volume2 } from 'lucid
 import { commands } from './bindings'
 import type { CacheEntry } from './bindings'
 import type { I18nSchema, Locale } from './i18n'
+import { speakText } from './utils/speech'
 
 const PAGE_SIZE = 50
 
@@ -74,11 +75,7 @@ export default function HistoryPanel({ t, locale }: Props) {
   }
 
   const handleSpeak = (text: string, lang: string) => {
-    if (!('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = lang
-    window.speechSynthesis.speak(utterance)
+    speakText(text, lang)
   }
 
   const handleExportJson = () => {

@@ -369,6 +369,17 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
     currentNode = walker.nextNode()
   }
 
+  // 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树）
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    const el = root as Element
+    const elementsWithShadow = el.querySelectorAll('*')
+    elementsWithShadow.forEach((subEl) => {
+      if (subEl.shadowRoot && subEl.shadowRoot.mode === 'open' && shouldTranslateElement(subEl)) {
+        entries.push(...collectTextNodes(subEl.shadowRoot))
+      }
+    })
+  }
+
   return entries
 }
 

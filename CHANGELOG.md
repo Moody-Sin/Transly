@@ -8,6 +8,8 @@
 ## [未发布]
 
 ### 优化与增强
+- **LLM 翻译专业领域风格预设 (P2)**：在 `crates/transly-core` 的 `OpenAIEngine` 中引入 `TranslationStyle` 枚举，支持【通用直译】、【学术技术】（严格锁定专业术语与代码标识符）、【文学润色】（流畅地道）与【商务公文】四种 Prompt 风格模板并自适应调节采样温度；桌面端设置中心新增全局风格选择器。
+- **本地离线模型 (Ollama) 一键预置向导 (P2)**：在设置中心的 OpenAI 自定义端点配置区域提供一键填入本地 Ollama 默认 API 端点（`http://localhost:11434/v1`）与默认模型（`qwen2.5:7b`），方便离线安全翻译用户零门槛直连本地模型。
 - **SQLite 翻译缓存读写分离并发解耦 (P1)**：将 `crates/transly-core` 中的 `TranslationCache` 升级为读写双连接分离架构（`File` 模式下采用独立 `writer` 互斥写连接与 `reader` 只读并发连接）。在 SQLite WAL 模式下，整页翻译的大批量事务写盘与用户前台的高频历史查询/缓存命中完全解耦、互不阻塞，杜绝锁争用卡顿。
 - **现代 Web Components 开放 Shadow DOM 穿透翻译 (P2)**：在 `extension/src/content/index.ts` 中增强 DOM 遍历器，递归探测并收集拥有开放模式（`open`）Shadow Root 的自定义组件内部有效文本，彻底解决 Lit/Stencil 等现代前端组件库封装内容被整页翻译遗漏的局限。
 - **术语库 Aho-Corasick 单趟多模式扫描重构 (P0)**：在 `crates/transly-core` 中重构 `Glossary::apply` 算法，引入高性能 `aho-corasick` crate (v1.1)。由原先按词长遍历的逐词 `Regex::replace_all` 升级为基于 `MatchKind::LeftmostLongest` 的单趟自动机流式扫描，匹配后精准执行后验 ASCII 单词边界检测，匹配性能从 $\mathcal{O}(N \times L)$ 优化至 $\mathcal{O}(L)$。彻底解决先前术语 A 替换为 B 之后 B 中文字被后续术语再次二次替换的级联缺陷，并天然保障长词优先命中。

@@ -23,14 +23,25 @@ pub struct CacheEntry {
     pub created_at: u32,
 }
 
+enum CacheBackend {
+    File {
+        writer: Mutex<Connection>,
+        reader: Mutex<Connection>,
+    },
+    Memory {
+        conn: Mutex<Connection>,
+    },
+}
+
 pub struct TranslationCache {
-    conn: Mutex<Connection>,
+    backend: CacheBackend,
 }
 
 impl TranslationCache {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open(path)?;
-        conn.execute_batch(
+        let p = path.as_ref();
+        let writer = Connection::open(p)?;
+        writer.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
@@ -53,8 +64,24 @@ impl TranslationCache {
             );
             "#,
         )?;
+
+        // 读连接独立打开，专供高频非阻塞并发查询（WAL 模式下完全不阻塞写操作）
+        let reader = Connection::open_with_flags(
+            p,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        reader.execute_batch(
+            r#"
+            PRAGMA query_only = ON;
+            PRAGMA synchronous = NORMAL;
+            "#,
+        )?;
+
         Ok(Self {
-            conn: Mutex::new(conn),
+            backend: CacheBackend::File {
+                writer: Mutex::new(writer),
+                reader: Mutex::new(reader),
+            },
         })
     }
 
@@ -81,25 +108,66 @@ impl TranslationCache {
             "#,
         )?;
         Ok(Self {
-            conn: Mutex::new(conn),
+            backend: CacheBackend::Memory {
+                conn: Mutex::new(conn),
+            },
         })
     }
 
     /// 在指定应用数据目录下打开持久化缓存，失败时依次回退到内存缓存。
-    ///
-    /// 目录由调用方（平台适配层）提供：本 crate 不引入任何平台目录假设，
-    /// 以便被 CLI / WASM 等无文件系统或不同目录约定的宿主复用。
     pub fn open_default(data_dir: impl AsRef<Path>) -> Arc<Self> {
         let cache = Self::new(data_dir.as_ref().join("cache.db"))
             .or_else(|_| Self::in_memory())
-            // 最后兜底：仅当系统内存耗尽致 sqlite 无法分配连接时才会失败。
-            // 此时进程已无法提供翻译服务，用 expect 显式暴露启动期故障，优于静默降级。
             .unwrap_or_else(|_| Self {
-                conn: Mutex::new(
-                    Connection::open_in_memory().expect("内存耗尽，无法建立内存缓存连接"),
-                ),
+                backend: CacheBackend::Memory {
+                    conn: Mutex::new(
+                        Connection::open_in_memory().expect("内存耗尽，无法建立内存缓存连接"),
+                    ),
+                },
             });
         Arc::new(cache)
+    }
+
+    #[inline]
+    fn with_reader<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&Connection) -> Result<R>,
+    {
+        match &self.backend {
+            CacheBackend::File { reader, .. } => {
+                let guard = reader
+                    .lock()
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+                f(&guard)
+            }
+            CacheBackend::Memory { conn } => {
+                let guard = conn
+                    .lock()
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+                f(&guard)
+            }
+        }
+    }
+
+    #[inline]
+    fn with_writer<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut Connection) -> Result<R>,
+    {
+        match &self.backend {
+            CacheBackend::File { writer, .. } => {
+                let mut guard = writer
+                    .lock()
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+                f(&mut guard)
+            }
+            CacheBackend::Memory { conn } => {
+                let mut guard = conn
+                    .lock()
+                    .map_err(|e| crate::Error::Internal(e.to_string()))?;
+                f(&mut guard)
+            }
+        }
     }
 
     fn generate_key(text: &str, source_lang: &str, target_lang: &str, engine: &str) -> String {
@@ -124,21 +192,19 @@ impl TranslationCache {
         engine: &str,
     ) -> Result<Option<String>> {
         let key = Self::generate_key(text, source_lang, target_lang, engine);
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT translated_text FROM translation_cache WHERE cache_key = ?1",
+            )?;
+            let mut rows = stmt.query(params![key])?;
 
-        let mut stmt = conn
-            .prepare_cached("SELECT translated_text FROM translation_cache WHERE cache_key = ?1")?;
-        let mut rows = stmt.query(params![key])?;
-
-        if let Some(row) = rows.next()? {
-            let res: String = row.get(0)?;
-            Ok(Some(res))
-        } else {
-            Ok(None)
-        }
+            if let Some(row) = rows.next()? {
+                let res: String = row.get(0)?;
+                Ok(Some(res))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     pub fn set(
@@ -155,21 +221,17 @@ impl TranslationCache {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        conn.execute(
-            r#"
-            INSERT OR REPLACE INTO translation_cache 
-            (cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            "#,
-            params![key, text, translated, source_lang, target_lang, engine, now],
-        )?;
-
-        Ok(())
+        self.with_writer(|conn| {
+            conn.execute(
+                r#"
+                INSERT OR REPLACE INTO translation_cache 
+                (cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![key, text, translated, source_lang, target_lang, engine, now],
+            )?;
+            Ok(())
+        })
     }
 
     /// 在单个显式事务中批量保存或更新翻译缓存，大幅降低磁盘 I/O 争用与锁开销
@@ -188,37 +250,33 @@ impl TranslationCache {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        self.with_writer(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare_cached(
+                    r#"
+                    INSERT OR REPLACE INTO translation_cache 
+                    (cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                    "#,
+                )?;
 
-        let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare_cached(
-                r#"
-                INSERT OR REPLACE INTO translation_cache 
-                (cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                "#,
-            )?;
-
-            for (text, translated, source_lang, target_lang, engine) in items {
-                let key = Self::generate_key(text, source_lang, target_lang, engine);
-                stmt.execute(params![
-                    key,
-                    text,
-                    translated,
-                    source_lang,
-                    target_lang,
-                    engine,
-                    now
-                ])?;
+                for (text, translated, source_lang, target_lang, engine) in items {
+                    let key = Self::generate_key(text, source_lang, target_lang, engine);
+                    stmt.execute(params![
+                        key,
+                        text,
+                        translated,
+                        source_lang,
+                        target_lang,
+                        engine,
+                        now
+                    ])?;
+                }
             }
-        }
-        tx.commit()?;
-
-        Ok(())
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     /// 清理超过指定天数的过期缓存
@@ -229,67 +287,50 @@ impl TranslationCache {
             .as_secs() as i64
             - (days as i64 * 86400);
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let deleted = conn.execute(
-            "DELETE FROM translation_cache WHERE created_at < ?1",
-            params![cutoff],
-        )?;
-
-        Ok(deleted)
+        self.with_writer(|conn| {
+            let deleted = conn.execute(
+                "DELETE FROM translation_cache WHERE created_at < ?1",
+                params![cutoff],
+            )?;
+            Ok(deleted)
+        })
     }
 
     /// 限制缓存总条目数，保留最新的 max_items 条（基于 created_at 索引高效删除）
     pub fn trim_to_max_items(&self, max_items: usize) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let deleted = conn.execute(
-            r#"
-            DELETE FROM translation_cache 
-            WHERE rowid IN (
-                SELECT rowid FROM translation_cache 
-                ORDER BY created_at DESC, rowid DESC 
-                LIMIT -1 OFFSET ?1
-            )
-            "#,
-            params![max_items as i64],
-        )?;
-
-        Ok(deleted)
+        self.with_writer(|conn| {
+            let deleted = conn.execute(
+                r#"
+                DELETE FROM translation_cache 
+                WHERE rowid IN (
+                    SELECT rowid FROM translation_cache 
+                    ORDER BY created_at DESC, rowid DESC 
+                    LIMIT -1 OFFSET ?1
+                )
+                "#,
+                params![max_items as i64],
+            )?;
+            Ok(deleted)
+        })
     }
 
     /// 读取持久化保存的所有术语库规则 (source_term, target_term, match_case)
     pub fn get_all_glossary_terms(&self) -> Result<Vec<(String, String, bool)>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT source_term, target_term, match_case FROM glossary ORDER BY created_at ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let match_case_val: i64 = row.get(2)?;
+                Ok((row.get(0)?, row.get(1)?, match_case_val != 0))
+            })?;
 
-        // 自动兼容无 match_case 字段的旧版本数据库表结构
-        let _ = conn.execute(
-            "ALTER TABLE glossary ADD COLUMN match_case INTEGER NOT NULL DEFAULT 1",
-            [],
-        );
-
-        let mut stmt = conn.prepare_cached(
-            "SELECT source_term, target_term, match_case FROM glossary ORDER BY created_at ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let match_case_val: i64 = row.get(2)?;
-            Ok((row.get(0)?, row.get(1)?, match_case_val != 0))
-        })?;
-
-        let mut terms = Vec::new();
-        for item in rows {
-            terms.push(item?);
-        }
-        Ok(terms)
+            let mut terms = Vec::new();
+            for item in rows {
+                terms.push(item?);
+            }
+            Ok(terms)
+        })
     }
 
     /// 持久化保存或更新术语（可指定是否区分大小写）
@@ -299,91 +340,67 @@ impl TranslationCache {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        // 自动兼容旧表
-        let _ = conn.execute(
-            "ALTER TABLE glossary ADD COLUMN match_case INTEGER NOT NULL DEFAULT 1",
-            [],
-        );
-
-        conn.execute(
-            r#"
-            INSERT OR REPLACE INTO glossary (source_term, target_term, created_at, match_case)
-            VALUES (?1, ?2, ?3, ?4)
-            "#,
-            params![source, target, now, if match_case { 1 } else { 0 }],
-        )?;
-
-        Ok(())
+        self.with_writer(|conn| {
+            conn.execute(
+                r#"
+                INSERT OR REPLACE INTO glossary (source_term, target_term, created_at, match_case)
+                VALUES (?1, ?2, ?3, ?4)
+                "#,
+                params![source, target, now, if match_case { 1 } else { 0 }],
+            )?;
+            Ok(())
+        })
     }
 
     /// 删除指定术语
     pub fn delete_glossary_term(&self, source: &str) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        conn.execute(
-            "DELETE FROM glossary WHERE source_term = ?1",
-            params![source],
-        )?;
-        Ok(())
+        self.with_writer(|conn| {
+            conn.execute(
+                "DELETE FROM glossary WHERE source_term = ?1",
+                params![source],
+            )?;
+            Ok(())
+        })
     }
 
     /// 清空所有翻译缓存
     pub fn clear_all_cache(&self) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let deleted = conn.execute("DELETE FROM translation_cache", [])?;
-        Ok(deleted)
+        self.with_writer(|conn| {
+            let deleted = conn.execute("DELETE FROM translation_cache", [])?;
+            Ok(deleted)
+        })
     }
 
     /// 按时间倒序分页读取翻译历史（最近优先）。
-    ///
-    /// 该表是去重缓存（`cache_key` 为主键，重复翻译同一文本会刷新 `created_at`），
-    /// 因此结果语义为「近期不重复的翻译记录」，与 UI「最近翻译」的直觉一致。
-    /// 排序附加 `rowid DESC` 作为时间相同时的稳定次序，避免分页出现重复/漏项。
     pub fn list_recent(&self, limit: u32, offset: u32) -> Result<Vec<CacheEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare_cached(
+                r#"
+                SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
+                FROM translation_cache
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?1 OFFSET ?2
+                "#,
+            )?;
 
-        let mut stmt = conn.prepare_cached(
-            r#"
-            SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
-            FROM translation_cache
-            ORDER BY created_at DESC, rowid DESC
-            LIMIT ?1 OFFSET ?2
-            "#,
-        )?;
+            let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
+                Ok(CacheEntry {
+                    cache_key: row.get(0)?,
+                    source_text: row.get(1)?,
+                    translated_text: row.get(2)?,
+                    source_lang: row.get(3)?,
+                    target_lang: row.get(4)?,
+                    engine: row.get(5)?,
+                    created_at: row.get::<_, i64>(6)? as u32,
+                })
+            })?;
 
-        let rows = stmt.query_map(params![limit as i64, offset as i64], |row| {
-            Ok(CacheEntry {
-                cache_key: row.get(0)?,
-                source_text: row.get(1)?,
-                translated_text: row.get(2)?,
-                source_lang: row.get(3)?,
-                target_lang: row.get(4)?,
-                engine: row.get(5)?,
-                // 库内为 i64 纪元秒，正值恒可回落 u32（2106 年前）
-                created_at: row.get::<_, i64>(6)? as u32,
-            })
-        })?;
-
-        let mut entries = Vec::new();
-        for item in rows {
-            entries.push(item?);
-        }
-        Ok(entries)
+            let mut entries = Vec::new();
+            for item in rows {
+                entries.push(item?);
+            }
+            Ok(entries)
+        })
     }
 
     /// 根据关键词模糊检索翻译历史（匹配原文或译文）
@@ -393,53 +410,47 @@ impl TranslationCache {
             return self.list_recent(limit, offset);
         }
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        self.with_reader(|conn| {
+            let pattern = format!("%{trimmed}%");
+            let mut stmt = conn.prepare_cached(
+                r#"
+                SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
+                FROM translation_cache
+                WHERE source_text LIKE ?1 OR translated_text LIKE ?1
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?2 OFFSET ?3
+                "#,
+            )?;
 
-        let pattern = format!("%{trimmed}%");
-        let mut stmt = conn.prepare_cached(
-            r#"
-            SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
-            FROM translation_cache
-            WHERE source_text LIKE ?1 OR translated_text LIKE ?1
-            ORDER BY created_at DESC, rowid DESC
-            LIMIT ?2 OFFSET ?3
-            "#,
-        )?;
+            let rows = stmt.query_map(params![pattern, limit as i64, offset as i64], |row| {
+                Ok(CacheEntry {
+                    cache_key: row.get(0)?,
+                    source_text: row.get(1)?,
+                    translated_text: row.get(2)?,
+                    source_lang: row.get(3)?,
+                    target_lang: row.get(4)?,
+                    engine: row.get(5)?,
+                    created_at: row.get::<_, i64>(6)? as u32,
+                })
+            })?;
 
-        let rows = stmt.query_map(params![pattern, limit as i64, offset as i64], |row| {
-            Ok(CacheEntry {
-                cache_key: row.get(0)?,
-                source_text: row.get(1)?,
-                translated_text: row.get(2)?,
-                source_lang: row.get(3)?,
-                target_lang: row.get(4)?,
-                engine: row.get(5)?,
-                created_at: row.get::<_, i64>(6)? as u32,
-            })
-        })?;
-
-        let mut entries = Vec::new();
-        for item in rows {
-            entries.push(item?);
-        }
-        Ok(entries)
+            let mut entries = Vec::new();
+            for item in rows {
+                entries.push(item?);
+            }
+            Ok(entries)
+        })
     }
 
     /// 按 `cache_key` 删除单条翻译历史。返回是否确实删除了记录。
     pub fn delete_entry(&self, cache_key: &str) -> Result<bool> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
-
-        let deleted = conn.execute(
-            "DELETE FROM translation_cache WHERE cache_key = ?1",
-            params![cache_key],
-        )?;
-        Ok(deleted > 0)
+        self.with_writer(|conn| {
+            let deleted = conn.execute(
+                "DELETE FROM translation_cache WHERE cache_key = ?1",
+                params![cache_key],
+            )?;
+            Ok(deleted > 0)
+        })
     }
 }
 
@@ -614,6 +625,28 @@ mod tests {
         let remaining = cache.list_recent(10, 0).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].source_text, "keep");
+    }
+
+    #[test]
+    fn test_concurrent_read_write_separation() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "transly_test_rw_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("cache.db");
+
+        let cache = TranslationCache::new(&db_path).unwrap();
+        cache.set("pre", "先验", "en", "zh-CN", "google").unwrap();
+
+        let val = cache.get("pre", "en", "zh-CN", "google").unwrap();
+        assert_eq!(val, Some("先验".to_string()));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

@@ -1570,10 +1570,20 @@ pub async fn is_api_key_configured(engine: String) -> bool {
         return false;
     }
     // keyring 读取为同步阻塞 I/O，禁止占用主线程
-    tokio::task::spawn_blocking(move || crate::secrets::get_secret(&engine))
-        .await
-        .map(|res| res.map(|k| !k.trim().is_empty()).unwrap_or(false))
-        .unwrap_or(false)
+    tokio::task::spawn_blocking(move || {
+        if engine == "openai" {
+            if let Ok(url) = crate::secrets::get_secret("openai_base_url") {
+                if transly_core::OpenAIEngine::is_local_endpoint(&url) {
+                    return true;
+                }
+            }
+        }
+        crate::secrets::get_secret(&engine)
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]

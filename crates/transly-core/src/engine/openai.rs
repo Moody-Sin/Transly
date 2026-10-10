@@ -16,6 +16,15 @@ pub enum TranslationStyle {
 }
 
 impl TranslationStyle {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Academic => "academic",
+            Self::Literary => "literary",
+            Self::Business => "business",
+        }
+    }
+
     pub fn prompt_modifier(&self) -> &'static str {
         match self {
             Self::General => "Translate the given text directly and accurately without any explanations.",
@@ -31,6 +40,7 @@ pub struct OpenAIEngine {
     api_key: String,
     base_url: String,
     model: String,
+    prefix_id: String,
     engine_id: String,
     style: TranslationStyle,
 }
@@ -81,6 +91,15 @@ struct StreamChatCompletionResponse {
 }
 
 impl OpenAIEngine {
+    fn refresh_engine_id(&mut self) {
+        self.engine_id = format!("{}:{}", self.prefix_id, self.style.as_str());
+    }
+
+    pub fn is_local_endpoint(url: &str) -> bool {
+        let trimmed = url.trim().to_lowercase();
+        trimmed.contains("localhost") || trimmed.contains("127.0.0.1") || trimmed.contains("::1")
+    }
+
     pub fn normalize_base_url(url: &str) -> String {
         let trimmed = url.trim().trim_end_matches('/');
         if let Some(stripped) = trimmed.strip_suffix("/chat/completions") {
@@ -101,7 +120,9 @@ impl OpenAIEngine {
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         let model = model.unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let engine_id = format!("openai:{model}");
+        let prefix_id = format!("openai:{model}");
+        let style = TranslationStyle::General;
+        let engine_id = format!("{prefix_id}:{}", style.as_str());
 
         Self {
             client: super::build_timed_client(
@@ -111,17 +132,20 @@ impl OpenAIEngine {
             api_key: api_key.into(),
             base_url: base,
             model,
+            prefix_id,
             engine_id,
-            style: TranslationStyle::General,
+            style,
         }
     }
 
     pub fn set_style(&mut self, style: TranslationStyle) {
         self.style = style;
+        self.refresh_engine_id();
     }
 
     pub fn with_style(mut self, style: TranslationStyle) -> Self {
         self.style = style;
+        self.refresh_engine_id();
         self
     }
 
@@ -130,7 +154,8 @@ impl OpenAIEngine {
     }
 
     pub fn set_engine_id(&mut self, id: impl Into<String>) {
-        self.engine_id = id.into();
+        self.prefix_id = id.into();
+        self.refresh_engine_id();
     }
 
     /// 针对 DeepSeek 预设的便捷构造函数
@@ -140,7 +165,7 @@ impl OpenAIEngine {
             Some("https://api.deepseek.com".to_string()),
             Some("deepseek-chat".to_string()),
         );
-        engine.engine_id = "deepseek:deepseek-chat".to_string();
+        engine.set_engine_id("deepseek:deepseek-chat");
         engine
     }
 
@@ -166,16 +191,16 @@ impl TranslateEngine for OpenAIEngine {
         super::EngineCapabilities {
             id: self.id().to_string(),
             name: self.name().to_string(),
-            max_batch_size: 1,
-            supports_batch: false,
-            requires_api_key: true,
+            max_batch_size: crate::MAX_BATCH_ITEMS,
+            supports_batch: true,
+            requires_api_key: !Self::is_local_endpoint(&self.base_url),
             supports_streaming: true,
             fallback_engine: None,
         }
     }
 
     async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
-        if self.api_key.trim().is_empty() {
+        if self.api_key.trim().is_empty() && !Self::is_local_endpoint(&self.base_url) {
             return Err(Error::MissingCredentials("API Key 不能为空".into()));
         }
 
@@ -203,11 +228,14 @@ impl TranslateEngine for OpenAIEngine {
 
         let url = format!("{}/chat/completions", self.base_url);
         let resp = super::send_with_retry(1, std::time::Duration::from_millis(300), || {
-            self.client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .json(&body)
-                .send()
+            let mut req_builder = self.client.post(&url).json(&body);
+            let key = self.api_key.trim();
+            if !key.is_empty() {
+                req_builder = req_builder.header("Authorization", format!("Bearer {key}"));
+            } else if Self::is_local_endpoint(&self.base_url) {
+                req_builder = req_builder.header("Authorization", "Bearer ollama");
+            }
+            req_builder.send()
         })
         .await?;
 
@@ -254,7 +282,7 @@ impl TranslateEngine for OpenAIEngine {
         req: &TranslationRequest,
         on_chunk: super::StreamCallback,
     ) -> Result<TranslationResponse> {
-        if self.api_key.trim().is_empty() {
+        if self.api_key.trim().is_empty() && !Self::is_local_endpoint(&self.base_url) {
             return Err(Error::MissingCredentials("API Key 不能为空".into()));
         }
 
@@ -282,24 +310,20 @@ impl TranslateEngine for OpenAIEngine {
 
         let url = format!("{}/chat/completions", self.base_url);
         let resp = super::send_with_retry(1, std::time::Duration::from_millis(300), || {
-            self.client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .json(&body)
-                .send()
+            let mut req_builder = self.client.post(&url).json(&body);
+            let key = self.api_key.trim();
+            if !key.is_empty() {
+                req_builder = req_builder.header("Authorization", format!("Bearer {key}"));
+            } else if Self::is_local_endpoint(&self.base_url) {
+                req_builder = req_builder.header("Authorization", "Bearer ollama");
+            }
+            req_builder.send()
         })
         .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
-            // 上游错误体**不得**原样外传。
-            //
-            // OpenAI 兼容网关的 401 响应形如
-            // `{"error":{"message":"Incorrect API key provided: sk-proj-XXXX..."}}`，
-            // 即上游会回显密钥前缀。该字符串会一路进入扩展页面 DOM、Tauri 前端状态
-            // 与任何记录 message 的日志，等于把密钥片段泄露到用户界面与日志里。
-            // 因此只保留可诊断的状态码，响应体内容不落任何日志。
             eprintln!(
                 "[Engine Error] {} 返回 {status}，响应体 {} 字节（内容不记录，避免密钥回显）",
                 self.id(),
@@ -320,14 +344,29 @@ impl TranslateEngine for OpenAIEngine {
             let bytes = item?;
             byte_buffer.extend_from_slice(&bytes);
 
-            while let Some(newline_pos) = byte_buffer.iter().position(|&b| b == b'\n') {
-                let line_bytes = &byte_buffer[..newline_pos];
-                let line = String::from_utf8_lossy(line_bytes).trim().to_string();
-                byte_buffer.drain(..=newline_pos);
+            // 逐行解析 SSE 数据帧，保持 O(n) 的单趟扫描与单次内存缩容，杜绝每行重复 drain
+            let mut cursor = 0;
+            while let Some(relative_nl) = byte_buffer[cursor..].iter().position(|&b| b == b'\n') {
+                let newline_pos = cursor + relative_nl;
+                let line_bytes = &byte_buffer[cursor..newline_pos];
+                cursor = newline_pos + 1;
 
-                if line.is_empty() {
+                // 移除 CRLF 尾部 \r
+                let line_trimmed = if line_bytes.ends_with(b"\r") {
+                    &line_bytes[..line_bytes.len() - 1]
+                } else {
+                    line_bytes
+                };
+
+                if line_trimmed.is_empty() {
                     continue;
                 }
+
+                // 安全 UTF-8 解析：由于单行以 \n 严格切分，完整的 SSE 文本行必定自包含 UTF-8 字符边界
+                let line = match std::str::from_utf8(line_trimmed) {
+                    Ok(s) => s.trim(),
+                    Err(_) => continue,
+                };
 
                 if let Some(data) = line.strip_prefix("data:") {
                     let data = data.trim();
@@ -346,6 +385,11 @@ impl TranslateEngine for OpenAIEngine {
                     }
                 }
             }
+
+            // 单趟结束后一次性移走已消费的字节，消除 O(n^2) 搬移
+            if cursor > 0 {
+                byte_buffer.drain(..cursor);
+            }
         }
 
         if full_text.trim().is_empty() {
@@ -362,32 +406,41 @@ impl TranslateEngine for OpenAIEngine {
         })
     }
 
+    async fn translate_batch_tolerant(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Vec<Result<TranslationResponse>> {
+        if requests.is_empty() {
+            return Vec::new();
+        }
+        if requests.len() == 1 {
+            return vec![self.translate(&requests[0]).await];
+        }
+
+        use futures::stream::{self, StreamExt};
+        let concurrency = 5;
+        let futures: Vec<_> = requests
+            .iter()
+            .enumerate()
+            .map(|(idx, req)| async move {
+                let res = self.translate(req).await;
+                (idx, res)
+            })
+            .collect();
+
+        let stream = stream::iter(futures).buffer_unordered(concurrency);
+
+        let mut results_with_idx = stream.collect::<Vec<_>>().await;
+        results_with_idx.sort_by_key(|(idx, _)| *idx);
+        results_with_idx.into_iter().map(|(_, res)| res).collect()
+    }
+
     async fn translate_batch(
         &self,
         requests: &[TranslationRequest],
     ) -> Result<Vec<TranslationResponse>> {
-        if requests.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // 当请求项较少（<= 1 条）直接单次处理
-        if requests.len() == 1 {
-            return Ok(vec![self.translate(&requests[0]).await?]);
-        }
-
-        // 使用受控并发（并发度 4）并发执行单项翻译，避免串行循环过度耗时与整体超时
-        let chunk_size = 4;
-        let mut all_results = Vec::with_capacity(requests.len());
-
-        for chunk in requests.chunks(chunk_size) {
-            let futures: Vec<_> = chunk.iter().map(|req| self.translate(req)).collect();
-            let chunk_results = futures::future::join_all(futures).await;
-            for res in chunk_results {
-                all_results.push(res?);
-            }
-        }
-
-        Ok(all_results)
+        let tolerant = self.translate_batch_tolerant(requests).await;
+        tolerant.into_iter().collect()
     }
 }
 
@@ -418,10 +471,11 @@ mod tests {
     #[test]
     fn test_openai_engine_initialization() {
         let engine = OpenAIEngine::new("test-key", None, None);
-        assert_eq!(engine.id(), "openai:gpt-4o-mini");
+        assert_eq!(engine.id(), "openai:gpt-4o-mini:general");
         assert_eq!(engine.base_url, "https://api.openai.com/v1");
         assert_eq!(engine.model, "gpt-4o-mini");
         assert!(engine.capabilities().supports_streaming);
+        assert!(engine.capabilities().supports_batch);
     }
 
     #[test]
@@ -429,7 +483,76 @@ mod tests {
         let ds = OpenAIEngine::deepseek("ds-key");
         assert_eq!(ds.base_url, "https://api.deepseek.com");
         assert_eq!(ds.model, "deepseek-chat");
-        assert_eq!(ds.id(), "deepseek:deepseek-chat");
+        assert_eq!(ds.id(), "deepseek:deepseek-chat:general");
+    }
+
+    #[test]
+    fn test_style_changes_engine_id_for_cache_isolation() {
+        let engine = OpenAIEngine::new("key", None, None);
+        assert_eq!(engine.id(), "openai:gpt-4o-mini:general");
+
+        let academic = engine.with_style(TranslationStyle::Academic);
+        assert_eq!(academic.id(), "openai:gpt-4o-mini:academic");
+
+        let literary = academic.with_style(TranslationStyle::Literary);
+        assert_eq!(literary.id(), "openai:gpt-4o-mini:literary");
+
+        let business = literary.with_style(TranslationStyle::Business);
+        assert_eq!(business.id(), "openai:gpt-4o-mini:business");
+
+        // 验证配合 TranslationCache 时不同风格产生不同的缓存键并隔离命中
+        let cache = crate::TranslationCache::in_memory().unwrap();
+        let general_engine = OpenAIEngine::new("key", None, None);
+        let academic_engine =
+            OpenAIEngine::new("key", None, None).with_style(TranslationStyle::Academic);
+
+        cache
+            .set("hello", "你好（通用）", "en", "zh-CN", general_engine.id())
+            .unwrap();
+
+        // 学术风格查询同一词句不应命中通用缓存
+        let hit_academic =
+            crate::lookup_cache_with_fallback(&cache, &academic_engine, "hello", "en", "zh-CN");
+        assert_eq!(hit_academic, None, "学术风格不应误命中通用风格缓存");
+
+        // 写入学术缓存后，各自能独立命中
+        cache
+            .set("hello", "您好（学术）", "en", "zh-CN", academic_engine.id())
+            .unwrap();
+        let hit_academic2 =
+            crate::lookup_cache_with_fallback(&cache, &academic_engine, "hello", "en", "zh-CN");
+        assert_eq!(
+            hit_academic2,
+            Some(("您好（学术）".to_string(), academic_engine.id().to_string()))
+        );
+
+        let hit_general =
+            crate::lookup_cache_with_fallback(&cache, &general_engine, "hello", "en", "zh-CN");
+        assert_eq!(
+            hit_general,
+            Some(("你好（通用）".to_string(), general_engine.id().to_string()))
+        );
+    }
+
+    #[test]
+    fn test_is_local_endpoint_and_credentials_requirement() {
+        assert!(OpenAIEngine::is_local_endpoint("http://localhost:11434/v1"));
+        assert!(OpenAIEngine::is_local_endpoint("http://127.0.0.1:11434/v1"));
+        assert!(OpenAIEngine::is_local_endpoint("http://[::1]:11434/v1"));
+        assert!(!OpenAIEngine::is_local_endpoint(
+            "https://api.openai.com/v1"
+        ));
+        assert!(!OpenAIEngine::is_local_endpoint("https://api.deepseek.com"));
+
+        let remote = OpenAIEngine::new("key", Some("https://api.openai.com/v1".to_string()), None);
+        assert!(remote.capabilities().requires_api_key);
+
+        let local_ollama = OpenAIEngine::new(
+            "",
+            Some("http://localhost:11434/v1".to_string()),
+            Some("qwen2.5:7b".to_string()),
+        );
+        assert!(!local_ollama.capabilities().requires_api_key);
     }
 
     #[test]

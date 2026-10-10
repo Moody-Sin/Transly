@@ -1,12 +1,11 @@
 pre-commit:
-  parallel: true
   commands:
     rust-fmt:
-      run: command -v cargo >/dev/null 2>&1 && cargo fmt --all --check || true
+      run: command -v cargo >/dev/null 2>&1 && cargo fmt --all --check
     rust-clippy:
-      run: command -v cargo >/dev/null 2>&1 && cargo clippy --workspace --all-targets -- -D warnings || true
+      run: command -v cargo >/dev/null 2>&1 && cargo clippy --workspace --all-targets -- -D warnings
     rust-test:
-      run: command -v cargo >/dev/null 2>&1 && cargo test --workspace || true
+      run: command -v cargo >/dev/null 2>&1 && cargo test --workspace
     type-check-desktop:
       run: pnpm --filter transly exec tsc --noEmit
     type-check-extension:

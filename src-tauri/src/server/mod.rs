@@ -149,10 +149,52 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// 校验 `Authorization: Bearer <token>` 头是否与期望令牌一致。
+/// 校验 `Host` 头是否指向回环地址，用于抵御 DNS Rebinding 攻击。
+///
+/// **CORS 不是服务端访问控制。** 攻击者把域名的 A 记录 TTL 设为 0 指向
+/// `127.0.0.1`（DNS Rebinding）后，`http://evil.com:39281` 与其恶意页面**同源**，
+/// 浏览器不会发送预检、也不会校验 CORS，`is_allowed_origin` 形同虚设。
+/// 此时唯一有效的防线是在服务端独立校验 `Host` 头。
+fn host_header_allowed(host: &str) -> bool {
+    let host = host.trim();
+    let name = match host.strip_prefix('[') {
+        // IPv6 字面量，如 `[::1]:39281`
+        Some(rest) => rest.split_once(']').map_or("", |(name, _)| name),
+        None => match host.rsplit_once(':') {
+            // `主机名:端口`：端口必须全为数字，否则整体视为主机名
+            Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+                name
+            }
+            _ => host,
+        },
+    };
+    matches!(name, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// 拒绝任何指向非回环地址的请求。这是抵御 DNS Rebinding 的第一道也是最关键的一道。
+async fn host_guard(request: Request, next: Next) -> Result<Response, StatusCode> {
+    let allowed = request
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(host_header_allowed);
+
+    if allowed {
+        Ok(next.run(request).await)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
 fn bearer_matches(header: Option<&str>, expected: &str) -> bool {
     let Some(val) = header else {
         return false;
     };
+    // 期望令牌为空时必须 fail-closed：`Authorization: Bearer `（空值）
+    // 恰好等于空串会在恒定时间比较中判定为相等，导致鉴权整体失效。
+    if expected.is_empty() {
+        return false;
+    }
     let Some(presented) = val.strip_prefix("Bearer ") else {
         return false;
     };
@@ -228,6 +270,9 @@ pub fn create_router_with_pairing(
         .route("/pair/poll", post(pair_poll_handler))
         .merge(protected)
         .layer(cors)
+        // host_guard 必须在 cors 之内（更先执行）：预检与实请求都要先过 Host 校验，
+        // 否则 DNS Rebinding 下同源请求根本不会触发 CORS 分支。
+        .layer(middleware::from_fn(host_guard))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 限制单次 HTTP 请求体最大 2MB
         .with_state(state)
 }
@@ -500,20 +545,30 @@ async fn translate_batch_handler(
 
         // 写回时通过同一同步门禁 set_if_current 校验版本并执行事务批量写入成功项
         if !batch_cache_entries.is_empty() {
-            if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
-                let entries = batch_cache_entries.iter().map(|(txt, trans, eng)| {
-                    (
-                        txt.as_str(),
-                        trans.as_str(),
-                        source.as_str(),
-                        target.as_str(),
-                        eng.as_str(),
-                    )
-                });
-                state.cache.set_batch(entries)
-            }) {
-                eprintln!("[Cache Write Warning] 扩展批量翻译缓存批量写入失败: {e}");
-            }
+            // 同步门禁 + SQLite 写必须下沉到阻塞线程池，否则单批最长可占用
+            // 一个 tokio worker 5 秒（连接 busy_timeout），且会拖住全局串行门禁。
+            let entries = batch_cache_entries.clone();
+            let source = source.clone();
+            let target = target.clone();
+            let controller = Arc::clone(&state.cache_controller);
+            let cache = Arc::clone(&state.cache);
+            crate::cache_controller::write_cache_offloaded(
+                controller,
+                start_generation,
+                move || {
+                    let rows = entries.iter().map(|(txt, trans, eng)| {
+                        (
+                            txt.as_str(),
+                            trans.as_str(),
+                            source.as_str(),
+                            target.as_str(),
+                            eng.as_str(),
+                        )
+                    });
+                    cache.set_batch(rows)
+                },
+            )
+            .await;
         }
     }
 

@@ -104,10 +104,10 @@ impl OpenAIEngine {
         let engine_id = format!("openai:{model}");
 
         Self {
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default(),
+            client: super::build_timed_client(
+                Client::builder(),
+                std::time::Duration::from_secs(30),
+            ),
             api_key: api_key.into(),
             base_url: base,
             model,
@@ -214,9 +214,21 @@ impl TranslateEngine for OpenAIEngine {
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
+            // 上游错误体**不得**原样外传。
+            //
+            // OpenAI 兼容网关的 401 响应形如
+            // `{"error":{"message":"Incorrect API key provided: sk-proj-XXXX..."}}`，
+            // 即上游会回显密钥前缀。该字符串会一路进入扩展页面 DOM、Tauri 前端状态
+            // 与任何记录 message 的日志，等于把密钥片段泄露到用户界面与日志里。
+            // 因此只保留可诊断的状态码，响应体内容不落任何日志。
+            eprintln!(
+                "[Engine Error] {} 返回 {status}，响应体 {} 字节（内容不记录，避免密钥回显）",
+                self.id(),
+                err_body.len()
+            );
             return Err(Error::Engine {
                 engine: self.id().to_string(),
-                message: format!("LLM API 响应错误 ({status}): {err_body}"),
+                message: format!("LLM API 响应错误 ({status})"),
             });
         }
 
@@ -281,9 +293,21 @@ impl TranslateEngine for OpenAIEngine {
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
+            // 上游错误体**不得**原样外传。
+            //
+            // OpenAI 兼容网关的 401 响应形如
+            // `{"error":{"message":"Incorrect API key provided: sk-proj-XXXX..."}}`，
+            // 即上游会回显密钥前缀。该字符串会一路进入扩展页面 DOM、Tauri 前端状态
+            // 与任何记录 message 的日志，等于把密钥片段泄露到用户界面与日志里。
+            // 因此只保留可诊断的状态码，响应体内容不落任何日志。
+            eprintln!(
+                "[Engine Error] {} 返回 {status}，响应体 {} 字节（内容不记录，避免密钥回显）",
+                self.id(),
+                err_body.len()
+            );
             return Err(Error::Engine {
                 engine: self.id().to_string(),
-                message: format!("LLM API 响应错误 ({status}): {err_body}"),
+                message: format!("LLM API 响应错误 ({status})"),
             });
         }
 

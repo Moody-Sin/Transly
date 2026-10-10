@@ -86,6 +86,19 @@ pub fn rgba_to_bgra_in_place(buf: &mut [u8]) {
     }
 }
 
+/// 剪贴板位图可接受的像素总量上限（宽 × 高）。
+///
+/// 平台层在做任何全量像素拷贝之前必须先用它把关：RGBA 每像素 4 字节，
+/// 4000 万像素即约 1.6 亿字节，再叠加缩放中间缓冲仍在可控范围；
+/// 而剪贴板位图的尺寸完全由放入它的程序决定，无上限校验时
+/// 一张 20000×20000 的图（1.6 GB）足以打爆进程内存。
+pub const MAX_OCR_SOURCE_PIXELS: u64 = 40_000_000;
+
+/// 判断位图尺寸是否在可处理范围内。
+pub fn is_within_ocr_pixel_budget(w: u32, h: u32) -> bool {
+    u64::from(w) * u64::from(h) <= MAX_OCR_SOURCE_PIXELS
+}
+
 /// 等比下采样计算：保证宽高均不大于 max_dim（防卫 Windows OCR 上限抛错）
 pub fn clamp_dimensions(w: u32, h: u32, max_dim: u32) -> (u32, u32) {
     let max_side = w.max(h);
@@ -154,5 +167,19 @@ mod tests {
         let (nw, nh) = clamp_dimensions(5200, 2600, 2600);
         assert_eq!(nw, 2600);
         assert_eq!(nh, 1300);
+    }
+
+    /// 回归：剪贴板超大位图必须在任何全量像素拷贝之前被拦下。
+    /// 无此校验时 20000×20000 的图会在 `to_vec()` 处申请 1.6 GB。
+    #[test]
+    fn test_ocr_pixel_budget_rejects_oversized_bitmap() {
+        assert!(is_within_ocr_pixel_budget(800, 600));
+        assert!(is_within_ocr_pixel_budget(4000, 4000)); // 恰好 1600 万
+        assert!(is_within_ocr_pixel_budget(6324, 6324)); // ≈3999 万，仍在预算内
+
+        assert!(!is_within_ocr_pixel_budget(20_000, 20_000)); // 4 亿像素
+        assert!(!is_within_ocr_pixel_budget(100_000, 100_000));
+        // 极窄极长（截图工具常见）同样受限，防止只按单边判断被绕过
+        assert!(!is_within_ocr_pixel_budget(1, 50_000_000));
     }
 }

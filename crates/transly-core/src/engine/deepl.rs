@@ -35,10 +35,10 @@ impl DeepLEngine {
         let key = api_key.into();
         let is_pro = !key.ends_with(":fx");
         Self {
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .unwrap_or_default(),
+            client: super::build_timed_client(
+                Client::builder(),
+                std::time::Duration::from_secs(15),
+            ),
             api_key: key,
             is_pro,
         }
@@ -52,8 +52,8 @@ impl DeepLEngine {
         }
     }
 
-    fn normalize_target_lang(lang: &str) -> &'static str {
-        match lang.to_lowercase().as_str() {
+    fn normalize_target_lang(lang: &str) -> Option<&'static str> {
+        Some(match lang.to_lowercase().as_str() {
             "zh" | "zh-cn" | "zh-hans" => "ZH",
             "zh-tw" | "zh-hant" => "ZH-HANT",
             "en" | "en-us" => "EN-US",
@@ -73,8 +73,11 @@ impl DeepLEngine {
             "sv" => "SV",
             "tr" => "TR",
             "uk" => "UK",
-            _ => "ZH",
-        }
+            // DeepL 不支持该目标语言。绝不可静默回落为中文：那会让用户拿到
+            // 一份「声称是越南语、实则是中文」的译文且毫无提示。
+            // 返回 None 由调用方转成明确错误。
+            _ => return None,
+        })
     }
 
     fn normalize_source_lang(lang: &str) -> Option<&'static str> {
@@ -133,7 +136,8 @@ impl TranslateEngine for DeepLEngine {
             return Err(Error::MissingCredentials("DeepL API Key 不能为空".into()));
         }
 
-        let target_lang = Self::normalize_target_lang(&req.target_lang);
+        let target_lang = Self::normalize_target_lang(&req.target_lang)
+            .ok_or_else(|| Error::Input(format!("DeepL 不支持目标语言：{}", req.target_lang)))?;
         let source_lang = Self::normalize_source_lang(&req.source_lang);
 
         let body = DeepLApiRequest {
@@ -154,9 +158,15 @@ impl TranslateEngine for DeepLEngine {
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
+            // 同 OpenAI 引擎：上游错误体可能回显鉴权信息，一律不外传
+            eprintln!(
+                "[Engine Error] {} 返回 {status}，响应体 {} 字节（内容不记录）",
+                self.id(),
+                err_body.len()
+            );
             return Err(Error::Engine {
                 engine: self.id().to_string(),
-                message: format!("DeepL API 错误 ({status}): {err_body}"),
+                message: format!("DeepL API 错误 ({status})"),
             });
         }
 
@@ -202,7 +212,8 @@ impl TranslateEngine for DeepLEngine {
             return Ok(results);
         }
 
-        let target_lang = Self::normalize_target_lang(first_target);
+        let target_lang = Self::normalize_target_lang(first_target)
+            .ok_or_else(|| Error::Input(format!("DeepL 不支持目标语言：{first_target}")))?;
         let source_lang = Self::normalize_source_lang(first_source);
         // 分片大小取自自身能力声明，不再写死数字（写死 50 会让该分片永不触发）
         let chunk_size = self.capabilities().max_batch_size.max(1);
@@ -256,11 +267,17 @@ mod tests {
 
     #[test]
     fn test_deepl_language_normalization() {
-        assert_eq!(DeepLEngine::normalize_target_lang("zh-CN"), "ZH");
-        assert_eq!(DeepLEngine::normalize_target_lang("zh-TW"), "ZH-HANT");
-        assert_eq!(DeepLEngine::normalize_target_lang("zh-Hant"), "ZH-HANT");
-        assert_eq!(DeepLEngine::normalize_target_lang("pt"), "PT-PT");
-        assert_eq!(DeepLEngine::normalize_target_lang("pt-BR"), "PT-BR");
+        assert_eq!(DeepLEngine::normalize_target_lang("zh-CN"), Some("ZH"));
+        assert_eq!(DeepLEngine::normalize_target_lang("zh-TW"), Some("ZH-HANT"));
+        assert_eq!(
+            DeepLEngine::normalize_target_lang("zh-Hant"),
+            Some("ZH-HANT")
+        );
+        assert_eq!(DeepLEngine::normalize_target_lang("pt"), Some("PT-PT"));
+        assert_eq!(DeepLEngine::normalize_target_lang("pt-BR"), Some("PT-BR"));
+        // DeepL 不支持的目标语言必须返回 None 而非静默回落中文
+        assert_eq!(DeepLEngine::normalize_target_lang("vi"), None);
+        assert_eq!(DeepLEngine::normalize_target_lang("id"), None);
 
         assert_eq!(DeepLEngine::normalize_source_lang("auto"), None);
         assert_eq!(DeepLEngine::normalize_source_lang("zh-TW"), Some("ZH"));

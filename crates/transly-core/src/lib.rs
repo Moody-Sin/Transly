@@ -21,7 +21,8 @@ pub use engine::{
 pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;
 pub use ocr::{
-    build_candidate_languages, clamp_dimensions, rgba_to_bgra_in_place, OcrErrorDto, OcrErrorKind,
+    build_candidate_languages, clamp_dimensions, is_within_ocr_pixel_budget, rgba_to_bgra_in_place,
+    OcrErrorDto, OcrErrorKind,
 };
 pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};
 pub use task::{classify_error, TaskError};

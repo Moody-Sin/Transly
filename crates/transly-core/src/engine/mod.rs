@@ -72,6 +72,28 @@ impl BatchItemResult {
 /// 流式输出增量 Token 回调
 pub type StreamCallback = Box<dyn Fn(&str) + Send + Sync>;
 
+/// 构建带超时的 HTTP 客户端。
+///
+/// reqwest 的默认客户端**不携带任何超时**。若调用方直接 `unwrap_or_default()`，
+/// 一旦 TLS 后端初始化失败（证书库损坏、企业代理拦截等），就会静默退化成
+/// 无超时客户端：请求会一直挂起到操作系统层的 TCP 超时为止，比配置了较短
+/// 超时更糟，且用户看不到任何提示。此处显式告警，把静默降级变成可观测事件。
+pub(crate) fn build_timed_client(
+    builder: reqwest::ClientBuilder,
+    timeout: std::time::Duration,
+) -> reqwest::Client {
+    match builder.timeout(timeout).build() {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!(
+                "[transly] 构建带 {}s 超时的 HTTP 客户端失败：{err}。已退化为无超时客户端，翻译请求可能长时间挂起。",
+                timeout.as_secs()
+            );
+            reqwest::Client::new()
+        }
+    }
+}
+
 /// 翻译引擎能力描述符
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineCapabilities {

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copy, Check, Trash2, RefreshCw, Search, Download, Volume2 } from 'lucide-react'
 import { commands } from './bindings'
 import type { CacheEntry } from './bindings'
 import type { I18nSchema, Locale } from './i18n'
 import { speakText } from './utils/speech'
+import { applyIfCurrent } from './task/generation'
+import { escapeCsvField, formatCsvRow, guardCsvFormulaInjection } from './utils/csv'
+import { downloadBlob } from './utils/download'
 
 const PAGE_SIZE = 50
 
@@ -23,15 +26,21 @@ export default function HistoryPanel({ t, locale }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const genRef = useRef(0)
 
   const load = useCallback(
     async (offset: number, keyword: string) => {
+      const gen = ++genRef.current
       setLoading(true)
       setError(null)
       try {
         const res = keyword.trim()
           ? await commands.searchTranslationHistory(keyword.trim(), PAGE_SIZE, offset)
           : await commands.getTranslationHistory(PAGE_SIZE, offset)
+
+        // 代际闸门：clearTimeout 挡不住在途 IPC。快速输入时后发先至会让搜索框与列表对不上，
+        // 分页更会把旧关键词的结果追加进新结果集。迟到的一代一律丢弃。
+        if (applyIfCurrent(gen, genRef.current, true) !== true) return
 
         if (res.status === 'ok') {
           setEntries((prev) => (offset === 0 ? res.data : [...prev, ...res.data]))
@@ -40,9 +49,11 @@ export default function HistoryPanel({ t, locale }: Props) {
           setError(res.error)
         }
       } catch (e) {
+        if (applyIfCurrent(gen, genRef.current, true) !== true) return
         setError(e instanceof Error && e.message ? e.message : t.history.loadFailed)
       } finally {
-        setLoading(false)
+        // loading 也归本代所有：旧代收尾不得熄灭新代的加载态
+        if (applyIfCurrent(gen, genRef.current, true) === true) setLoading(false)
       }
     },
     [t],
@@ -55,10 +66,25 @@ export default function HistoryPanel({ t, locale }: Props) {
     return () => clearTimeout(timer)
   }, [load, searchKeyword])
 
+  // 卸载时作废全部在途代际
+  useEffect(
+    () => () => {
+      genRef.current += 1
+    },
+    [],
+  )
+
   const handleCopy = (entry: CacheEntry) => {
-    navigator.clipboard.writeText(entry.translated_text)
-    setCopiedKey(entry.cache_key)
-    setTimeout(() => setCopiedKey(null), 1500)
+    navigator.clipboard
+      .writeText(entry.translated_text)
+      .then(() => {
+        setCopiedKey(entry.cache_key)
+        setTimeout(() => setCopiedKey(null), 1500)
+      })
+      .catch((e: unknown) => {
+        // 剪贴板写入失败时不得显示「已复制」
+        setError(e instanceof Error && e.message ? e.message : t.history.copyFailed)
+      })
   }
 
   const handleDelete = async (entry: CacheEntry) => {
@@ -81,12 +107,7 @@ export default function HistoryPanel({ t, locale }: Props) {
   const handleExportJson = () => {
     if (entries.length === 0) return
     const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `transly-history-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.json`)
   }
 
   const handleExportCsv = () => {
@@ -99,30 +120,21 @@ export default function HistoryPanel({ t, locale }: Props) {
       'Engine',
       'Time',
     ]
-    const sanitizeCsvField = (raw: string) => {
-      let val = raw
-      // 防御 Excel / 电子表格公式注入 (CSV Formula Injection)
-      if (/^[=+\-@\t\r]/.test(val)) {
-        val = `'${val}`
-      }
-      return `"${val.replace(/"/g, '""')}"`
-    }
-    const rows = entries.map((e) => [
-      sanitizeCsvField(e.source_text),
-      sanitizeCsvField(e.translated_text),
-      sanitizeCsvField(e.source_lang),
-      sanitizeCsvField(e.target_lang),
-      sanitizeCsvField(e.engine),
-      `"${new Date(e.created_at * 1000).toISOString()}"`,
-    ])
-    const csvContent = '\uFEFF' + [header.join(','), ...rows.map((r) => r.join(','))].join('\n')
+    // 字段统一走 RFC 4180 加引号 + 内部引号双写，使含逗号 / 换行的译文可被无损再解析
+    const cell = (raw: string) => escapeCsvField(guardCsvFormulaInjection(raw))
+    const rows = entries.map((e) =>
+      formatCsvRow([
+        cell(e.source_text),
+        cell(e.translated_text),
+        cell(e.source_lang),
+        cell(e.target_lang),
+        cell(e.engine),
+        escapeCsvField(new Date(e.created_at * 1000).toISOString()),
+      ]),
+    )
+    const csvContent = '\uFEFF' + [header.join(','), ...rows].join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `transly-history-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.csv`)
   }
 
   const formatTime = (seconds: number) => new Date(seconds * 1000).toLocaleString(locale)

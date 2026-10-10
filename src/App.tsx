@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   Languages,
   ArrowRight,
@@ -19,11 +19,45 @@ import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getTranslation, Locale } from './i18n'
+import type { I18nSchema } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
 import ShortcutRecorder from './ShortcutRecorder'
 import { speakText } from './utils/speech'
+import { downloadBlob } from './utils/download'
+import { formatGlossaryCsv, parseGlossaryCsv } from './utils/csv'
+import { useDialogFocus } from './utils/useDialogFocus'
+import {
+  parseLlmStylePreference,
+  parseThemePreference,
+  THEME_VALUES,
+  type LlmStylePreference,
+  type ThemePreference,
+} from './utils/prefs'
+
+/**
+ * 配对会话有效期（秒）。
+ * 权威值在后端 `server::pairing::PAIRING_SESSION_TTL_SECS`；当前 specta 绑定没有暴露
+ * 「查询配对 TTL」命令，前端拿不到运行时的权威值，只能在这里同步维护一份。
+ * 后端调整该常量时必须同步修改本值，否则倒计时会与服务端实际失效时间脱节。
+ */
+const PAIRING_TTL_SECONDS = 60
+
+const SETTINGS_DIALOG_TITLE_ID = 'transly-settings-dialog-title'
+const PAIRING_DIALOG_TITLE_ID = 'transly-pairing-dialog-title'
+const OCR_DIALOG_TITLE_ID = 'transly-ocr-dialog-title'
+const OCR_DIALOG_DESC_ID = 'transly-ocr-dialog-desc'
+
+type CompareItem = { engine: string; text: string; loading: boolean; error: string | null }
+
+/** 引擎清单：单引擎下拉与多引擎对比共用同一数据源，杜绝两处硬编码漂移。 */
+const ENGINE_OPTIONS = [
+  { id: 'google', labelKey: 'engineGoogle' },
+  { id: 'deepl', labelKey: 'engineDeepl' },
+  { id: 'deepseek', labelKey: 'engineDeepseek' },
+  { id: 'openai', labelKey: 'engineOpenai' },
+] as const satisfies ReadonlyArray<{ id: string; labelKey: keyof I18nSchema['translation'] }>
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>('zh-CN')
@@ -35,6 +69,7 @@ export default function App() {
   const [copied, setCopied] = useState(false)
   const [serverToken, setServerToken] = useState<string>('')
   const [tokenCopied, setTokenCopied] = useState(false)
+  const [rotatingToken, setRotatingToken] = useState(false)
 
   // 设置面板状态
   const [showSettings, setShowSettings] = useState(false)
@@ -61,16 +96,30 @@ export default function App() {
   const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrError, setOcrError] = useState<string | null>(null)
+  const [ocrConfirmOpen, setOcrConfirmOpen] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
+  // 快捷键注册失败原因（如被其他软件占用）。Alt+Shift+D/R 极易冲突，
+  // 静默失败会让用户看到「划词莫名其妙不工作」且毫无线索。
+  const [shortcutConflict, setShortcutConflict] = useState<string>('')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
   const [isFloatPinned, setIsFloatPinned] = useState(false)
   const [isCompareMode, setIsCompareMode] = useState(false)
-  const [compareResults, setCompareResults] = useState<
-    Array<{ engine: string; text: string; loading: boolean; error: string | null }>
-  >([])
+  const [compareResults, setCompareResults] = useState<CompareItem[]>([])
   const compareGenRef = useRef(0)
   const compareDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 瞬时错误提示：saveStatus 只在设置面板内渲染，主窗口的复制失败无处可显示
+  const [toastError, setToastError] = useState<string | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showToastError = (message: string) => {
+    setToastError(message)
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => {
+      toastTimerRef.current = null
+      setToastError(null)
+    }, 3000)
+  }
 
   const triggerCompareTranslate = useCallback(
     (textToTranslate: string) => {
@@ -80,12 +129,10 @@ export default function App() {
         return
       }
       const activeGen = ++compareGenRef.current
-      setCompareResults([
-        { engine: 'google', text: '', loading: true, error: null },
-        { engine: 'deepl', text: '', loading: true, error: null },
-        { engine: 'deepseek', text: '', loading: true, error: null },
-      ])
-      ;['google', 'deepl', 'deepseek'].forEach((engName) => {
+      setCompareResults(
+        ENGINE_OPTIONS.map(({ id }) => ({ engine: id, text: '', loading: true, error: null })),
+      )
+      ENGINE_OPTIONS.forEach(({ id: engName }) => {
         commands
           .translate(trimmed, 'auto', targetLang, engName)
           .then((res) => {
@@ -122,15 +169,33 @@ export default function App() {
     },
     [targetLang, t.error],
   )
-  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
-    return (localStorage.getItem('transly_theme') as 'light' | 'dark' | 'system') || 'system'
-  })
-  const [llmStyle, setLlmStyle] = useState<'general' | 'academic' | 'literary' | 'business'>(() => {
-    return (
-      (localStorage.getItem('transly_llm_style') as
-        'general' | 'academic' | 'literary' | 'business') || 'general'
-    )
-  })
+
+  /**
+   * 多引擎对比的统一取消入口：作废在途代际 + 清掉待触发的防抖 + 复位 loading。
+   * 任一入口漏掉其中一步，都可能让对比面板永久停在「翻译中」并让按钮被永久禁用。
+   */
+  const cancelCompare = useCallback(() => {
+    if (compareDebounceRef.current) {
+      clearTimeout(compareDebounceRef.current)
+      compareDebounceRef.current = null
+    }
+    compareGenRef.current += 1
+    setCompareResults([])
+  }, [])
+
+  const compareByEngine = useMemo(() => {
+    const map: Record<string, CompareItem | undefined> = {}
+    for (const item of compareResults) map[item.engine] = item
+    return map
+  }, [compareResults])
+
+  // localStorage 属不可信输入：历史遗留或被改写的值会让主题/风格下拉与说明文案整块空白
+  const [theme, setTheme] = useState<ThemePreference>(() =>
+    parseThemePreference(localStorage.getItem('transly_theme')),
+  )
+  const [llmStyle, setLlmStyle] = useState<LlmStylePreference>(() =>
+    parseLlmStylePreference(localStorage.getItem('transly_llm_style')),
+  )
 
   // 同步 theme 类名到 document.documentElement
   useEffect(() => {
@@ -162,6 +227,16 @@ export default function App() {
     browserHint?: string
     countdown: number
   } | null>(null)
+  const [pairingError, setPairingError] = useState<string | null>(null)
+  const [pairingBusy, setPairingBusy] = useState(false)
+
+  // 模态语义与焦点管理：打开聚焦容器、Tab 循环、Escape 关闭、关闭后焦点归位
+  const closeSettings = useCallback(() => setShowSettings(false), [])
+  const closePairing = useCallback(() => setPairingRequest(null), [])
+  const closeOcrConfirm = useCallback(() => setOcrConfirmOpen(false), [])
+  const settingsDialogRef = useDialogFocus(showSettings, closeSettings)
+  const pairingDialogRef = useDialogFocus(pairingRequest !== null, closePairing)
+  const ocrDialogRef = useDialogFocus(ocrConfirmOpen, closeOcrConfirm)
 
   const isFloatWindow = window.location.hash === '#float'
 
@@ -227,6 +302,9 @@ export default function App() {
   }
 
   useEffect(() => {
+    // 浮窗只渲染翻译卡片：下面约 12 次 IPC 拉回的状态它一个都不读，直接短路
+    if (window.location.hash === '#float') return
+
     // 获取本地服务器 Token 供插件端授权配对
     commands
       .getServerToken()
@@ -285,7 +363,8 @@ export default function App() {
       .getLlmStyle()
       .then((res) => {
         if (res.status === 'ok') {
-          const val = res.data as 'general' | 'academic' | 'literary' | 'business'
+          // 后端返回的是未校验的裸字符串：非法值会让风格说明整块空白
+          const val = parseLlmStylePreference(res.data)
           setLlmStyle(val)
           localStorage.setItem('transly_llm_style', val)
         }
@@ -300,14 +379,17 @@ export default function App() {
   useEffect(() => {
     // 监听本地浏览器插件配对请求（仅主窗口响应并展示，浮窗静默忽略）
     let unlisten: (() => void) | undefined
+    let disposed = false
     listen<{ session_id: string; browser_hint?: string }>(
       'transly://pairing-requested',
       async (event) => {
         if (isFloatWindow) return
+        setPairingError(null)
+        setPairingBusy(false)
         setPairingRequest({
           sessionId: event.payload.session_id,
           browserHint: event.payload.browser_hint,
-          countdown: 60,
+          countdown: PAIRING_TTL_SECONDS,
         })
         try {
           const win = getCurrentWindow()
@@ -317,47 +399,87 @@ export default function App() {
           // 在无窗口或测试环境下静默回落
         }
       },
-    ).then((fn) => {
-      unlisten = fn
-    })
+    )
+      .then((fn) => {
+        // cleanup 先于 promise 兑现时 unlisten 仍是 undefined，监听器会永久泄漏；
+        // 此处先判断是否已卸载，已卸载则立即注销。
+        if (disposed) fn()
+        else unlisten = fn
+      })
+      .catch((err) => {
+        console.warn('[Transly] 配对请求事件订阅失败：', err)
+      })
 
     return () => {
+      disposed = true
       if (unlisten) unlisten()
     }
   }, [isFloatWindow])
 
+  // 依赖必须是稳定的 sessionId：依赖整个 pairingRequest 对象时，
+  // 倒计时每秒重建一次对象，也会把 setInterval 每秒 clear 一次再重建。
+  const pairingSessionId = pairingRequest?.sessionId ?? null
+  const pairingCountdownRef = useRef(PAIRING_TTL_SECONDS)
+
   useEffect(() => {
-    if (!pairingRequest) return
+    if (!pairingSessionId) return
+    pairingCountdownRef.current = PAIRING_TTL_SECONDS
     const timer = setInterval(() => {
-      setPairingRequest((prev) => {
-        if (!prev) return null
-        if (prev.countdown <= 1) {
-          return null
-        }
-        return { ...prev, countdown: prev.countdown - 1 }
-      })
+      const next = pairingCountdownRef.current - 1
+      if (next <= 0) {
+        pairingCountdownRef.current = 0
+        setPairingRequest(null)
+        return
+      }
+      pairingCountdownRef.current = next
+      setPairingRequest((prev) => (prev ? { ...prev, countdown: next } : null))
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [pairingRequest])
+  }, [pairingSessionId])
 
   const handleApprovePairing = async (sessionId: string) => {
+    setPairingBusy(true)
+    setPairingError(null)
     try {
-      await commands.approvePairing(sessionId)
-    } finally {
+      const res = await commands.approvePairing(sessionId)
+      // approve_pairing 失败返回 {status:'error'} 而不是抛错：
+      // 不判断就会在用户实际拒绝授权时照样弹窗消失，且零反馈。
+      if (res.status === 'error') {
+        setPairingError(res.error)
+        return
+      }
       setPairingRequest(null)
+    } catch (err) {
+      setPairingError(
+        err instanceof Error && err.message ? err.message : t.app.pairingApproveFailed,
+      )
+    } finally {
+      setPairingBusy(false)
     }
   }
 
   const handleRejectPairing = async (sessionId: string) => {
+    setPairingBusy(true)
+    setPairingError(null)
     try {
-      await commands.rejectPairing(sessionId)
-    } finally {
+      const res = await commands.rejectPairing(sessionId)
+      if (res.status === 'error') {
+        setPairingError(res.error)
+        return
+      }
       setPairingRequest(null)
+    } catch (err) {
+      setPairingError(err instanceof Error && err.message ? err.message : t.app.pairingRejectFailed)
+    } finally {
+      setPairingBusy(false)
     }
   }
 
   useEffect(() => {
+    // 浮窗不渲染服务状态，这段轮询对它纯属白跑
+    if (window.location.hash === '#float') return
+
     // 本地服务在后台异步启动，失败只进 stderr 时用户完全无感
     // （扩展端会显示“桌面端未运行”，桌面端却毫无提示）。
     // 启动需要时间，故轮询数次直到脱离 starting 态。
@@ -403,10 +525,17 @@ export default function App() {
   const handleToggleCacheEnabled = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.checked
     setCacheEnabled(val)
-    const res = await commands.setCacheEnabled(val)
-    if (res.status === 'error') {
+    try {
+      const res = await commands.setCacheEnabled(val)
+      if (res.status === 'error') {
+        setCacheEnabled(!val)
+        setSaveStatus(res.error)
+        setTimeout(() => setSaveStatus(null), 2500)
+      }
+    } catch (err) {
+      // typedError 遇到 Error 实例会直接 rethrow：缺 try/catch 时下面的回滚永不执行
       setCacheEnabled(!val)
-      setSaveStatus(res.error)
+      setSaveStatus(err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed)
       setTimeout(() => setSaveStatus(null), 2500)
     }
   }
@@ -414,10 +543,16 @@ export default function App() {
   const handleToggleClipboardMonitor = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.checked
     setClipboardMonitor(val)
-    const res = await commands.setClipboardMonitor(val)
-    if (res.status === 'error') {
+    try {
+      const res = await commands.setClipboardMonitor(val)
+      if (res.status === 'error') {
+        setClipboardMonitor(!val)
+        setSaveStatus(res.error)
+        setTimeout(() => setSaveStatus(null), 2500)
+      }
+    } catch (err) {
       setClipboardMonitor(!val)
-      setSaveStatus(res.error)
+      setSaveStatus(err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed)
       setTimeout(() => setSaveStatus(null), 2500)
     }
   }
@@ -428,6 +563,10 @@ export default function App() {
       if (res.status === 'ok') {
         setSaveStatus(t.settings.statusShortcutSaved)
         setTimeout(() => setSaveStatus(null), 2000)
+        // 保存成功不等于注册成功：组合键可能被其它软件占用。
+        // 向后端确认真实注册结果，失败时把原因摆到界面上。
+        const status = await commands.getShortcutStatus()
+        setShortcutConflict(status.ok ? '' : (status.reason ?? ''))
       } else {
         setSaveStatus(res.error)
       }
@@ -455,6 +594,9 @@ export default function App() {
   }
 
   const handleRotateToken = async () => {
+    // 无 in-flight 守卫时可连点：每次都真去动系统凭据库，后一次会把前一次的 Token 作废
+    if (rotatingToken) return
+    setRotatingToken(true)
     try {
       const res = await commands.rotateServerToken()
       if (res.status === 'ok') {
@@ -469,14 +611,23 @@ export default function App() {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusTokenRotateFailed,
       )
+    } finally {
+      setRotatingToken(false)
     }
   }
 
   const handleCopyToken = () => {
     if (!serverToken) return
-    navigator.clipboard.writeText(serverToken)
-    setTokenCopied(true)
-    setTimeout(() => setTokenCopied(false), 2000)
+    navigator.clipboard
+      .writeText(serverToken)
+      .then(() => {
+        setTokenCopied(true)
+        setTimeout(() => setTokenCopied(false), 2000)
+      })
+      .catch((e: unknown) => {
+        // 写入失败时绝不显示「已复制」
+        showToastError(e instanceof Error && e.message ? e.message : t.translation.copyFailed)
+      })
   }
 
   const handleSaveKeys = async () => {
@@ -497,17 +648,21 @@ export default function App() {
         if (res.status === 'error') throw new Error(res.error)
         setOpenaiKey('')
       }
-      // 保存 LLM 自定义端点与模型名称
-      await commands.saveLlmConfig(
+      // 保存 LLM 自定义端点与模型名称。
+      // save_llm_config 失败返回 {status:'error'} 而不是抛错：
+      // 不逐个判断就会把失败静默吞掉，最后还谎报「密钥已保存」。
+      const deepseekRes = await commands.saveLlmConfig(
         'deepseek',
         deepseekBaseUrl.trim() || null,
         deepseekModel.trim() || null,
       )
-      await commands.saveLlmConfig(
+      if (deepseekRes.status === 'error') throw new Error(deepseekRes.error)
+      const openaiRes = await commands.saveLlmConfig(
         'openai',
         openaiBaseUrl.trim() || null,
         openaiModel.trim() || null,
       )
+      if (openaiRes.status === 'error') throw new Error(openaiRes.error)
       checkConfiguredKeys()
       setSaveStatus(t.settings.statusKeysSaved)
       setTimeout(() => setSaveStatus(null), 2500)
@@ -568,22 +723,28 @@ export default function App() {
   const handleClearSource = () => {
     setSourceText('')
     runner.cancel()
-    if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
-    setCompareResults([])
+    cancelCompare()
   }
 
   const handleCopy = () => {
     if (!translatedText) return
-    navigator.clipboard.writeText(translatedText)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    navigator.clipboard
+      .writeText(translatedText)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      })
+      .catch((e: unknown) => {
+        // 写入失败时绝不显示「已复制」
+        showToastError(e instanceof Error && e.message ? e.message : t.translation.copyFailed)
+      })
   }
 
   const handleSpeak = (text: string, lang: string) => {
     speakText(text, lang, runner.snapshot.detectedLang)
   }
 
-  const handleOcrClipboard = async () => {
+  const runOcrClipboard = async () => {
     setOcrLoading(true)
     setOcrError(null)
     try {
@@ -591,8 +752,10 @@ export default function App() {
       if (res.status === 'ok') {
         const text = res.data.trim()
         setSourceText(text)
+        // OCR 文本来自剪贴板**图片**，并非剪贴板文本监听链路，
+        // source 必须是 input，否则两条链路在任务状态里被混为一谈。
         // debounceMs: 0 立即投递统一任务状态机，秒级出译文
-        runner.run(text, { source: 'clipboard', debounceMs: 0 })
+        runner.run(text, { source: 'input', debounceMs: 0 })
       } else {
         const errMap = t.ocrError
         setOcrError(errMap[res.error.kind] || res.error.message)
@@ -602,6 +765,15 @@ export default function App() {
     } finally {
       setOcrLoading(false)
     }
+  }
+
+  const handleOcrClipboard = () => {
+    // 已输入的文本没有撤销路径：写了半篇长文再误点一次就永久丢失，必须先确认
+    if (sourceText.trim()) {
+      setOcrConfirmOpen(true)
+      return
+    }
+    void runOcrClipboard()
   }
 
   // 迷你悬浮小窗模式 (无边框、紧凑置顶卡片)
@@ -822,7 +994,9 @@ export default function App() {
                   <button
                     onClick={() => {
                       setIsCompareMode(false)
-                      if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
+                      // 必须一并作废对比代际：清空文本后切回单引擎、再切回对比，
+                      // 会看到上一次遗留的 loading:true，翻译按钮被永久禁用
+                      cancelCompare()
                       if (sourceText.trim()) {
                         runner.run(sourceText, { source: 'input', debounceMs: 0 })
                       }
@@ -837,6 +1011,8 @@ export default function App() {
                       runner.cancel()
                       if (sourceText.trim()) {
                         triggerCompareTranslate(sourceText)
+                      } else {
+                        cancelCompare()
                       }
                     }}
                     className={`rounded px-2 py-0.5 ${isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
@@ -852,10 +1028,11 @@ export default function App() {
                       onChange={(e) => setEngine(e.target.value)}
                       className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
                     >
-                      <option value="google">{t.translation.engineGoogle}</option>
-                      <option value="deepl">{t.translation.engineDeepl}</option>
-                      <option value="deepseek">{t.translation.engineDeepseek}</option>
-                      <option value="openai">{t.translation.engineOpenai}</option>
+                      {ENGINE_OPTIONS.map(({ id, labelKey }) => (
+                        <option key={id} value={id}>
+                          {t.translation[labelKey]}
+                        </option>
+                      ))}
                     </select>
                   </>
                 )}
@@ -879,6 +1056,12 @@ export default function App() {
                     const v = e.target.value
                     setSourceText(v)
                     if (isCompareMode) {
+                      // 键盘清空必须与「清空内容」按钮走同一条路径，
+                      // 否则残留的 loading:true 会让翻译按钮永久禁用
+                      if (!v.trim()) {
+                        cancelCompare()
+                        return
+                      }
                       if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
                       compareDebounceRef.current = setTimeout(() => {
                         triggerCompareTranslate(v)
@@ -1038,57 +1221,63 @@ export default function App() {
                 </div>
               ) : (
                 <div className="flex flex-col gap-2 overflow-y-auto">
-                  {['google', 'deepl', 'deepseek'].map((engName) => (
-                    <div
-                      key={engName}
-                      className="flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 shadow-sm"
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1 mb-1.5">
-                        <span className="text-[11px] font-semibold uppercase text-indigo-600 dark:text-indigo-400">
-                          {engName}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              const item = compareResults.find((r) => r.engine === engName)
-                              if (item?.text) handleSpeak(item.text, targetLang)
-                            }}
-                            className="p-1 text-slate-400 hover:text-slate-600"
-                            title={t.translation.speak}
-                          >
-                            <Volume2 className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              const item = compareResults.find((r) => r.engine === engName)
-                              if (item?.text) navigator.clipboard.writeText(item.text)
-                            }}
-                            className="p-1 text-slate-400 hover:text-slate-600"
-                            title={t.translation.copy}
-                          >
-                            <Copy className="h-3 w-3" />
-                          </button>
+                  {ENGINE_OPTIONS.map(({ id: engName }) => {
+                    const item = compareByEngine[engName]
+                    return (
+                      <div
+                        key={engName}
+                        className="flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 shadow-sm"
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1 mb-1.5">
+                          <span className="text-[11px] font-semibold uppercase text-indigo-600 dark:text-indigo-400">
+                            {engName}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                if (item?.text) handleSpeak(item.text, targetLang)
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600"
+                              title={t.translation.speak}
+                            >
+                              <Volume2 className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (!item?.text) return
+                                navigator.clipboard.writeText(item.text).catch((e: unknown) => {
+                                  showToastError(
+                                    e instanceof Error && e.message
+                                      ? e.message
+                                      : t.translation.copyFailed,
+                                  )
+                                })
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600"
+                              title={t.translation.copy}
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-700 dark:text-slate-200 min-h-[40px]">
+                          {item?.loading ? (
+                            <span className="text-slate-400 animate-pulse">
+                              {t.translation.translating}
+                            </span>
+                          ) : item?.error ? (
+                            <span className="text-rose-500">{item.error}</span>
+                          ) : (
+                            item?.text || (
+                              <span className="text-slate-400">
+                                {t.translation.outputPlaceholder}
+                              </span>
+                            )
+                          )}
                         </div>
                       </div>
-                      <div className="text-xs text-slate-700 dark:text-slate-200 min-h-[40px]">
-                        {compareResults.find((r) => r.engine === engName)?.loading ? (
-                          <span className="text-slate-400 animate-pulse">
-                            {t.translation.translating}
-                          </span>
-                        ) : compareResults.find((r) => r.engine === engName)?.error ? (
-                          <span className="text-rose-500">
-                            {compareResults.find((r) => r.engine === engName)?.error}
-                          </span>
-                        ) : (
-                          compareResults.find((r) => r.engine === engName)?.text || (
-                            <span className="text-slate-400">
-                              {t.translation.outputPlaceholder}
-                            </span>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -1100,16 +1289,27 @@ export default function App() {
       {/* 设置与密钥配置模态框 */}
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="flex max-h-[85vh] w-[480px] flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xl">
+          <div
+            ref={settingsDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={SETTINGS_DIALOG_TITLE_ID}
+            tabIndex={-1}
+            className="flex max-h-[85vh] w-[480px] flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xl"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 shrink-0">
               <div className="flex items-center gap-2">
                 <Settings className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                <h3 className="font-semibold text-slate-800 dark:text-slate-100 text-sm">
+                <h3
+                  id={SETTINGS_DIALOG_TITLE_ID}
+                  className="font-semibold text-slate-800 dark:text-slate-100 text-sm"
+                >
                   {t.settings.title}
                 </h3>
               </div>
               <button
                 onClick={() => setShowSettings(false)}
+                aria-label={t.translation.btnClose}
                 className="rounded p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300"
               >
                 <X className="h-4 w-4" />
@@ -1123,7 +1323,7 @@ export default function App() {
                   {t.settings.themeTitle}
                 </span>
                 <div className="flex items-center gap-1">
-                  {(['light', 'dark', 'system'] as const).map((mode) => (
+                  {THEME_VALUES.map((mode) => (
                     <button
                       key={mode}
                       onClick={() => setTheme(mode)}
@@ -1199,7 +1399,10 @@ export default function App() {
                     }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
-                  <div className="mt-1.5 grid grid-cols-2 gap-2">
+                  <div className="mt-1.5 text-[11px] text-slate-400">
+                    {t.settings.deepseekCustomTitle}
+                  </div>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
                     <input
                       type="text"
                       value={deepseekBaseUrl}
@@ -1242,7 +1445,10 @@ export default function App() {
                     }
                     className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
                   />
-                  <div className="mt-1.5 grid grid-cols-2 gap-2">
+                  <div className="mt-1.5 text-[11px] text-slate-400">
+                    {t.settings.openaiCustomTitle}
+                  </div>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
                     <input
                       type="text"
                       value={openaiBaseUrl}
@@ -1295,6 +1501,11 @@ export default function App() {
                   onSave={handleSaveShortcut}
                   t={t}
                 />
+                {shortcutConflict && (
+                  <div role="alert" className="text-[11px] text-amber-700">
+                    {t.settings.shortcutRegisterFailed}: {shortcutConflict}
+                  </div>
+                )}
               </div>
 
               {/* 划词原地替换快捷键设置 */}
@@ -1327,7 +1538,7 @@ export default function App() {
                 <select
                   value={llmStyle}
                   onChange={(e) => {
-                    const val = e.target.value as 'general' | 'academic' | 'literary' | 'business'
+                    const val = parseLlmStylePreference(e.target.value)
                     setLlmStyle(val)
                     localStorage.setItem('transly_llm_style', val)
                     commands.saveLlmStyle(val).catch((err) => {
@@ -1370,7 +1581,8 @@ export default function App() {
                   </div>
                   <button
                     onClick={handleRotateToken}
-                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+                    disabled={rotatingToken}
+                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50"
                   >
                     {t.settings.btnRotateToken}
                   </button>
@@ -1459,17 +1671,19 @@ export default function App() {
                     <button
                       onClick={() => {
                         if (glossaryList.length === 0) return
-                        const header = 'source,target,match_case\n'
-                        const body = glossaryList
-                          .map((g) => `"${g.source}","${g.target}",${g.match_case}`)
-                          .join('\n')
-                        const blob = new Blob([header + body], { type: 'text/csv' })
-                        const url = URL.createObjectURL(blob)
-                        const a = document.createElement('a')
-                        a.href = url
-                        a.download = `transly-glossary-${new Date().toISOString().slice(0, 10)}.csv`
-                        a.click()
-                        URL.revokeObjectURL(url)
+                        // 与导入共用同一套 RFC 4180 转义 / 解析，含逗号的术语才不会被拆坏
+                        const csv = formatGlossaryCsv(
+                          glossaryList.map((g) => ({
+                            source: g.source,
+                            target: g.target,
+                            matchCase: g.match_case,
+                          })),
+                        )
+                        const blob = new Blob([csv], { type: 'text/csv' })
+                        downloadBlob(
+                          blob,
+                          `transly-glossary-${new Date().toISOString().slice(0, 10)}.csv`,
+                        )
                       }}
                       className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50"
                       title={t.translation.exportGlossaryCsv}
@@ -1484,30 +1698,48 @@ export default function App() {
                         className="hidden"
                         onChange={(e) => {
                           const file = e.target.files?.[0]
+                          // 清空 value，否则连续两次选择同一个文件不会触发 change
+                          e.target.value = ''
                           if (!file) return
                           const reader = new FileReader()
                           reader.onload = async (evt) => {
-                            const text = evt.target?.result as string
+                            const text =
+                              typeof evt.target?.result === 'string' ? evt.target.result : ''
                             if (!text) return
-                            const lines = text.split(/\r?\n/)
-                            for (const line of lines) {
-                              const trimmed = line.trim()
-                              if (!trimmed || trimmed.startsWith('source,')) continue
-                              const parts = trimmed.split(',')
-                              if (parts.length >= 2) {
-                                const src = parts[0].replace(/^"|"$/g, '').trim()
-                                const tgt = parts[1].replace(/^"|"$/g, '').trim()
-                                const mc = parts[2] ? parts[2].trim() !== 'false' : true
-                                if (src && tgt) {
-                                  try {
-                                    await commands.addGlossaryTerm(src, tgt, mc)
-                                  } catch (err) {
-                                    console.warn('[Transly] 导入术语失败:', err)
-                                  }
+                            let imported = 0
+                            let failed = 0
+                            for (const term of parseGlossaryCsv(text)) {
+                              try {
+                                const res = await commands.addGlossaryTerm(
+                                  term.source,
+                                  term.target,
+                                  term.matchCase,
+                                )
+                                // add_glossary_term 失败不抛错：不判 status 就会静默吞掉
+                                if (res.status === 'error') {
+                                  failed += 1
+                                  console.warn('[Transly] 导入术语失败:', res.error)
+                                } else {
+                                  imported += 1
                                 }
+                              } catch (err) {
+                                failed += 1
+                                console.warn('[Transly] 导入术语失败:', err)
                               }
                             }
                             loadGlossaryList()
+                            setSaveStatus(
+                              failed > 0
+                                ? t.settings.glossaryImportPartial
+                                    .replace('{n}', String(imported))
+                                    .replace('{m}', String(failed))
+                                : t.settings.glossaryImportDone.replace('{n}', String(imported)),
+                            )
+                            setTimeout(() => setSaveStatus(null), 3000)
+                          }
+                          reader.onerror = () => {
+                            setSaveStatus(t.settings.statusGlossaryFailed)
+                            setTimeout(() => setSaveStatus(null), 3000)
                           }
                           reader.readAsText(file)
                         }}
@@ -1594,13 +1826,22 @@ export default function App() {
       {/* 浏览器扩展配对确认浮层 */}
       {pairingRequest && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-indigo-100 flex flex-col gap-4">
+          <div
+            ref={pairingDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={PAIRING_DIALOG_TITLE_ID}
+            tabIndex={-1}
+            className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-indigo-100 flex flex-col gap-4"
+          >
             <div className="flex items-start gap-3">
               <div className="rounded-full bg-indigo-50 p-2 text-indigo-600">
                 <Key className="h-6 w-6" />
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-slate-800 text-sm">{t.app.pairingModalTitle}</h3>
+                <h3 id={PAIRING_DIALOG_TITLE_ID} className="font-semibold text-slate-800 text-sm">
+                  {t.app.pairingModalTitle}
+                </h3>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                   {t.app.pairingModalDesc}
                 </p>
@@ -1613,24 +1854,85 @@ export default function App() {
               </div>
             </div>
 
+            {pairingError && (
+              <div
+                role="alert"
+                className="rounded bg-rose-50 border border-rose-200 px-2 py-1 text-[11px] leading-snug text-rose-600"
+              >
+                {pairingError}
+              </div>
+            )}
+
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 onClick={() => handleRejectPairing(pairingRequest.sessionId)}
-                className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+                disabled={pairingBusy}
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
               >
                 {t.app.pairingReject}
               </button>
               <button
                 onClick={() => handleApprovePairing(pairingRequest.sessionId)}
-                className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors flex items-center gap-1.5"
+                disabled={pairingBusy}
+                className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
               >
                 <span>{t.app.pairingAllow}</span>
                 <span className="text-[10px] bg-indigo-700/60 rounded px-1">
-                  {pairingRequest.countdown}s
+                  {pairingRequest.countdown}
+                  {t.app.pairingExpiresIn}
                 </span>
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* OCR 覆盖确认：识别结果会不可撤销地替换已输入的文本 */}
+      {ocrConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+          <div
+            ref={ocrDialogRef}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={OCR_DIALOG_TITLE_ID}
+            aria-describedby={OCR_DIALOG_DESC_ID}
+            tabIndex={-1}
+            className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+          >
+            <h3 id={OCR_DIALOG_TITLE_ID} className="text-sm font-semibold text-slate-800">
+              {t.translation.ocrOverwriteTitle}
+            </h3>
+            <p id={OCR_DIALOG_DESC_ID} className="text-xs leading-relaxed text-slate-500">
+              {t.translation.ocrOverwriteDesc.replace('{n}', String(sourceText.length))}
+            </p>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+              <button
+                onClick={closeOcrConfirm}
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100"
+              >
+                {t.task.btnCancel}
+              </button>
+              <button
+                onClick={() => {
+                  setOcrConfirmOpen(false)
+                  void runOcrClipboard()
+                }}
+                className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-indigo-700"
+              >
+                {t.translation.ocrOverwriteConfirm}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 瞬时错误提示（剪贴板写入失败等）：saveStatus 只在设置面板内可见 */}
+      {toastError && (
+        <div
+          role="alert"
+          className="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600 shadow-lg"
+        >
+          {toastError}
         </div>
       )}
     </div>

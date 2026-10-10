@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Keyboard, Check, X } from 'lucide-react'
 import type { I18nSchema } from './i18n'
+import { formatModifiers, normalizeKey } from './utils/shortcutKeys'
 
 export interface ShortcutRecorderProps {
   value: string
@@ -9,75 +10,17 @@ export interface ShortcutRecorderProps {
   t: I18nSchema
 }
 
-/**
- * 格式化键盘按键：转换为 Tauri global-shortcut 标准格式（例如：Alt+Shift+D）
- */
-function normalizeKey(e: KeyboardEvent): string | null {
-  const parts: string[] = []
-
-  if (e.ctrlKey) parts.push('Ctrl')
-  if (e.altKey) parts.push('Alt')
-  if (e.shiftKey) parts.push('Shift')
-  if (e.metaKey) parts.push('Super')
-
-  const code = e.code
-
-  // 纯修饰键不触发完成
-  if (
-    [
-      'ControlLeft',
-      'ControlRight',
-      'AltLeft',
-      'AltRight',
-      'ShiftLeft',
-      'ShiftRight',
-      'MetaLeft',
-      'MetaRight',
-    ].includes(code)
-  ) {
-    return null
-  }
-
-  // 必须至少包含一个修饰键
-  if (parts.length === 0) {
-    return null
-  }
-
-  // 主按键映射
-  if (code.startsWith('Key')) {
-    parts.push(code.slice(3).toUpperCase())
-  } else if (code.startsWith('Digit')) {
-    parts.push(code.slice(5))
-  } else if (code.startsWith('F') && /^F\d+$/.test(code)) {
-    parts.push(code)
-  } else if (code === 'Space') {
-    parts.push('Space')
-  } else {
-    // 其他符号按键降级处理
-    const key = e.key.toUpperCase()
-    if (key.length === 1) {
-      parts.push(key)
-    } else {
-      return null
-    }
-  }
-
-  return parts.join('+')
-}
-
 export default function ShortcutRecorder({ value, onChange, onSave, t }: ShortcutRecorderProps) {
   const [recording, setRecording] = useState(false)
   const [currentRecordingKeys, setCurrentRecordingKeys] = useState<string>('')
-  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!recording) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-
       if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
         setRecording(false)
         setCurrentRecordingKeys('')
         return
@@ -85,17 +28,16 @@ export default function ShortcutRecorder({ value, onChange, onSave, t }: Shortcu
 
       const normalized = normalizeKey(e)
       if (normalized) {
+        // 只拦截已识别为组合键的事件：此前在识别之前就无条件 preventDefault，
+        // 会把录制期间的复制 / 粘贴 / 全选一并吞掉。
+        e.preventDefault()
+        e.stopPropagation()
         onChange(normalized)
         setRecording(false)
         setCurrentRecordingKeys('')
       } else {
-        // 显示当前按下的修饰键
-        const parts: string[] = []
-        if (e.ctrlKey) parts.push('Ctrl')
-        if (e.altKey) parts.push('Alt')
-        if (e.shiftKey) parts.push('Shift')
-        if (e.metaKey) parts.push('Super')
-        setCurrentRecordingKeys(parts.join('+'))
+        // 纯修饰键或无法归一化的按键：只更新提示，不碰浏览器默认行为
+        setCurrentRecordingKeys(formatModifiers(e))
       }
     }
 
@@ -106,10 +48,21 @@ export default function ShortcutRecorder({ value, onChange, onSave, t }: Shortcu
   }, [recording, onChange])
 
   return (
-    <div ref={containerRef} className="flex items-center gap-2">
+    <div className="flex items-center gap-2">
       <div
+        tabIndex={0}
+        role="button"
+        aria-pressed={recording}
+        aria-label={t.settings.shortcutRecorderAria}
         onClick={() => setRecording(true)}
-        className={`flex h-8 flex-1 cursor-pointer items-center justify-between rounded border px-3 text-xs font-mono transition-all ${
+        onKeyDown={(e) => {
+          // 键盘可达性：裸 div 只能鼠标点击，Tab 用户永远无法进入录制态
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setRecording(true)
+          }
+        }}
+        className={`flex h-8 flex-1 cursor-pointer items-center justify-between rounded border px-3 text-xs font-mono transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 dark:focus-visible:ring-indigo-700 ${
           recording
             ? 'border-indigo-500 bg-indigo-50/50 text-indigo-700 ring-2 ring-indigo-200 dark:border-indigo-400 dark:bg-indigo-950/40 dark:text-indigo-300'
             : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'

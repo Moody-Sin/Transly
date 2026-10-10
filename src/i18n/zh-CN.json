@@ -163,6 +163,12 @@
     "serverStatusStarting": "启动中...",
     "serverStatusFailed": "▲ 启动失败",
     "statusCacheCleared": "已清理 {n} 条缓存记录",
-    "statusCacheClearFailed": "清空缓存失败，请重试"
+    "statusCacheClearFailed": "清空缓存失败，请重试",
+    "llmStyleTitle": "LLM 翻译领域风格",
+    "llmStyleGeneral": "通用直译 (默认)",
+    "llmStyleAcademic": "学术论文 / 技术文档 (保留术语代码)",
+    "llmStyleLiterary": "文学润色 / 日常口语 (地道自然)",
+    "llmStyleBusiness": "商务公文 / 正式邮件 (专业严谨)",
+    "ollamaPresetBtn": "快速填入本地 Ollama 配置"
   }
 }

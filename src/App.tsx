@@ -71,6 +71,12 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
     return (localStorage.getItem('transly_theme') as 'light' | 'dark' | 'system') || 'system'
   })
+  const [llmStyle, setLlmStyle] = useState<'general' | 'academic' | 'literary' | 'business'>(() => {
+    return (
+      (localStorage.getItem('transly_llm_style') as
+        'general' | 'academic' | 'literary' | 'business') || 'general'
+    )
+  })
 
   // 同步 theme 类名到 document.documentElement
   useEffect(() => {
@@ -1190,6 +1196,19 @@ export default function App() {
                       className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
                     />
                   </div>
+                  <div className="mt-1 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenaiBaseUrl('http://localhost:11434/v1')
+                        setOpenaiModel('qwen2.5:7b')
+                        if (!openaiKey) setOpenaiKey('ollama')
+                      }}
+                      className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      💡 {t.settings.ollamaPresetBtn}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex justify-end pt-1">
                   <button
@@ -1230,6 +1249,33 @@ export default function App() {
                   onSave={handleSaveReplaceShortcut}
                   t={t}
                 />
+              </div>
+
+              {/* LLM 风格偏好设置 */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div>
+                  <div className="font-medium text-slate-700">{t.settings.llmStyleTitle}</div>
+                  <div className="text-[11px] text-slate-400">
+                    {llmStyle === 'general' && t.settings.llmStyleGeneral}
+                    {llmStyle === 'academic' && t.settings.llmStyleAcademic}
+                    {llmStyle === 'literary' && t.settings.llmStyleLiterary}
+                    {llmStyle === 'business' && t.settings.llmStyleBusiness}
+                  </div>
+                </div>
+                <select
+                  value={llmStyle}
+                  onChange={(e) => {
+                    const val = e.target.value as 'general' | 'academic' | 'literary' | 'business'
+                    setLlmStyle(val)
+                    localStorage.setItem('transly_llm_style', val)
+                  }}
+                  className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  <option value="general">{t.settings.llmStyleGeneral}</option>
+                  <option value="academic">{t.settings.llmStyleAcademic}</option>
+                  <option value="literary">{t.settings.llmStyleLiterary}</option>
+                  <option value="business">{t.settings.llmStyleBusiness}</option>
+                </select>
               </div>
 
               {/* 剪贴板监听开关 */}

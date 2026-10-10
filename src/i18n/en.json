@@ -163,6 +163,12 @@
     "serverStatusStarting": "Starting...",
     "serverStatusFailed": "▲ Failed to start",
     "statusCacheCleared": "Cleared {n} cached entries",
-    "statusCacheClearFailed": "Failed to clear cache; please retry"
+    "statusCacheClearFailed": "Failed to clear cache; please retry",
+    "llmStyleTitle": "LLM Translation Domain Style",
+    "llmStyleGeneral": "General (Default)",
+    "llmStyleAcademic": "Academic / Technical (Preserve terms & code)",
+    "llmStyleLiterary": "Literary / Conversational (Fluent & natural)",
+    "llmStyleBusiness": "Business / Formal Correspondence (Executive)",
+    "ollamaPresetBtn": "Quick fill Local Ollama Preset"
   }
 }

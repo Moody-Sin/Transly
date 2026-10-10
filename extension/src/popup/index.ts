@@ -1,5 +1,29 @@
 import { applyStaticTranslations, t } from '../i18n'
 
+/**
+ * 把后端返回的错误标识映射为本地化文案。
+ *
+ * 后端在桌面端未启动时会返回原始 fetch 错误串（`Failed to fetch`），
+ * 直接显示会让中文界面弹出英文网络错误；因此这里对已知标识做映射，
+ * 未知的一律回落到本地化的兜底文案，绝不透传原始英文。
+ */
+function describeError(errType?: string): string {
+  switch (errType) {
+    case 'rejected':
+      return t('pairingRejected')
+    case 'timeout':
+      return t('pairingTimeout')
+    case 'network_unreachable':
+    case 'desktop_unreachable':
+      return t('pairingDesktopUnreachable')
+    default:
+      if (errType && errType.startsWith('verify_failed_')) {
+        return t('pairingVerifyFailed')
+      }
+      return t('pairingFailedGeneric')
+  }
+}
+
 const statusEl = document.getElementById('conn-status') as HTMLElement
 const btnTranslate = document.getElementById('btn-translate') as HTMLButtonElement
 const btnCancel = document.getElementById('btn-cancel') as HTMLButtonElement
@@ -149,7 +173,9 @@ if (btnAutoPair) {
           } else if (errType === 'timeout') {
             pairingMessage.textContent = t('pairingTimeout')
           } else {
-            pairingMessage.textContent = errType || t('pairingTimeout')
+            // 后端可能返回原始 fetch 错误串（如 "Failed to fetch"），
+            // 直接显示会让中文界面弹出英文网络错误，且 _locales 里没有对应 key。
+            pairingMessage.textContent = describeError(errType)
           }
         }
       }

@@ -158,8 +158,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   tabProgressMap.delete(tabId)
 })
 
-// 导航到新页面时旧页面的进度已无意义，一并丢弃（`tabs` 权限未申请，
-// 因此只拿得到 tabId 与 changeInfo，不做 url 判断）
+// 导航到新页面时旧页面的进度已无意义，一并丢弃。
+// 注意：已申请 `tabs` 权限（本版本起），`tab.url` 在此可用；
+// 该权限仅用于读取 URL 以匹配「为此站点记住自动翻译」规则，不读取页面内容。
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading') {
     tabProgressMap.delete(tabId)
@@ -384,14 +385,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             },
           })
             .then((authRes) => {
-              if (authRes.status === 401) {
+              // 只有 2xx 才代表鉴权探针成功。
+              // 旧实现把「非 401」一律当作已配对，于是桌面端内部故障（500）、
+              // 旧版本没有该路由（404）、权限问题（403）都会被报成「已连接」，
+              // Popup 还会解锁翻译按钮，用户点下去才收到失败。
+              if (authRes.ok) {
+                sendResponse({ ok: true, serverRunning: true, paired: true, data })
+              } else if (authRes.status === 401) {
                 sendResponse({ ok: true, serverRunning: true, paired: false, tokenExpired: true })
               } else {
-                sendResponse({ ok: true, serverRunning: true, paired: true, data })
+                // 服务在跑但探针本身异常：不能报成已配对
+                sendResponse({
+                  ok: true,
+                  serverRunning: true,
+                  paired: false,
+                  error: `verify_failed_${authRes.status}`,
+                })
               }
             })
             .catch(() => {
-              sendResponse({ ok: true, serverRunning: true, paired: true, data })
+              // 网络层失败：桌面端可能已退出，不能沿用旧状态报成「已连接」
+              sendResponse({ ok: false, serverRunning: false, error: 'network_unreachable' })
             })
         })
       })

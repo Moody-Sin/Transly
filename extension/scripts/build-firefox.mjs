@@ -10,36 +10,40 @@ if (!fs.existsSync(distDir)) {
   process.exit(1)
 }
 
-if (!fs.existsSync(firefoxDistDir)) {
-  fs.mkdirSync(firefoxDistDir, { recursive: true })
+// 先整体清空目标目录再复制。
+// `fs.cpSync` 只增量覆盖，不会删除目标目录里已不存在的文件——
+// 跨版本构建会把上一版已删除的产物残留在 zip 里，导致发布包含幽灵文件。
+if (fs.existsSync(firefoxDistDir)) {
+  fs.rmSync(firefoxDistDir, { recursive: true, force: true })
 }
+fs.mkdirSync(firefoxDistDir, { recursive: true })
 
 // 拷贝所有编译好的 JS 文件与 HTML、_locales 到 dist-firefox
 fs.cpSync(distDir, firefoxDistDir, { recursive: true })
 
 // 读取原始 manifest 并转换为兼容 Firefox Gecko 的 Manifest V2/V3 格式
-const chromeManifest = JSON.parse(
-  fs.readFileSync(path.join(distDir, 'manifest.json'), 'utf8')
-)
+const chromeManifest = JSON.parse(fs.readFileSync(path.join(distDir, 'manifest.json'), 'utf8'))
 
 const firefoxManifest = {
   ...chromeManifest,
   browser_specific_settings: {
     gecko: {
-      id: "transly@transly.local",
-      strict_min_version: "109.0"
-    }
+      // 固定的 addon ID：必须是一个合法 UUID 字面量，否则 addons-linter 会判定非法。
+      // 此前遗留的是脚手架模板占位符 {{EMAIL_...}}，从未被替换过。
+      id: '{3f8b1c24-7d5a-4e91-9b6c-2a4f0d8e5b71}',
+      strict_min_version: '109.0',
+    },
   },
   // Firefox MV3 background 规范兼容
   background: {
-    scripts: ["background.js"]
-  }
+    scripts: ['background.js'],
+  },
 }
 
 fs.writeFileSync(
   path.join(firefoxDistDir, 'manifest.json'),
   JSON.stringify(firefoxManifest, null, 2),
-  'utf8'
+  'utf8',
 )
 
 console.log('[Firefox Build] Firefox 专属产物已就绪于 extension/dist-firefox')

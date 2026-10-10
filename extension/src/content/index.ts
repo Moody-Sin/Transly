@@ -9,6 +9,8 @@
 
 console.log('[Transly Content Script] 沉浸式翻译引擎已就绪')
 
+import { iterateElementsDeep, iterateTextNodesDeep, ELEMENT_NODE } from '../shared/domTraversal'
+
 // 使用 WeakMap 严格基于 Text 节点维护原始内容，杜绝父节点多 Text 节点互相覆盖
 const originalTextMap = new WeakMap<Text, string>()
 const translatedTextSet = new WeakSet<Text>()
@@ -89,33 +91,26 @@ export function replaceTextNode(node: Text, translatedText: string, mode: string
 }
 
 export function restoreOriginalText(container: Node = document.body) {
-  // 移除所有双语模式插入的译文元素
-  if (container instanceof Element) {
-    container.querySelectorAll('.transly-bilingual-trans').forEach((el) => {
+  // 1. 移除所有双语模式插入的译文元素（light DOM 与 open shadow DOM 都要覆盖）
+  for (const el of iterateElementsDeep(container)) {
+    if (el.classList.contains('transly-bilingual-trans')) {
       el.remove()
-    })
-  }
-
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
-  let curr = walker.nextNode()
-  while (curr) {
-    const textNode = curr as Text
-    if (originalTextMap.has(textNode)) {
-      const orig = originalTextMap.get(textNode)
-      if (orig !== undefined) {
-        textNode.nodeValue = orig
-        originalTextMap.delete(textNode)
-        translatedTextSet.delete(textNode)
-      }
     }
-    curr = walker.nextNode()
   }
 
-  // 清除父元素标记与残留 Tooltip
-  if (container instanceof Element) {
-    container.querySelectorAll('[data-transly-has-translation]').forEach((el) => {
-      el.removeAttribute('data-transly-has-translation')
-    })
+  // 2. 还原文本节点内容
+  for (const textNode of iterateTextNodesDeep(container)) {
+    const orig = originalTextMap.get(textNode)
+    if (orig !== undefined) {
+      textNode.nodeValue = orig
+      originalTextMap.delete(textNode)
+      translatedTextSet.delete(textNode)
+    }
+  }
+
+  // 3. 清除父元素标记与残留 Tooltip
+  for (const el of iterateElementsDeep(container)) {
+    el.removeAttribute('data-transly-has-translation')
   }
   hideOriginalTooltip()
 }
@@ -386,7 +381,37 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 let isObserving = false
 let currentObserver: MutationObserver | null = null
 let observerDebounceTimer: number | null = null
+let observerFirstPendingAt = 0
 const observerPendingNodes = new Set<Node>()
+
+/** 增量翻译的静默期：最后一次 DOM 变更后等待这么久就 flush。 */
+const OBSERVER_DEBOUNCE_MS = 500
+/** 增量翻译的最大等待：无论变更多频繁，最多这么久也必须 flush 一次。 */
+const OBSERVER_MAX_WAIT_MS = 2000
+
+/**
+ * 节点是否仍挂在文档树上。
+ *
+ * 不能直接用 `document.body.contains(node)`：对 Shadow DOM 内部的节点它恒为
+ * false，会让增量监听路径永远跳过 shadow 内新增的内容。
+ */
+function isNodeAttached(node: Node): boolean {
+  if (node.isConnected) return true
+  const el = node.nodeType === ELEMENT_NODE ? (node as Element) : node.parentElement
+  if (!el) return false
+  let current: Element | null = el
+  while (current) {
+    const root = current.getRootNode()
+    if (root instanceof ShadowRoot) {
+      if (root.host.isConnected) return true
+      current = root.host.parentElement
+    } else {
+      return root === document
+    }
+  }
+  return false
+}
+
 let currentTargetLang = 'zh-CN'
 let currentEngine = 'google'
 
@@ -412,6 +437,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
   isObserving = true
 
   observerPendingNodes.clear()
+  observerFirstPendingAt = 0
   if (observerDebounceTimer) {
     clearTimeout(observerDebounceTimer)
     observerDebounceTimer = null
@@ -436,12 +462,25 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
     }
 
     if (observerPendingNodes.size > 0) {
+      // 防抖 + 最大等待兜底。
+      //
+      // 纯防抖在「持续有 DOM 变更」的页面（实时聊天、比分跳动、动画计数器、
+      // 高频轮询组件）上会被无限重置，回调**永不执行**，SPA 增量翻译彻底停摆。
+      // 因此无论变更多频繁，最多间隔 MAX_WAIT 也必须 flush 一次。
+      const now = Date.now()
+      if (observerFirstPendingAt === 0) {
+        observerFirstPendingAt = now
+      }
+      const elapsed = now - observerFirstPendingAt
+      const delay = elapsed >= OBSERVER_MAX_WAIT_MS ? 0 : OBSERVER_DEBOUNCE_MS
+
       if (observerDebounceTimer) clearTimeout(observerDebounceTimer)
       observerDebounceTimer = window.setTimeout(async () => {
         const generation = currentGeneration
         const nodesToProcess = Array.from(observerPendingNodes)
         observerPendingNodes.clear()
         observerDebounceTimer = null
+        observerFirstPendingAt = 0
 
         // 增量批次是独立任务：重置计数基准，否则进度百分比与失败判定会被
         // 首屏任务的累计值污染（total 只增不减 → 永不收敛；
@@ -449,7 +488,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
         const batchEntries: TextNodeEntry[] = []
         for (const root of nodesToProcess) {
           if (generation !== currentGeneration) break
-          if (document.body.contains(root)) {
+          if (isNodeAttached(root)) {
             batchEntries.push(...collectTextNodes(root))
           }
         }
@@ -471,7 +510,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
         if (generation === currentGeneration) {
           broadcastTerminalState(generation, failedBatches)
         }
-      }, 500)
+      }, delay)
     }
   })
 
@@ -492,6 +531,7 @@ export function stopDynamicObserver() {
     observerDebounceTimer = null
   }
   observerPendingNodes.clear()
+  observerFirstPendingAt = 0
   isObserving = false
 }
 
@@ -603,6 +643,12 @@ function splitEntries(entries: TextNodeEntry[]): [TextNodeEntry[], TextNodeEntry
  * 对半拆分能自适应收敛到服务端接受的粒度，而不必要求两端同时升级。
  * 拆到单项仍被拒即停止，避免无限递归。
  */
+/** 瞬态可重试状态码：并发令牌耗尽（429）与服务端内部错误。 */
+const TRANSIENT_RETRY_STATUSES = new Set([429, 500, 502, 503])
+/** 瞬态重试的退避序列（毫秒），最多重试 2 次。 */
+const RETRY_BACKOFF_MS = [300, 900]
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 async function sendBatchWithSplit(
   batch: TextNodeEntry[],
   targetLang: string,
@@ -611,11 +657,29 @@ async function sendBatchWithSplit(
 ): Promise<{ failedBatches: number }> {
   if (batch.length === 0) return { failedBatches: 0 }
 
-  const response = await sendBatch(
+  let response = await sendBatch(
     batch.map((item) => ({ id: item.id, text: item.text })),
     targetLang,
     engine,
   )
+
+  // 瞬态故障退避重试：服务端并发信号量打满会返回 429，内部故障返回 500。
+  // 不重试意味着一次瞬时限流就永久损失整批（最多 30 个节点）的译文，
+  // 用户只能手动点「重试失败项」。Rust 侧对同一类状态码已有指数退避先例。
+  // 401/403/400 与 413 不重试：前者是配置问题，后者已有专门的拆批分支。
+  for (let attempt = 0; attempt < RETRY_BACKOFF_MS.length; attempt += 1) {
+    const status = response.status
+    if (status === undefined || !TRANSIENT_RETRY_STATUSES.has(status)) break
+    // 代际已变更（用户取消或重新翻译）时立即放弃，避免在废弃批次上空转
+    if (expectedGen !== currentGeneration) return { failedBatches: 0 }
+    await sleep(RETRY_BACKOFF_MS[attempt])
+    if (expectedGen !== currentGeneration) return { failedBatches: 0 }
+    response = await sendBatch(
+      batch.map((item) => ({ id: item.id, text: item.text })),
+      targetLang,
+      engine,
+    )
+  }
 
   if (response.ok && response.data) {
     applyBatchResponse(response.data, batch, expectedGen)
@@ -638,8 +702,30 @@ async function sendBatchWithSplit(
     return { failedBatches: 1 }
   }
 
-  if (expectedGen === currentGeneration) markBatchFailed(batch, 'network')
+  // 按状态码区分失败性质：服务端有四种语义完全不同的 400，统一归为 'network'
+  // 会把「语言对不支持」「引擎名非法」这类配置问题误导成网络不可达，
+  // 让用户去查网络而查不到真因。
+  if (expectedGen === currentGeneration) {
+    markBatchFailed(batch, classifyFailure(response.status))
+  }
   return { failedBatches: 1 }
+}
+
+/** 把 HTTP 状态码映射为对用户有意义的失败类别。undefined 表示未拿到响应（网络层失败）。 */
+export function classifyFailure(status: number | undefined): string {
+  if (status === undefined) return 'network'
+  if (TRANSIENT_RETRY_STATUSES.has(status)) return 'network'
+  switch (status) {
+    case 401:
+    case 403:
+      return 'unauthorized'
+    case 413:
+      return 'payload_too_large'
+    case 400:
+      return 'bad_request'
+    default:
+      return 'internal'
+  }
 }
 
 /**

@@ -45,9 +45,7 @@ for (const name of ENTRIES) {
   const file = path.join(distDir, `${name}.js`)
   const code = fs.readFileSync(file, 'utf8')
   if (IMPORT_PATTERN.test(code)) {
-    throw new Error(
-      `[Extension Build] dist/${name}.js 含有 ESM 导入，无法在经典脚本上下文运行`,
-    )
+    throw new Error(`[Extension Build] dist/${name}.js 含有 ESM 导入，无法在经典脚本上下文运行`)
   }
 }
 

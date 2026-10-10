@@ -50,6 +50,36 @@
   "pairingTimeout": {
     "message": "配对超时，请重试"
   },
+  "pairingDesktopUnreachable": {
+    "message": "无法连接桌面端，请确认 Transly 正在运行"
+  },
+  "pairingVerifyFailed": {
+    "message": "桌面端响应异常，请重启 Transly 后重试"
+  },
+  "pairingFailedGeneric": {
+    "message": "配对失败，请重试"
+  },
+  "extTitle": {
+    "message": "Transly 沉浸式翻译"
+  },
+  "langNameZh": {
+    "message": "简体中文"
+  },
+  "langNameEn": {
+    "message": "English"
+  },
+  "langNameJa": {
+    "message": "日本語"
+  },
+  "langNameKo": {
+    "message": "한국어"
+  },
+  "langNameFr": {
+    "message": "Français"
+  },
+  "langNameDe": {
+    "message": "Deutsch"
+  },
   "tokenManualToggle": {
     "message": "手动输入 Token"
   },

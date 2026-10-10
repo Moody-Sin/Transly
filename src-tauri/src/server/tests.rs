@@ -3,6 +3,79 @@ use axum::body::Body;
 use http_body_util::BodyExt;
 use tower::util::ServiceExt;
 
+/// 构造携带合法回环 `Host` 头的请求构建器。
+///
+/// 真实浏览器发起的请求必然带 `Host` 头，而本地服务的 DNS Rebinding 防线正是
+/// 建立在这个头上。测试若省略它，等于把被测防线绕过去了。
+fn local_builder() -> axum::http::request::Builder {
+    Request::builder().header(axum::http::header::HOST, "127.0.0.1:39281")
+}
+
+#[test]
+fn test_host_header_allowed() {
+    // 合法的回环 Host（带端口 / 不带端口 / IPv6 字面量）
+    assert!(host_header_allowed("127.0.0.1:39281"));
+    assert!(host_header_allowed("localhost:39281"));
+    assert!(host_header_allowed("[::1]:39281"));
+    assert!(host_header_allowed("127.0.0.1"));
+    assert!(host_header_allowed("localhost"));
+
+    // DNS Rebinding 的核心：Host 指向攻击者域名，必须拒绝
+    assert!(!host_header_allowed("evil.com"));
+    assert!(!host_header_allowed("evil.com:39281"));
+    // 前缀/后缀伪装
+    assert!(!host_header_allowed("127.0.0.1.evil.com"));
+    assert!(!host_header_allowed("127.0.0.1.evil.com:39281"));
+    assert!(!host_header_allowed("localhost.evil.com:39281"));
+    assert!(!host_header_allowed("evil-localhost"));
+    // 畸形与空值
+    assert!(!host_header_allowed(""));
+    assert!(!host_header_allowed("   "));
+    assert!(!host_header_allowed("[::1"));
+    // 端口位不是纯数字时整体视为主机名
+    assert!(!host_header_allowed("127.0.0.1:evil"));
+}
+
+#[tokio::test]
+async fn test_dns_rebinding_host_guard_rejects_foreign_host() {
+    let cache = TranslationCache::in_memory().unwrap();
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let glossary = Arc::new(RwLock::new(Glossary::new()));
+    let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+    let token = Arc::new(RwLock::new("test-token".to_string()));
+    let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
+
+    // `/pair/request` 不带 Token 鉴权，是 rebinding 攻击链的关键一跳：
+    // 恶意的同源页面可以直接发起配对请求。Host 守卫必须在鉴权之前拦下它。
+    for uri in ["/health", "/pair/request", "/pair/poll"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(axum::http::header::HOST, "evil.com:39281")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "Host 为攻击者域名的 {uri} 必须被拒绝"
+        );
+    }
+
+    // 缺少 Host 头同样拒绝
+    let req = Request::builder()
+        .method("POST")
+        .uri("/health")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 #[test]
 fn test_is_allowed_origin() {
     // 合法的扩展 Origin 格式
@@ -36,10 +109,7 @@ async fn test_health_check() {
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("test-token".to_string()));
     let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
-    let req = Request::builder()
-        .uri("/health")
-        .body(Body::empty())
-        .unwrap();
+    let req = local_builder().uri("/health").body(Body::empty()).unwrap();
 
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -57,7 +127,7 @@ async fn test_cors_origin_policy() {
     let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
 
     // 1. 允许扩展协议与本地开发
-    let allowed_req = Request::builder()
+    let allowed_req = local_builder()
         .method("OPTIONS")
         .uri("/health")
         .header(
@@ -77,7 +147,7 @@ async fn test_cors_origin_policy() {
     );
 
     // 2. 拒绝普通不受信外部网页
-    let denied_req = Request::builder()
+    let denied_req = local_builder()
         .method("OPTIONS")
         .uri("/health")
         .header(header::ORIGIN, "https://malicious-site.com")
@@ -101,7 +171,7 @@ async fn test_translate_unauthorized() {
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("valid-token".to_string()));
     let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::CONTENT_TYPE, "application/json")
@@ -139,7 +209,7 @@ async fn test_translate_authorized() {
         )
         .with_state(state);
 
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -188,7 +258,7 @@ async fn test_translate_cache_disabled_path() {
         .set("privacy_test", "旧译文", "auto", "zh-CN", "google_web")
         .unwrap();
 
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -229,7 +299,7 @@ async fn test_translate_language_and_length_validation() {
         .with_state(state);
 
     // 1. 测试非法语言参数拒绝 (target_lang 为 auto 或 包含非法字符)
-    let invalid_lang_req = Request::builder()
+    let invalid_lang_req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -245,7 +315,7 @@ async fn test_translate_language_and_length_validation() {
         "texts": [huge_text],
         "target_lang": "zh-CN"
     });
-    let huge_req = Request::builder()
+    let huge_req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -256,7 +326,7 @@ async fn test_translate_language_and_length_validation() {
     assert_eq!(res2.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     // 3. 测试未知非法引擎参数拒绝，杜绝静默降级
-    let invalid_engine_req = Request::builder()
+    let invalid_engine_req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -275,7 +345,7 @@ async fn test_translate_language_and_length_validation() {
     }
 
     // 使用旧 Token 请求 -> 必须 401
-    let old_token_req = Request::builder()
+    let old_token_req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -290,7 +360,7 @@ async fn test_translate_language_and_length_validation() {
     );
 
     // 使用新 Token 请求 -> 必须 200
-    let new_token_req = Request::builder()
+    let new_token_req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer rotated-token-123456")
@@ -365,7 +435,7 @@ async fn test_translate_structured_batch_items() {
         )
         .with_state(state);
 
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -431,7 +501,7 @@ async fn test_fallback_cache_hit_on_secondary() {
         .with_state(state);
 
     // 使用 deepl 引擎请求，该引擎具备容灾降级能力，可命中 google_web 降级缓存
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -483,7 +553,7 @@ fn translate_app(
 }
 
 fn post_translate(body: String) -> Request<Body> {
-    Request::builder()
+    local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer valid-token")
@@ -510,12 +580,7 @@ async fn test_health_exposes_batch_limits_matching_core_constants() {
     );
 
     let res = app
-        .oneshot(
-            Request::builder()
-                .uri("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(local_builder().uri("/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -716,7 +781,7 @@ async fn test_pairing_http_endpoints_roundtrip() {
         "client_id": "test-ext-1",
         "browser_hint": "Chrome"
     });
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/pair/request")
         .header(header::CONTENT_TYPE, "application/json")
@@ -739,7 +804,7 @@ async fn test_pairing_http_endpoints_roundtrip() {
         "session_id": session_id,
         "client_id": "test-ext-1"
     });
-    let poll_req = Request::builder()
+    let poll_req = local_builder()
         .method("POST")
         .uri("/pair/poll")
         .header(header::CONTENT_TYPE, "application/json")
@@ -759,7 +824,7 @@ async fn test_pairing_http_endpoints_roundtrip() {
     assert!(pairing_manager.approve(&session_id).await);
 
     // 4. 再次轮询成功获得 Token
-    let poll_req2 = Request::builder()
+    let poll_req2 = local_builder()
         .method("POST")
         .uri("/pair/poll")
         .header(header::CONTENT_TYPE, "application/json")
@@ -803,7 +868,7 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
         "engine": "google_web"
     });
 
-    let req = Request::builder()
+    let req = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer e2e-session-token")
@@ -845,7 +910,7 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
     assert!(cached_2.is_some(), "第二项应已被写入缓存");
 
     // 3. 再次发起相同批量请求：验证 100% 命中缓存且毫秒级响应
-    let req2 = Request::builder()
+    let req2 = local_builder()
         .method("POST")
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer e2e-session-token")

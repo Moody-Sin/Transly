@@ -5081,6 +5081,7 @@ dependencies = [
 name = "transly-core"
 version = "0.2.1"
 dependencies = [
+ "aho-corasick",
  "async-trait",
  "futures",
  "regex",

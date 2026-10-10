@@ -1,14 +1,17 @@
+use aho_corasick::{AhoCorasick, MatchKind};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-struct TermEntry {
+struct TermMeta {
+    source: String,
     target: String,
-    regex: Option<regex::Regex>,
+    match_case: bool,
+    word_boundary: bool,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct Glossary {
-    terms: HashMap<String, TermEntry>,
+    terms: HashMap<String, TermMeta>,
 }
 
 impl Glossary {
@@ -35,44 +38,93 @@ impl Glossary {
 
         let is_ascii_word =
             !src.is_empty() && src.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        let re = if is_ascii_word {
-            let flag = if match_case { "" } else { "(?i)" };
-            let pattern = format!(r"{}\b{}\b", flag, regex::escape(&src));
-            regex::Regex::new(&pattern).ok()
-        } else if !match_case {
-            let pattern = format!(r"(?i){}", regex::escape(&src));
-            regex::Regex::new(&pattern).ok()
-        } else {
-            None
-        };
 
         self.terms.insert(
-            src,
-            TermEntry {
+            src.clone(),
+            TermMeta {
+                source: src,
                 target: tgt,
-                regex: re,
+                match_case,
+                word_boundary: is_ascii_word,
             },
         );
     }
 
     pub fn apply(&self, text: &str) -> String {
-        let mut result = text.to_string();
-
-        // 确定性稳定排序：按源词长度降序，同长度按字典序升序排，消除非确定性
-        let mut sorted_entries: Vec<(&String, &TermEntry)> = self.terms.iter().collect();
-        sorted_entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0)));
-
-        for (src, entry) in sorted_entries {
-            if let Some(ref re) = entry.regex {
-                // 使用 regex::NoExpand 确保目标译文中的 $、反斜杠等字符被作为纯字面量替换，不触发正则捕获组展开
-                result = re
-                    .replace_all(&result, regex::NoExpand(entry.target.as_str()))
-                    .to_string();
-            } else {
-                result = result.replace(src.as_str(), &entry.target);
-            }
+        if self.terms.is_empty() || text.is_empty() {
+            return text.to_string();
         }
-        result
+
+        // 确定性排序：按模式长度降序，同长按字典序升序（长词优先策略）
+        let mut metas: Vec<&TermMeta> = self.terms.values().collect();
+        metas.sort_by(|a, b| {
+            b.source
+                .len()
+                .cmp(&a.source.len())
+                .then_with(|| a.source.cmp(&b.source))
+        });
+
+        // 提取模式串供 AhoCorasick 自动机构建
+        let patterns: Vec<&str> = metas.iter().map(|m| m.source.as_str()).collect();
+
+        // 优先使用 LeftmostLongest 匹配策略保证最长前缀优先命中
+        // 如果所有术语都不区分大小写，或者混合构建：AhoCorasick 支持大小写折叠。
+        // 为了严格尊重每条术语各自独立的 match_case 选项：
+        // 我们构建一个 case-insensitive 自动机检索候选，后验校验 match_case 与 word_boundary。
+        let ac = match AhoCorasick::builder()
+            .match_kind(MatchKind::LeftmostLongest)
+            .ascii_case_insensitive(true)
+            .build(&patterns)
+        {
+            Ok(ac) => ac,
+            Err(_) => return text.to_string(),
+        };
+
+        let mut output = String::with_capacity(text.len());
+        let mut last_idx = 0;
+
+        for mat in ac.find_iter(text) {
+            let meta = metas[mat.pattern()];
+            let matched_slice = &text[mat.start()..mat.end()];
+
+            // 1. 若要求区分大小写，检查是否与原始定义完全匹配
+            if meta.match_case && matched_slice != meta.source.as_str() {
+                continue;
+            }
+
+            // 2. 若要求单词边界，检查匹配区段左前驱与右后继
+            if meta.word_boundary {
+                let is_left_boundary = if mat.start() == 0 {
+                    true
+                } else {
+                    let prev_char = text[..mat.start()].chars().next_back().unwrap_or(' ');
+                    !prev_char.is_ascii_alphanumeric() && prev_char != '_'
+                };
+
+                let is_right_boundary = if mat.end() >= text.len() {
+                    true
+                } else {
+                    let next_char = text[mat.end()..].chars().next().unwrap_or(' ');
+                    !next_char.is_ascii_alphanumeric() && next_char != '_'
+                };
+
+                if !is_left_boundary || !is_right_boundary {
+                    continue;
+                }
+            }
+
+            // 校验通过：拼接上一段未匹配内容 + 目标替换文本
+            if mat.start() < last_idx {
+                // 防卫可能存在的重叠区段（因我们过滤掉了部分 match 导致游标推进顺序）
+                continue;
+            }
+            output.push_str(&text[last_idx..mat.start()]);
+            output.push_str(&meta.target);
+            last_idx = mat.end();
+        }
+
+        output.push_str(&text[last_idx..]);
+        output
     }
 
     pub fn is_empty(&self) -> bool {
@@ -139,5 +191,33 @@ mod tests {
         let text = "I eat an apple from Apple";
         let result = glossary.apply(text);
         assert_eq!(result, "I eat an apple from 苹果公司");
+    }
+
+    #[test]
+    fn test_glossary_cascade_prevention() {
+        let mut glossary = Glossary::new();
+        // 术语 A 替换为包含 "target" 的译文，术语 B 会把 "target" 替换为 "目标"
+        // 循环正则中：若 A 先替换，文本中会出现 target，接着被 B 再次替换！
+        // 单趟扫描应保证原文本中仅匹配原始出现的词条，绝不会产生二次级联替换！
+        glossary.insert("source", "my target output");
+        glossary.insert("target", "目标");
+
+        let text = "this is source text";
+        let result = glossary.apply(text);
+        assert_eq!(
+            result, "this is my target output text",
+            "已替换的内容不应被后续术语再次级联替换"
+        );
+    }
+
+    #[test]
+    fn test_glossary_boundary_check() {
+        let mut glossary = Glossary::new();
+        glossary.insert("cat", "猫");
+
+        // 单词内部子串不应匹配，独立词才匹配
+        let text = "scatter the cat in bobcat";
+        let result = glossary.apply(text);
+        assert_eq!(result, "scatter the 猫 in bobcat");
     }
 }

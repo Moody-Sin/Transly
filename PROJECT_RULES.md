@@ -83,7 +83,9 @@
 - 与 Rust 通信使用 `tauri-specta` 自动生成的 client，禁止手写 IPC 调用
 
 ### 通用与 Git Hooks
-- 提交前通过 `lefthook` 自动校验：`cargo fmt --check` + `cargo clippy` + `tsc --noEmit` + `eslint` + `pnpm run test:task`
+- 提交前通过 `lefthook` 自动校验：`cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` + `tsc --noEmit`（桌面端与插件端各一次）+ `eslint` + `format:check` + `pnpm run test:task`
+  - 三条 cargo 命令**不得**追加 `|| true`：那会让 Rust 侧本地门禁永远不可能失败，CI 才会暴露问题，等于把门禁挪到最后一环。
+  - `pnpm run build`（含 `vite build`）由 CI 校验，本地钩子只跑类型检查以避免每次提交都触发完整打包。
 
 ---
 
@@ -113,6 +115,7 @@ transly/
 │   │   ├── cache_controller.rs# 缓存开关 generation 门禁
 │   │   ├── clipboard_gate.rs  # 剪贴板去重与划词抑制判定（纯函数）
 │   │   ├── ocr.rs             # 平台原生 OCR（Windows WinRT，其余平台返回未支持）
+│   │   ├── storage.rs         # 应用数据目录解析与旧版数据迁移
 │   │   └── secrets.rs         # 密钥读写（系统凭据管理器）
 │   ├── capabilities/          # Tauri 2 ACL 能力声明（前端插件命令最小放行白名单）
 │   ├── bin/export_bindings.rs # 导出 tauri-specta 强类型绑定
@@ -128,9 +131,12 @@ transly/
 ├── extension/                 # 浏览器插件 (Vite + 原生 TypeScript)
 │   ├── src/
 │   │   ├── background/        # 后台通信（负责与桌面端 127.0.0.1 HTTP 通信）
-│   │   ├── content/           # 页面 DOM 原地提取与替换
+│   │   ├── content/           # 页面 DOM 原地提取与替换（含 Shadow DOM 穿透）
+│   │   ├── selection/         # 划词气泡与选区悬浮图标
+│   │   ├── shared/            # 跨入口共享纯函数（切批规划、富文本、DOM 遍历）
 │   │   ├── i18n/              # chrome.i18n 查询封装与静态文案注入
 │   │   └── popup/             # 插件工具栏弹窗 UI
+│   ├── scripts/               # 构建脚本（Chrome 产物 / Firefox 适配产物）
 │   ├── _locales/              # Chrome 原生 i18n 文案（zh_CN / en）
 │   ├── manifest.json
 │   └── package.json
@@ -212,8 +218,9 @@ transly/
 
 - transly-core 单测覆盖率要求 ≥70%
 - 引擎测试使用 mock，CI 不真调外部 API
-- 关键路径集成测试放 src-tauri/tests
+- 集成测试与单测同文件放置（如 `src-tauri/src/server/tests.rs`），不另建 `tests/` 目录
 - 前端组件测试（可选，视复杂度）
+- 端到端测试优先于纯函数单测：测「真实调用方是否正确使用」而非「纯函数本身是否自洽」。例：代际闸门必须测 hook 中的实际调用路径，只测纯函数会漏掉双递增等真实用法缺陷。
 
 ---
 

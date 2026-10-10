@@ -7,6 +7,15 @@
 
 ## [未发布]
 
+### 安全
+
+- **本地服务缺少 `Host` 头校验，DNS Rebinding 可窃取配对 Token (P0)**：唯一防线是 CORS 的 `AllowOrigin` 谓词，而 **CORS 不是服务端访问控制**——攻击者把域名 A 记录 TTL 设为 0 指向 `127.0.0.1` 后，恶意页面与本机服务同源，浏览器不发预检也不校验 CORS。`/pair/request` 为免鉴权握手端点，可被完整利用：诱导用户点「允许」即交出 Bearer Token，随后可任意消耗用户付费的翻译额度。现新增 `host_guard` 中间件（位于 CORS 之外），仅接受 `Host` 为 `127.0.0.1` / `localhost` / `[::1]`（含端口与 IPv6 字面量解析），其余一律 403；配套 2 项测试，并让既有 20 处请求构造携带合法 `Host`（此前全部省略，等于把被测防线绕过去）。
+- **鉴权对空 Token 失效（fail-open）(P1)**：`constant_time_eq(b"", b"")` 恒为真，期望令牌为空串时 `Authorization: Bearer `（空值）即可通过。当前靠「Token 生成失败则不启动服务」偶然规避，属隐式正确。现 `bearer_matches` 对空期望值直接 fail-closed。
+- **CORS 白名单只校验格式不校验身份 (P1)**：Chrome 分支只要 `chrome-extension://` + 32 个 `a-p` 字符即放行，任意已安装扩展均可读取全部响应。已在注释中明确标注该属性为格式校验而非身份隔离（Chrome 扩展 ID 可钉死，Firefox UUID 运行时生成，属已知折中）。
+- **引擎错误体原样外传导致密钥前缀泄露 (P2)**：OpenAI 兼容网关的 401 响应会回显 `sk-proj-XXXX`，该字符串一路进入扩展页面 DOM、前端状态与日志。现仅保留状态码，响应体内容不落任何日志。
+- **LLM 端点缺少协议校验 (P2)**：允许任意 `http://` 意味着 API Key 可能明文过网。现强制 `https://`，仅本地回环（Ollama / vLLM）例外。
+- **`%APPDATA%` 为漫游目录，隐私数据会被同步出本机 (P2)**：域环境下翻译历史与自建术语库会被组策略同步到其它机器与备份介质，与「本地优先、零上报」承诺冲突。现改用 `%LOCALAPPDATA%`，并新增漫游目录一次性迁移（幂等、不覆盖），避免升级丢数据。
+
 ### 优化与增强
 - **离线语言检测与智能对转西欧拉丁语系防偏转 (P0)**：在 `crates/transly-core` 的 `detector` 模块中细分主要西欧拉丁语系（法、德、西等）的特征重音字母与常用功能词检测。修复当用户默认目标语言为英文时输入欧系小语种（如法文 `Bonjour`）被无差别误判为英文而强行对转为中文的缺陷，确保外翻英场景准确路由；添加对应单测。
 - **划词原地替换集成持久化缓存与历史沉淀 (P0)**：在 `src-tauri` 的 `trigger_selection_replacement` 流程中注入 `TranslationDependencies`，在无锁第二阶段优先查询 `TranslationCache`，并在翻译成功后安全写入缓存与历史记录；彻底消除原本原地替换完全绕过缓存与无历史沉淀的问题。
@@ -31,6 +40,18 @@
 - **术语库 Aho-Corasick 单趟多模式扫描重构 (P0)**：在 `crates/transly-core` 中重构 `Glossary::apply` 算法，引入高性能 `aho-corasick` crate (v1.1)。由原先按词长遍历的逐词 `Regex::replace_all` 升级为基于 `MatchKind::LeftmostLongest` 的单趟自动机流式扫描，匹配后精准执行后验 ASCII 单词边界检测，匹配性能从 $\mathcal{O}(N \times L)$ 优化至 $\mathcal{O}(L)$。彻底解决先前术语 A 替换为 B 之后 B 中文字被后续术语再次二次替换的级联缺陷，并天然保障长词优先命中。
 - **浏览器扩展整页翻译 Viewport-First 优先切批调度 (P1)**：在 `extension/src/content/index.ts` 与 `shared/batchPlan.ts` 中实现视口感知切批调度。在收集待翻译 Text 节点时计算其实际几何包围盒，将当前可视视口内的可见文本优先拆批置顶并立即发送请求，使得用户在点击翻译后数百毫秒内即可看到当前屏幕文字变成译文；离屏（Offscreen）未滚动到的段落则平滑在后台批次中保序排队，大幅缩减首屏翻译等待的感官延迟。
 - **浏览器扩展富文本段落行内标签保真翻译 (P1)**：在 `extension/src/shared/richText.ts` 中实现富文本行内占位提取与译文安全还原算法。针对 `<p>`、`<li>`、`<h1>`-`<h6>` 等段落中内嵌的 `<a>`、`<code>`、`<strong>` 等行内标签，以整句为单元进行占位保护（`⟦T_N⟧`）后统一翻译；返回后自动拆解回填，彻底杜绝跨语种（如中英文语序倒装）时离散文本节点被切碎翻译导致的语序破版，并在占位符丢失时无缝安全回退至逐节点原位替换。
+
+### 变更
+
+- **本地提交门禁恢复有效性 (P0)**：`lefthook.yml` 的三条 cargo 命令（`fmt` / `clippy` / `test`）此前全部以 `|| true` 结尾，退出码被无条件吞掉，**Rust 侧本地门禁 100% 不可能失败**——而 CHANGELOG 却记录着「lefthook 提交门禁真正生效」。现移除 `|| true` 并取消 `parallel`（三条 cargo 命令并发会争抢同一 `target/` 锁，实际被串行化）。
+- **CI 补齐「禁止提交文件检查」**：`PROJECT_RULES` 的 CI 清单列有该项，此前无任何自动化实现。现新增 `repo-hygiene` job，拦截被跟踪的构建产物/依赖目录与超过 1MB 的文件。
+- **CI 与 Release 全部改用 `pnpm install --frozen-lockfile`**：项目认真跟踪了锁文件，却用宽松解析安装，任何人改了 `package.json` 而漏更 lockfile 都不会被发现。
+- **Release 补齐 Firefox 产物与版本号注入**：`build:extension:firefox` 此前从未在 CI 执行，Firefox 用户拿不到产物；扩展 manifest 版本号硬编码，打 tag 后产物版本不递增会被 Chrome Web Store 拒绝。现由 git tag 注入 `TRANSLY_EXT_VERSION`，Firefox 产物一并上传。
+- **扩展构建脚本清理过期产物**：`fs.cpSync` 不删除目标目录中已不存在的文件，跨版本构建会残留幽灵文件；`gecko.id` 仍是未替换的 `{{EMAIL_...}}` 模板占位符，addons-linter 会判为非法。已分别修正。
+- **格式化检查覆盖根配置与脚本**：`format:check` 的 glob 不含根目录配置与 `scripts/*.mjs`，实测 `tailwind.config.js`、`check-commit-msg.mjs` 不合规却 CI 全绿。现纳入射程并全部格式化。
+- **术语库 Aho-Corasick 自动机缓存**：`Glossary::apply` 每次调用都重建自动机（构建成本 O(总模式长度)），500 词条单次约 4.7ms，整页翻译 30 项即累计 142ms 纯浪费且发生在 tokio worker 上。现缓存编译结果并在词条变更时失效。
+- **占位符容错正则静态化**：改为 `LazyLock`，避免每次还原都重新编译 DFA。
+- **文档与实现对齐**：`docs/README.md` 索引补全全部 16 篇文档（此前自订「每新增一篇必须登记」的规则，实际只登记 1 篇）；`PROJECT_RULES.md` 修正集成测试目录、补充 `storage.rs` 与扩展 `selection/`、`shared/` 目录说明、补记门禁禁止 `|| true` 的规程；`AGENTS.md` 修正 `Cargo.lock` 表述（实际已提交且应当提交）与 clippy 命令（补 `--all-targets`）。
 
 ### 新增
 - **浏览器扩展当前站点自动翻译偏好记忆 (E11)**：在扩展 Popup 底栏增加「为此站点记住自动翻译」记忆开关；针对用户信任的外文技术或学术网站（如 GitHub、Reddit、ArXiv），在页面加载完成后自动触发整页沉浸式翻译，彻底消除手动点击翻译步骤。
@@ -81,6 +102,38 @@
 - **翻译历史 CSV 导出增加电子表格公式注入防御 (P3)**：对以 `=,+,-,@,\t,\r` 开头的文本前置单引号转义，防御 CSV 电子表格公式注入攻击。
 - **扩展构建把共享模块拆成独立 chunk，Popup 与划词气泡会静默失效 (P1)**：`extension` 的构建是单次多入口（`rollupOptions.input` 含 4 个入口），`src/i18n` 被多个入口共享后会被 Rollup 提升为独立 chunk，`popup.js` / `selection.js` 于是以 `import { t } from "./assets/index-*.js"` 开头。但 `chrome.scripting.executeScript` 按**经典脚本**注入、`popup.html` 也用经典 `<script src>`，二者都不支持 ESM 导入 —— 扩展能正常加载、控制台无任何报错，但 Popup 与划词气泡全部失效。此前只有 3 个入口且恰好无共享模块，该缺陷一直被掩盖。现改为 `scripts/build.mjs` 逐入口独立构建（每个产物自包含），并在构建后**断言产物不含 ESM 导入、`dist/assets/` 不存在**，让该类回归无法再次静默通过。
 
+- **划词原地替换销毁用户新复制的剪贴板内容 (P0)**：流程分三阶段，阶段三无条件写回 `old_clipboard`，但阶段二的网络翻译可达数秒，期间用户复制的新内容会被**静默销毁**。现还原前先读取当前剪贴板比对，不等则放弃还原。
+- **划词抑制窗口过短导致同一次划词被翻译两次 (P0)**：抑制标志在阶段一结束即复位，而译文要到阶段三才写入，中间窗口内剪贴板监听器会把选区原文当成新内容再触发一次翻译，并污染去重缓存导致用户随后手动复制同一段文本时不再触发。现抑制窗口覆盖全流程，并用 RAII guard 保证提前 return 路径也能复位（否则一次失败即永久抑制）。
+- **已取消的流式任务仍被投递并真实计费 (P0)**：代际闸门只挡响应回流、不挡请求投递。`detectTextLanguage` 的 IPC 往返期间代际可能已作废，但请求照常发出，后端完整跑一次 LLM——用户看不到结果，API 已计费且幽灵译文写入缓存与历史。现于探测返回后复查代际。
+- **清空输入框后右侧仍冒出旧译文 (P0)**：`run()` 对空串提前 return，未清理防抖、未取消在途任务。现清理动作排在空串守卫之前。
+- **浮窗划词会误杀主窗口正在运行的 LLM 流 (P0)**：取消注册表键为全局 `u32`，而 `task_id` 每窗口各自从 0 计数。现键改为 `(窗口标签, task_id)`；同时 `tokio::select!` 改为只匹配 `Ok(())`，不再把「sender 被覆盖/丢弃」误判为用户主动取消。
+- **术语库非 ASCII 词条边界判定失效 (P0)**：`word_boundary` 由「首尾都是 ASCII」的合取决定，导致 `café` 命中 `caféteria` 内部被腰斩成「a 咖啡teria」。现按书写系统区分：拉丁扩展等有明确词边界的语言参与边界判定，中日韩（无空格分词，字符级无法区分「机器」与「机器学习」）按术语库既定的「全局强制匹配」语义不做边界判定。配套 4 项回归测试。
+- **批量容错路径数组越界 panic (P0)**：`translate_batch_tolerant` 用主引擎返回值的下标去索引请求切片，两者长度无校验关系，主引擎返回超长数组即 `index out of bounds` panic 掉 tokio worker。现以请求为准迭代，缺失项走降级、多余项丢弃；同时「主引擎少返回项」不再整批丢弃已成功结果。
+- **流式降级导致界面文本重复拼接 (P0)**：主备引擎共用同一回调，主引擎推送部分内容后失败时，备用译文会追加在残缺输出之后。现追踪主引擎是否已推送，已推送则让降级结果静默返回，由最终响应整体覆盖。
+- **占位符还原被原文自我污染 (P0)**：占位符是可预测纯文本，原文含 `⟦TRANSLY_CODE_n⟧` 时会被展开成别的 stash 内容，用户原文被静默改写（技术文档讲解该机制即可触发）。现用转义隔离，与替换顺序无关。
+- **未闭合代码围栏吞掉整篇文档 (P1)**：未闭合的 ` ``` ` 把其后全部内容当代码块 stash，末尾正文永久不参与翻译。现改为原样输出剩余内容（同时避免只输出 ` ``` ` 导致残留反引号被误判成行内代码）。
+- **智能对转覆盖用户显式选择的目标语言 (P1)**：目标设为日语时，日文输入被改译成中文。该分支正是此前「多语言对转偏转」修复遗漏的路径。现显式非中英目标一律尊重用户选择，并以表驱动测试覆盖全部目标语言。
+- **历史搜索未转义 LIKE 通配符 (P1)**：搜 `al_ha` 会误命中 `alXha`，搜 `100%pct` 中 `%` 匹配任意字符。现转义 `%` `_` `\` 并声明 `ESCAPE`。
+- **HTTP 客户端超时配置被静默丢弃 (P1)**：`Client::builder().timeout(..).build().unwrap_or_default()` 在 TLS 初始化失败时退化为**无超时**客户端（reqwest 默认无超时），比配置值更危险且无日志。现改为显式告警。
+- **DeepL 未知语言码静默回落中文 (P1)**：`vi` 等码会被翻译成中文且无提示。现返回明确错误。
+- **`clear_cache` 未递增 generation (P1)**：用户点「清空历史」时，在途请求持有的旧 `start_gen` 仍会通过门禁把记录写回。现走 `CacheController::clear_only` 递增代际。
+- **缓存写入在 async 线程执行阻塞 SQLite (P1)**：`set_if_current` 是同步函数，抢全局串行门禁后同步写库，连接设了 `busy_timeout = 5000`，单次可占用一个 tokio worker 长达 5 秒。现统一经 `write_cache_offloaded` 下沉到阻塞线程池（4 处调用点）。
+- **storage 迁移按后缀独立判断，陈旧 WAL 会损坏新库 (P1)**：新目录已有主库但缺 `-wal` 时，旧 WAL 会被单独搬入；SQLite 的 WAL 不校验盐值、只校验页大小，会被回放进新库造成静默数据损坏。现三个文件作为原子单元整体判断。
+- **快捷键注册失败被静默丢弃 (P1)**：`Alt+Shift+D` 极易被占用，失败后用户只看到「划词莫名其妙不工作」。现新增 `ShortcutStatusSlot` 与 `get_shortcut_status` 命令，设置页展示冲突原因。
+- **快捷键「注册成功但持久化失败」状态不一致 (P1)**：新键已生效、旧键已注销，keyring 里却是旧值，重启后回退。现持久化失败时对称回滚。
+- **OCR 超大位图可致内存耗尽 (P2)**：下采样前无条件全量拷贝原像素，`20000×20000` 位图即 1.6 GB。现于任何拷贝前用 `is_within_ocr_pixel_budget` 拦截（纯逻辑下沉 core 并配测试）。
+- **扩展「还原原文」不穿透 Shadow DOM (P0)**：翻译侧递归进入 open shadow root，还原侧的 TreeWalker 不穿透，导致 Web Components 页面上还原**永久失效**且无恢复路径。现抽出 `shared/domTraversal.ts` 统一深度遍历（light + open shadow），三处清理全部覆盖，并修掉 `document.body.contains` 对 shadow 内节点恒为 false 导致增量监听跳过的问题。配 8 项回归测试。
+- **扩展「为此站点自动翻译」永不触发 (P1)**：manifest 未申请 `tabs` 权限，无该权限且未授予 `activeTab` 时 `tab.url` 为 `undefined`，`onUpdated` 整个分支短路。现申请 `tabs`（仅读 URL）并同步隐私政策。
+- **扩展增量翻译在高频 DOM 变更页面上永久饥饿 (P2)**：纯防抖被持续重置导致回调永不执行。现改为防抖 + 最大等待兜底，并在 flush 时剔除已脱离文档的节点。
+- **扩展缺瞬态重试 (P2)**：服务端 429（并发令牌耗尽）/500 直接整批判失败，一次瞬时限流永久损失最多 30 个节点译文。现对 429/500/502/503 做有上限退避重试（最多 2 次），且重试受代际闸门约束。
+- **扩展字符统计口径与 Rust 不一致 (P2)**：JS 用 UTF-16 code unit，Rust 用码点，emoji 被误判超长且过度切批。现统一为码点（`countChars`），并修正测试中固化错误口径的断言。
+- **扩展配对探针把非 401 一律判为已配对 (P2)**：500/404/403 与网络异常都会显示「已连接」并解锁翻译按钮。现仅 2xx 算成功，其余区分「服务异常」与「未运行」。
+- **扩展 400 类错误统一归为 network (P2)**：把「语言对不支持」「引擎名非法」误导成网络不可达。现按状态码细分失败类别。
+- **扩展配对失败展示原始英文错误 (P2)**：中文界面弹出 `Failed to fetch`。现映射为 i18n 文案（两端对称）。
+- **隐私政策与实现不符 (P0)**：政策承诺「不监听鼠标选区、不常驻注入脚本」，实际 `selection.js` 按需注入后会常驻注册 `mouseup` / `selectionchange` 以驱动划词悬浮图标。现如实改写政策（含监听用途说明与新增的 `tabs` 权限说明），并同步生效日期。
+- **CHANGELOG 0.2.1 段整块逐字重复**：6 条条目各出现两次，同一版本段内分类标题也重复，导致该版本发布说明实际不可读。已去重（379 → 279 行）。
+
+
 ## [0.2.1] - 2026-10-08
 
 ### 修复
@@ -111,12 +164,6 @@
 - **文档与 CI 与实际对齐 (P3)**：修正 `src-tauri/README.md` 中 Tauri 1 时代的 `custom-protocol` 特性说明（Tauri 2 已移除该特性）；`PROJECT_RULES.md` 删除「调用系统截图能力」（实际仅读剪贴板图片）与「支持多引擎聚合/对比」（实际只有主备降级）两处未实现表述，补充 `storage.rs` 与 capabilities 目录说明；CI Windows job 补齐 `cargo fmt --check` 与 `--release` clippy，与 Linux job 矩阵对齐；`en.json` 类型断言改为显式标注，使英文缺键在编译期报错而非被 `as` 静默掩盖。
 - **移除零使用契约与死代码 (P2)**：删除从未被构造的 `Error::UnsupportedLanguage` 与 `Error::Timeout`（连带 `ErrorKind::Timeout`，其重试语义已由 `ErrorKind::Network` 与 `Engine` 覆盖）、无生产消费者的 `TaskState::is_terminal` / `is_active`、无人消费的 `TranslateOutcomeDto::cached` / `detected_source_lang` 与 `EngineCapabilities::supports_streaming`（无任何流式实现）、以及未被调用的 `useTaskRunner.reset`。
 - **文档与目录事实对齐 (P2)**：`PROJECT_RULES.md` 目录结构此前描述了不存在的 `src/components`、`src/pages`、`src/hooks`、`src/stores`、`src-tauri/src/platform`、`src-tauri/src/error.rs`，已按实际文件重写；新增 `docs/README.md`、`src/task/README.md`、`extension/src/README.md`，并为 `docs/architecture-state-machines.md` 建立索引（此前全仓库无任何引用）。
-- **缓存目录收敛到 Tauri 应用目录约定 (P2)**：原先手拼 `%APPDATA%\Transly`，与 `identifier` 约定（`data_dir/<identifier>`）不一致，macOS 上也不符合平台惯例。现由平台适配层解析为 `data_dir/com.transly.desktop`。**关键点：术语库与翻译缓存在同一个 SQLite 文件里，直接改路径等于丢弃用户自建术语**，因此新增 `storage.rs` 一次性迁移（含 `-wal` / `-shm` 旁路文件，幂等且不覆盖新库），并配 4 项单测；`transly-core` 相应改为 `open_default(data_dir)` 由宿主注入目录，保持零平台假设。
-- **落地“禁止空 catch 吞掉 IPC 注册类调用”规程 (P2)**：`Lessons Learned` 第 8 条早已写明该规程，但修复 ACL 问题时并未执行。现 `useTaskRunner` 的事件订阅与 pending 拉取失败改为 `console.warn` 暴露（这正是当初 ACL 拒绝静默数月的根因）。
-- **前端格式化与 React Hooks 规则接入 (P2)**：`PROJECT_RULES.md` 声称「ESLint + Prettier」，实际无 prettier 依赖、无配置、无格式化脚本，前端代码风格零强制（同文件出现 `catch(() => {})` 与 `catch(() => { })` 两种写法）。现新增 `.prettierrc.json` / `.prettierignore` 与 `format` / `format:check` 脚本，接入 `lefthook` 与 CI；同时接入 `eslint-plugin-react-hooks`（`rules-of-hooks` / `exhaustive-deps`）——`useTaskRunner` 的代际闸门与依赖数组是整套取消/重试语义的根基，此前无任何规则守护。
-- **清理未使用图标与构建产物 (P3)**：删除 `src-tauri/icons/` 下 45 个未被 `tauri.conf.json` 引用的图标（Windows Store `Square*`/`StoreLogo`、`android/mipmap-*`、`ios/*`），其中 4 个仍是模板替换失败的 `{{EMAIL_*}}` 残留；`src-tauri/gen/schemas/` 改为 `.gitignore` 忽略（tauri-build 每次构建重新生成，此前跟踪了 320KB 产物）。
-- **清理零调用死代码 (P3)**：移除仅被自身单测调用的 `rgba_to_bgra`（生产只用 `rgba_to_bgra_in_place`）、零调用的 `impl From<Error> for TranslateErrorDto`、无人读取的 `totalBatches`、仅同文件使用的 `translations` 导出；`nextState` 的 cancel 分支改用 `isTerminal()`，使该函数从死代码变为有生产消费者且与终态集合永不漂移；`EnginePool::with_secret_getter` 收窄为 `#[cfg(test)]`。
-- **文档与 CI 与实际对齐 (P3)**：修正 `src-tauri/README.md` 中 Tauri 1 时代的 `custom-protocol` 特性说明（Tauri 2 已移除该特性）；`PROJECT_RULES.md` 删除「调用系统截图能力」（实际仅读剪贴板图片）与「支持多引擎聚合/对比」（实际只有主备降级）两处未实现表述，补充 `storage.rs` 与 capabilities 目录说明；CI Windows job 补齐 `cargo fmt --check` 与 `--release` clippy，与 Linux job 矩阵对齐；`en.json` 类型断言改为显式标注，使英文缺键在编译期报错而非被 `as` 静默掩盖。
 - **浮窗划词/剪贴板翻译静默失效 (P0)**：`src-tauri` 此前未声明任何 Tauri 2 capability，运行时 ACL 因此为空。应用自有 command 不经 ACL 校验（这就是主窗口翻译、设置、扩展服务全部正常的原因），但**插件命令**一律被拒：`@tauri-apps/api/event` 的 `listen` 实际调用 `plugin:event|listen`，被运行时以 `event.listen not allowed. Permissions associated with this command: core:event:allow-listen, core:event:default` 拒绝，而 `useTaskRunner` 的 `.catch(() => {})` 吞掉了该异常，导致 `float` 浮窗永远收不到 `float-translate` 事件、只显示占位文案。现新增 `src-tauri/capabilities/default.json`，仅为 `main` / `float` 两个窗口放行最小权限集 `core:event:default`（listen/unlisten），并已在真实运行的应用上用 CDP 探针复验放行。
 - **中文长文本翻译必然失败 (P1)**：`GoogleWebEngine` 的长文本切块只按空白边界聚合，无空格的中文段落会被当成一个「单词」——`split_whitespace` 返回的唯一片段直接跳过 800 字符阈值，5,000 字中文段落会生成 URL 编码后约 4.5 万字符的单次 GET 请求（`urlencoding` 将每个非 ASCII 字节膨胀为 `%XX`，中文 1 字 = 9 字符），请求必然失败。现改为纯函数 `chunk_paragraph`：优先空白边界，无空白片段按字符窗口硬切，并以「字符数 800」与「编码后长度 4,000」双重上限取先到者；同时新增 4 项切块单测（中文硬切、西文丢词校验、长 token 硬切、短文本单块）。另修正切块拼接逻辑：仅在西文块之间补空格，避免中文译文句中被插入空格。
 - **划词/剪贴板事件全窗口广播导致重复翻译 (P2)**：宿主用 `float_win.emit("float-translate", …)` 投递浮窗请求，而 Tauri 的 `Emitter::emit` 语义是「发给所有窗口」——主窗口因此也执行了一次翻译，并把划词结果写进输出区（输入框为空却出现译文），同一段选择文本被翻译两次。现改为 `emit_to("float", …)` 定向投递，并把前端的事件订阅与 pending 拉取收窄到浮窗（`isFloatWindow` 守卫），主窗口退出划词链路。
@@ -140,9 +187,6 @@
 - **安装包含未替换脚手架占位符 (P1)**：`tauri.conf.json` 的 `bundle.icon` 引用了模板变量替换失败留下的 `icons/128x128@2x.png`，已从配置与仓库中移除。
 - **扩展全站常驻注入 (P2)**：移除 `content_scripts` 的 `<all_urls>` 常驻声明，改为用户点击翻译时经 `chrome.scripting.executeScript` **主动注入**，与 `PRIVACY_POLICY.md` 中「仅在主动触发时提取 DOM 文本」的承诺对齐，同时收敛权限面（新增 `scripting`，不再需要全站宿主权限）。
 
-### 变更
-- **移除零使用契约与死代码 (P2)**：删除从未被构造的 `Error::UnsupportedLanguage` 与 `Error::Timeout`（连带 `ErrorKind::Timeout`，其重试语义已由 `ErrorKind::Network` 与 `Engine` 覆盖）、无生产消费者的 `TaskState::is_terminal` / `is_active`、无人消费的 `TranslateOutcomeDto::cached` / `detected_source_lang` 与 `EngineCapabilities::supports_streaming`（无任何流式实现）、以及未被调用的 `useTaskRunner.reset`。
-- **文档与目录事实对齐 (P2)**：`PROJECT_RULES.md` 目录结构此前描述了不存在的 `src/components`、`src/pages`、`src/hooks`、`src/stores`、`src-tauri/src/platform`、`src-tauri/src/error.rs`，已按实际文件重写；新增 `docs/README.md`、`src/task/README.md`、`extension/src/README.md`，并为 `docs/architecture-state-machines.md` 建立索引（此前全仓库无任何引用）。
 
 ## [0.2.0] - 2026-10-06
 

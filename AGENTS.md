@@ -16,6 +16,6 @@
    - 前端配置严格内容安全策略 (CSP)。
 
 3. **工程质量与 CI**：
-   - 提交前必须通过：`cargo fmt --check` + `cargo clippy --workspace -- -D warnings` + `cargo test --workspace` + `pnpm run lint` + `pnpm run build`。
-   - 严禁提交密钥、大型离线二进制模型文件与 `Cargo.lock` 忽略项。
+   - 提交前必须通过：`cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace` + `pnpm run lint` + `pnpm run build`。
+   - 严禁提交密钥、大型离线二进制模型文件、构建产物（`target/`、`dist/`、`node_modules/`）。`Cargo.lock` 与 `pnpm-lock.yaml` **必须**提交（本项目是可复现构建的应用，锁文件是构建契约的一部分），CI 以 `--frozen-lockfile` 安装以强制其同步。
 

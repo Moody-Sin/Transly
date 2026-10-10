@@ -359,6 +359,20 @@ export default function App() {
         console.warn('[Transly] 读取划词替换快捷键失败：', err)
       })
 
+    // 启动时也查一次快捷键注册结果。
+    //
+    // Alt+Shift+D / Alt+Shift+R 极易被其它软件占用，而注册发生在应用启动阶段。
+    // 若只在「保存快捷键」后查询，启动即失败的用户打开设置页看不到任何提示，
+    // 只会觉得「划词莫名其妙不工作」——那正是要修的问题本身。
+    commands
+      .getShortcutStatus()
+      .then((status) => {
+        setShortcutConflict(status.ok ? '' : (status.reason ?? ''))
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取快捷键注册状态失败：', err)
+      })
+
     commands
       .getLlmStyle()
       .then((res) => {

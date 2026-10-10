@@ -8,6 +8,8 @@
 ## [未发布]
 
 ### 优化与增强
+- **SQLite 翻译缓存读写分离并发解耦 (P1)**：将 `crates/transly-core` 中的 `TranslationCache` 升级为读写双连接分离架构（`File` 模式下采用独立 `writer` 互斥写连接与 `reader` 只读并发连接）。在 SQLite WAL 模式下，整页翻译的大批量事务写盘与用户前台的高频历史查询/缓存命中完全解耦、互不阻塞，杜绝锁争用卡顿。
+- **现代 Web Components 开放 Shadow DOM 穿透翻译 (P2)**：在 `extension/src/content/index.ts` 中增强 DOM 遍历器，递归探测并收集拥有开放模式（`open`）Shadow Root 的自定义组件内部有效文本，彻底解决 Lit/Stencil 等现代前端组件库封装内容被整页翻译遗漏的局限。
 - **术语库 Aho-Corasick 单趟多模式扫描重构 (P0)**：在 `crates/transly-core` 中重构 `Glossary::apply` 算法，引入高性能 `aho-corasick` crate (v1.1)。由原先按词长遍历的逐词 `Regex::replace_all` 升级为基于 `MatchKind::LeftmostLongest` 的单趟自动机流式扫描，匹配后精准执行后验 ASCII 单词边界检测，匹配性能从 $\mathcal{O}(N \times L)$ 优化至 $\mathcal{O}(L)$。彻底解决先前术语 A 替换为 B 之后 B 中文字被后续术语再次二次替换的级联缺陷，并天然保障长词优先命中。
 - **浏览器扩展整页翻译 Viewport-First 优先切批调度 (P1)**：在 `extension/src/content/index.ts` 与 `shared/batchPlan.ts` 中实现视口感知切批调度。在收集待翻译 Text 节点时计算其实际几何包围盒，将当前可视视口内的可见文本优先拆批置顶并立即发送请求，使得用户在点击翻译后数百毫秒内即可看到当前屏幕文字变成译文；离屏（Offscreen）未滚动到的段落则平滑在后台批次中保序排队，大幅缩减首屏翻译等待的感官延迟。
 - **浏览器扩展富文本段落行内标签保真翻译 (P1)**：在 `extension/src/shared/richText.ts` 中实现富文本行内占位提取与译文安全还原算法。针对 `<p>`、`<li>`、`<h1>`-`<h6>` 等段落中内嵌的 `<a>`、`<code>`、`<strong>` 等行内标签，以整句为单元进行占位保护（`⟦T_N⟧`）后统一翻译；返回后自动拆解回填，彻底杜绝跨语种（如中英文语序倒装）时离散文本节点被切碎翻译导致的语序破版，并在占位符丢失时无缝安全回退至逐节点原位替换。

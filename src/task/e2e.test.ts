@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { planBatchRanges } from '../../extension/src/shared/batchPlan.ts'
+import {
+  buildRichTextComposite,
+  restoreRichTextComposite,
+} from '../../extension/src/shared/richText.ts'
 import { nextState, canRetryExecution } from './taskState.ts'
 
 test('E2E: 浏览器插件整页分块切批 -> 任务状态机完整闭环流程', () => {
@@ -99,4 +103,27 @@ test('E2E: 多引擎对比翻译 (Google / DeepL / DeepSeek) 响应聚合与容�
   assert.equal(results[0].status, 'fulfilled')
   assert.equal(results[1].status, 'fulfilled')
   assert.equal(results[2].status, 'rejected')
+})
+
+test('E2E: 富文本段落闭合占位聚合 -> 批量翻译 -> 准确按语序回填各子节点', () => {
+  // 模拟网页段落: <p>Visit <a href="...">Transly docs</a> to learn more.</p>
+  const nodeParts = [
+    { id: 'part_0', text: 'Visit ' },
+    { id: 'part_1', text: 'Transly docs' },
+    { id: 'part_2', text: ' to learn more.' },
+  ]
+
+  const composite = buildRichTextComposite(nodeParts, true)
+  assert.equal(composite.compositeText, 'Visit ⟦T_1⟧Transly docs⟦/T_1⟧ to learn more.')
+
+  // 模拟翻译引擎将整句翻译为中文
+  const engineTranslated = '访问⟦T_1⟧Transly 官方文档⟦/T_1⟧了解更多详情。'
+  const baseIds = ['part_0', 'part_2']
+  const placeholderToId = new Map([['⟦T_1⟧', 'part_1']])
+
+  const unpacked = restoreRichTextComposite(engineTranslated, baseIds, placeholderToId)
+  assert.ok(unpacked, '必须成功拆解回填')
+  assert.equal(unpacked.get('part_0'), '访问')
+  assert.equal(unpacked.get('part_1'), 'Transly 官方文档')
+  assert.equal(unpacked.get('part_2'), '了解更多详情。')
 })

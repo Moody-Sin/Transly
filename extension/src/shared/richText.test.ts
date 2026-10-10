@@ -35,6 +35,28 @@ test('富文本译文回填拆分：占位符准确定位并在不同语序下�
   assert.equal(restored.get('t2'), '立即开始。')
 })
 
+test('富文本闭合占位聚合与行内译文完整还原', () => {
+  const parts = [
+    { id: 't0', text: 'Please visit ' },
+    { id: 't1', text: 'Transly official website' },
+    { id: 't2', text: ' to download.' },
+  ]
+  const composite = buildRichTextComposite(parts, true)
+  assert.equal(
+    composite.compositeText,
+    'Please visit ⟦T_1⟧Transly official website⟦/T_1⟧ to download.',
+  )
+
+  const translated = '请访问⟦T_1⟧Transly 官方网站⟦/T_1⟧进行下载。'
+  const mapping = new Map([['⟦T_1⟧', 't1']])
+  const restored = restoreRichTextComposite(translated, ['t0', 't2'], mapping)
+
+  assert.ok(restored)
+  assert.equal(restored.get('t0'), '请访问')
+  assert.equal(restored.get('t1'), 'Transly 官方网站', '行内标签内部译文应被准确还原')
+  assert.equal(restored.get('t2'), '进行下载。')
+})
+
 test('富文本占位缺失降级：若引擎丢失占位符，返回 null 触发安全回退', () => {
   const translated = '请点击立即开始，没有占位符。'
   const mapping = new Map([['⟦T_1⟧', 't1']])

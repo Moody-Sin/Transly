@@ -251,29 +251,44 @@ document.addEventListener('keydown', (e) => {
   }
 })
 
-interface TextNodeEntry {
+export interface TextNodeEntry {
   id: string
   node: Text
   text: string
   inViewport?: boolean
+  compositeInfo?: {
+    parts: Array<{ id: string; node: Text }>
+    baseIds: string[]
+    placeholderToId: Map<string, string>
+  }
 }
 
-function isNodeInViewport(node: Text): boolean {
+export function isElementInViewport(el: Element, cache?: WeakMap<Element, boolean>): boolean {
+  if (cache && cache.has(el)) {
+    return cache.get(el)!
+  }
   try {
-    const parent = node.parentElement
-    if (!parent) return false
-    const rect = parent.getBoundingClientRect()
-    return (
+    const rect = el.getBoundingClientRect()
+    const inVp =
       rect.bottom > 0 &&
       rect.top < (window.innerHeight || document.documentElement.clientHeight) &&
       rect.right > 0 &&
       rect.left < (window.innerWidth || document.documentElement.clientWidth) &&
       rect.width > 0 &&
       rect.height > 0
-    )
+    if (cache) {
+      cache.set(el, inVp)
+    }
+    return inVp
   } catch {
     return false
   }
+}
+
+export function isNodeInViewport(node: Text, cache?: WeakMap<Element, boolean>): boolean {
+  const parent = node.parentElement
+  if (!parent) return false
+  return isElementInViewport(parent, cache)
 }
 
 // 维护失败文本节点映射，供局部重试与状态报告。
@@ -309,9 +324,13 @@ function rememberFailed(entry: TextNodeEntry & { errorKind?: string }) {
 }
 
 /**
- * 递归收集容器内所有有效的正文文本节点
+ * 递归收集容器内所有有效的正文文本节点，支持叶子富文本段落占位聚合
  */
-export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
+export function collectTextNodes(
+  root: Node = document.body,
+  viewportCache?: WeakMap<Element, boolean>,
+): TextNodeEntry[] {
+  const vpCache = viewportCache || new WeakMap<Element, boolean>()
   const entries: TextNodeEntry[] = []
 
   // 如果 root 自身即是文本节点且尚未翻译
@@ -327,7 +346,7 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
             id: `node_${nodeSequenceId}`,
             node: textNode,
             text: textNode.nodeValue || '',
-            inViewport: isNodeInViewport(textNode),
+            inViewport: isNodeInViewport(textNode, vpCache),
           },
         ]
       }
@@ -335,12 +354,98 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
     return []
   }
 
+  // 1. 先检测并收集叶子富文本容器（例如段落 <p>、<li> 等内部含行内 <a>、<span>、<strong> 的节点）
+  const processedContainers = new WeakSet<Element>()
+  const processedNodes = new WeakSet<Text>()
+
+  if (root.nodeType === Node.ELEMENT_NODE) {
+    const rootEl = root as Element
+    const leafCandidates = rootEl.querySelectorAll(
+      'p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th',
+    )
+    leafCandidates.forEach((candidate) => {
+      if (!shouldTranslateElement(candidate)) return
+      if (!isLeafRichTextContainer(candidate)) return
+      if (candidate.children.length === 0) return
+
+      // 提取容器内所有的连续 text parts
+      const rawParts: Array<{ node: Text; text: string; isInline: boolean }> = []
+      let validTextLen = 0
+
+      for (const child of Array.from(candidate.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const tNode = child as Text
+          if (!translatedTextSet.has(tNode)) {
+            const val = tNode.nodeValue || ''
+            rawParts.push({ node: tNode, text: val, isInline: false })
+            validTextLen += val.trim().length
+          }
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          const el = child as Element
+          // 行内元素取其内部未翻译文本节点
+          for (const sub of Array.from(el.childNodes)) {
+            if (sub.nodeType === Node.TEXT_NODE) {
+              const tNode = sub as Text
+              if (!translatedTextSet.has(tNode)) {
+                const val = tNode.nodeValue || ''
+                rawParts.push({ node: tNode, text: val, isInline: true })
+                validTextLen += val.trim().length
+              }
+            }
+          }
+        }
+      }
+
+      // 如果包含行内文本且存在有效内容，组装为整句富文本复合项
+      const hasInline = rawParts.some((p) => p.isInline)
+      if (hasInline && rawParts.length >= 2 && validTextLen >= 2) {
+        processedContainers.add(candidate)
+        for (const child of Array.from(candidate.children)) {
+          processedContainers.add(child)
+        }
+        for (const p of rawParts) {
+          processedNodes.add(p.node)
+        }
+
+        nodeSequenceId += 1
+        const compId = `node_${nodeSequenceId}`
+        const textParts = rawParts.map((p, idx) => ({
+          id: `${compId}_p${idx}`,
+          text: p.text,
+        }))
+
+        const composite = buildRichTextComposite(textParts, true)
+        const baseIds = textParts.filter((_, idx) => idx % 2 === 0).map((p) => p.id)
+        const placeholderToId = new Map<string, string>()
+        for (const [id, ph] of composite.idToPlaceholder) {
+          placeholderToId.set(ph, id)
+        }
+
+        entries.push({
+          id: compId,
+          node: rawParts[0].node,
+          text: composite.compositeText,
+          inViewport: isElementInViewport(candidate, vpCache),
+          compositeInfo: {
+            parts: rawParts.map((p, idx) => ({ id: `${compId}_p${idx}`, node: p.node })),
+            baseIds,
+            placeholderToId,
+          },
+        })
+      }
+    })
+  }
+
+  // 2. 遍历其余常规 Text 节点
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement
       if (!parent) return NodeFilter.FILTER_REJECT
       if (!shouldTranslateElement(parent)) return NodeFilter.FILTER_REJECT
       if (translatedTextSet.has(node as Text)) return NodeFilter.FILTER_REJECT
+      if (processedNodes.has(node as Text) || processedContainers.has(parent)) {
+        return NodeFilter.FILTER_REJECT
+      }
 
       const text = node.nodeValue?.trim()
       if (!text || text.length < 2) return NodeFilter.FILTER_SKIP
@@ -359,18 +464,18 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
       id: `node_${nodeSequenceId}`,
       node: textNode,
       text: textNode.nodeValue || '',
-      inViewport: isNodeInViewport(textNode),
+      inViewport: isNodeInViewport(textNode, vpCache),
     })
     currentNode = walker.nextNode()
   }
 
-  // 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树）
+  // 3. 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树）
   if (root.nodeType === Node.ELEMENT_NODE) {
     const el = root as Element
     const elementsWithShadow = el.querySelectorAll('*')
     elementsWithShadow.forEach((subEl) => {
       if (subEl.shadowRoot && subEl.shadowRoot.mode === 'open' && shouldTranslateElement(subEl)) {
-        entries.push(...collectTextNodes(subEl.shadowRoot))
+        entries.push(...collectTextNodes(subEl.shadowRoot, vpCache))
       }
     })
   }
@@ -827,6 +932,24 @@ function applyBatchResponse(
     for (const entry of batch) {
       const itemRes = itemMap.get(entry.id)
       if (itemRes && itemRes.status === 'success' && itemRes.text) {
+        if (entry.compositeInfo) {
+          const restored = restoreRichTextComposite(
+            itemRes.text,
+            entry.compositeInfo.baseIds,
+            entry.compositeInfo.placeholderToId,
+          )
+          if (restored) {
+            for (const part of entry.compositeInfo.parts) {
+              const partText = restored.get(part.id)
+              if (partText !== undefined) {
+                replaceTextNode(part.node, partText, currentTranslateMode)
+              }
+            }
+            failedItemsMap.delete(entry.id)
+            currentTaskCompleted += 1
+            continue
+          }
+        }
         replaceTextNode(entry.node, itemRes.text, currentTranslateMode)
         failedItemsMap.delete(entry.id)
         currentTaskCompleted += 1
@@ -843,6 +966,24 @@ function applyBatchResponse(
     resData.translations.forEach((translated, idx) => {
       if (batch[idx]) {
         if (translated && translated !== batch[idx].text) {
+          if (batch[idx].compositeInfo) {
+            const restored = restoreRichTextComposite(
+              translated,
+              batch[idx].compositeInfo.baseIds,
+              batch[idx].compositeInfo.placeholderToId,
+            )
+            if (restored) {
+              for (const part of batch[idx].compositeInfo.parts) {
+                const partText = restored.get(part.id)
+                if (partText !== undefined) {
+                  replaceTextNode(part.node, partText, currentTranslateMode)
+                }
+              }
+              failedItemsMap.delete(batch[idx].id)
+              currentTaskCompleted += 1
+              return
+            }
+          }
           replaceTextNode(batch[idx].node, translated, currentTranslateMode)
           failedItemsMap.delete(batch[idx].id)
           currentTaskCompleted += 1

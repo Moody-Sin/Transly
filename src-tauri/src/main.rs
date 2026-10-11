@@ -59,6 +59,11 @@ fn main() {
     // 初始化持久化翻译缓存（目录见 resolve_data_dir）
     let cache = TranslationCache::open_default(resolve_data_dir(&context.config().identifier));
 
+    // 执行一次性从系统 Keyring 迁移非敏感配置到 SQLite app_settings
+    // 全新安装或已完成迁移后，app_settings 包含 __migrated_from_keyring 标记，
+    // 后续启动彻底为 0 次系统凭据管理器调用，彻底消除主线程阻塞！
+    src_tauri::storage::migrate_keyring_settings_to_db(&cache);
+
     // 启动时将轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）投递至后台线程，避免阻塞主线程冷启动
     let startup_cache = cache.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -93,12 +98,11 @@ fn main() {
     // 从仓库根执行 `cargo test` / `cargo run` 时会在仓库外凭空生成文件）。
     #[cfg(debug_assertions)]
     src_tauri::export_bindings().expect("Failed to export typescript bindings");
-    // 剪贴板监听开关（优先从本地 SQLite 设置表加载，消除对系统凭据库的阻塞冷启动查询；旧版本迁移从 Keyring 回退）
+    // 剪贴板监听开关（从本地 SQLite 设置表加载，零系统凭据库查询开销）
     let initial_monitor = cache
         .get_setting("clipboard_monitor_enabled")
         .ok()
         .flatten()
-        .or_else(|| secrets::get_secret("clipboard_monitor_enabled").ok())
         .map(|v| v == "true")
         .unwrap_or(false);
     let clipboard_monitor_enabled = Arc::new(AtomicBool::new(initial_monitor));
@@ -111,12 +115,11 @@ fn main() {
     let selection_flag = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
 
-    // 缓存状态协调器（优先从本地 SQLite 设置表读取初始开关，纳入 generation 版本控制）
+    // 缓存状态协调器（从本地 SQLite 设置表读取初始开关，纳入 generation 版本控制）
     let initial_cache_enabled = cache
         .get_setting("cache_enabled")
         .ok()
         .flatten()
-        .or_else(|| secrets::get_secret("cache_enabled").ok())
         .map(|v| v != "false")
         .unwrap_or(true);
     let cache_controller = Arc::new(src_tauri::cache_controller::CacheController::new(
@@ -228,12 +231,11 @@ fn main() {
                 }
             }
 
-            // 注册全局快捷键（优先读取本地 SQLite 设置，旧版从 Keyring 回退）
+            // 注册全局快捷键（直接从本地 SQLite 设置读取，零凭据库阻塞）
             let active_shortcut = cache
                 .get_setting("custom_shortcut")
                 .ok()
                 .flatten()
-                .or_else(|| secrets::get_secret("custom_shortcut").ok())
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| commands::DEFAULT_SHORTCUT.to_string());
 
@@ -241,7 +243,6 @@ fn main() {
                 .get_setting("custom_replace_shortcut")
                 .ok()
                 .flatten()
-                .or_else(|| secrets::get_secret("custom_replace_shortcut").ok())
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| commands::DEFAULT_REPLACE_SHORTCUT.to_string());
 

@@ -8,6 +8,9 @@
 ## [未发布]
 
 ### 新增
+- **桌面端 UI 全交互真实渲染端到端自动化测试套件**: 在 `scripts/test-desktop-ui-e2e.mjs` 中构建基于 Playwright 的桌面端前端真实渲染 E2E 测试套件（`pnpm run test:e2e:ui`），全真模拟 37 个 Tauri IPC 命令与事件通道注册表，覆盖主窗口挂载、主题即时切换、即输即译、多引擎并发对比、历史记录检索过滤与导出、设置中心与术语库管理、浏览器扩展配对申请弹窗以及迷你划词悬浮窗（`#float`）等全部 8 项交互场景，验证 0 未捕获异常。
+- **Rust 本地服务真实 TCP 协议端到端集成测试**: 在 `src-tauri/src/server/tests.rs` 中新增 `test_real_tcp_server_e2e_lifecycle`，绑定系统真实 TCP 回环端口，全链路验证网络握手、`/health` 探针、DNS Rebinding 恶意 Host 阻断（403）、配对申请/轮询状态机、Bearer Token 强鉴权与批量翻译术语干预及缓存写入。
+- **跨进程真实 Rust 本地服务与浏览器扩展端到端联调测试**: 新增 `transly_test_server` 轻量测试服务器二进制，升级 `scripts/test-extension-e2e.mjs`，由真实 Rust 进程托管 127.0.0.1:39281 本地服务与测试页面，实现浏览器扩展在真实浏览器环境中向真实 Rust 后端发起跨域通信与整页沉浸式翻译的全闭环验证。
 - **划词原地替换首选引擎配置与直接报错提醒**: 支持在桌面端设置中选择划词原地替换（默认 `Alt+Shift+R`）的首选引擎（`Google` / `DeepL` / `DeepSeek` / `OpenAI`），配置安全保存在系统原生凭据中；当所选商业引擎缺少 API Key 或网络请求失败时，通过 `transly://replacement-failed` 事件向主窗口广播并在界面弹出明确 Toast 告警，杜绝静默隐蔽降级，并自动安全还原系统剪贴板。
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
@@ -26,6 +29,7 @@
 - **全局快捷键修改后状态槽位即时同步**: 在 `set_shortcut` 与 `set_replace_shortcut` 中注入 `ShortcutStatusSlot`，在快捷键注册成功与回滚时即时更新槽位状态，解决启动冲突后用户修改快捷键告警无法自动消除的问题。
 
 ### 优化
+- **统一全链路端到端自动化测试入口**: 在 `package.json` 中配置 `"test:e2e"` 聚合命令，实现一键并行串联桌面端 UI 全交互测试与浏览器插件真实跨进程全套端到端自动化验证。
 - **统一本地持久化配置仓储与冷启动脱敏**: 在 SQLite `cache.db` 中引入 `app_settings` 配置表，将剪贴板监听开关、缓存开关、快捷键设置、划词替换首选引擎、LLM 翻译风格及端点模型等非敏感配置从系统原生凭据管理器迁移至本地数据库，消除主线程启动阶段因串行读取凭据库（Keyring/DBus）引发的阻塞延迟，实现旧版无缝迁移；商业 API Key 与内部 Server Token 严格保留于操作系统原生安全凭据库中。
 - **全量翻译历史导出支持**: 在 `HistoryPanel` 导出 CSV 与 JSON 时优先拉取 SQLite 全量历史数据（至多 100,000 条），彻底解决此前仅导出前端分页加载的首屏 50 条导致历史数据遗漏的问题。
 - **快捷键录制组件视觉与可访问性增强**: 在 `ShortcutRecorder` 中增加 `keyup` 事件监听，实时响应修饰键释放并即时清空卡滞提示；重构录制卡片布局结构，消除 `<div role="button">` 内部嵌套原生 `<button>` 违反 W3C a11y 规范的问题。

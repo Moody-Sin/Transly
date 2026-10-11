@@ -544,3 +544,17 @@
 ### 经验与规程
 1. **涉及已有表字段新增时，必须在建表语句后补充幂等列迁移**：使用 `ALTER TABLE ... ADD COLUMN`（配合错误捕获或 `PRAGMA table_info` 校验），确保旧库在打开瞬间无缝补齐字段。
 2. **编写跨版本升级单元测试**：显式构造一个无新字段的旧版 SQLite 数据库文件，使用新版缓存管理器打开并验证读写与默认值的正确性。
+
+---
+
+## 39. Tauri 2 前后端契约包装层错位导致 React 渲染崩溃与事件丢失
+
+### 现象与问题
+- 在桌面端前端 UI 端到端测试中，若 Mock IPC 底层模仿业务层结构在 `invoke` 中返回 `{ status: 'ok', data: ... }`，`tauri-specta` 生成的客户端包装函数 `typedError` 会在外层二次封装成 `{ status: 'ok', data: { status: 'ok', data: ... } }`。
+- 导致解构出的 `data` 变成了对象 `{status, data}`；传入 `ShortcutRecorder` 或 `glossaryList` 并作为 React 节点直接渲染时，React 抛出 `Minified React error #31: Objects are not valid as a React child` 并导致整页白屏。
+- 另外，`@tauri-apps/api/event` 的 `listen` 在调用 `plugin:event|listen` 前必须由 `window.__TAURI_INTERNALS__.transformCallback` 将回调函数映射为数字 ID 并挂载至 `window._<id>`。若未实现该规范，事件订阅将静默抛错导致全局广播丢失。
+
+### 经验与规程
+1. **IPC 调用的物理边界与逻辑边界必须分清**：Rust 端的 `tauri::command` 只负责返回 `Result<T, E>`（底层物理 IPC 映射为 Promise resolve `T` 或 reject `E`）；业务层的 `{ status, data/error }` 结构由前端生成代码 `typedError` 在接收后封装。
+2. **测试基座契约必须忠实模拟底层运行时**：任何模拟 `window.__TAURI_INTERNALS__.invoke` 的桩，必须直接 resolve 裸数据 `T` 或 reject 错误 `E`，严禁越俎代庖自己加一层业务包装。
+3. **事件系统必须实现 `transformCallback` 契约**：使 Mock 环境在真实无头浏览器中具备完全一致的事件分发能力。

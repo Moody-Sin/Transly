@@ -935,3 +935,159 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
         assert!(text.contains("智能体"));
     }
 }
+
+#[tokio::test]
+async fn test_real_tcp_server_e2e_lifecycle() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let cache = Arc::new(TranslationCache::in_memory().unwrap());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let mut glossary_instance = Glossary::new();
+    glossary_instance.insert_with_options("pipeline", "流水线", false);
+    let glossary = Arc::new(RwLock::new(glossary_instance));
+    let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+    let token = Arc::new(RwLock::new("real-tcp-secret-token".to_string()));
+    let pairing_manager = Arc::new(pairing::PairingManager::new());
+
+    // 绑定真实的操作系统本地回环 TCP 端口（由操作系统动态分配可用端口）
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("绑定测试 TCP 回环端口失败");
+    let port = listener.local_addr().unwrap().port();
+
+    let app = create_router_with_pairing(
+        token.clone(),
+        cache.clone(),
+        pool,
+        glossary,
+        cache_controller,
+        pairing_manager.clone(),
+        None,
+    );
+
+    // 在后台任务中启动真实 Axum HTTP 服务器
+    let server_handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let send_raw = |req: String| async move {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("TCP 连接服务端失败");
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .expect("写入请求失败");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .await
+            .expect("读取响应失败");
+        let resp_str = String::from_utf8_lossy(&response).to_string();
+        let status = resp_str
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        (status, resp_str)
+    };
+
+    // 1. 真实 TCP 网络握手与 /health 探针
+    let req_health =
+        format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let (status, body) = send_raw(req_health).await;
+    assert_eq!(status, 200, "/health 必须返回 200: {body}");
+    assert!(body.contains(r#""status":"ok""#), "必须包含 status:ok");
+    assert!(
+        body.contains("max_batch_items"),
+        "必须公开批量上限供客户端切批"
+    );
+
+    // 2. 真实 TCP 下防御 DNS Rebinding：恶意 Host 头必须在底层被强制阻断为 403
+    let req_rebinding = format!(
+        "GET /health HTTP/1.1\r\nHost: attacker-domain.com:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let (status_rebinding, _) = send_raw(req_rebinding).await;
+    assert_eq!(
+        status_rebinding, 403,
+        "非回环 Host 必须在真实 TCP 连接中被 403 拒绝"
+    );
+
+    // 3. 真实配对握手全流程 (POST /pair/request -> 轮询 pending -> approve -> 轮询获取 token)
+    let pair_body = r#"{"client_id":"playwright-ext","browser_hint":"Edge"}"#;
+    let req_pair = format!(
+        "POST /pair/request HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        pair_body.len(),
+        pair_body
+    );
+    let (pair_status, pair_resp) = send_raw(req_pair).await;
+    assert_eq!(pair_status, 200, "配对申请必须返回 200: {pair_resp}");
+    let session_id_start = pair_resp
+        .find(r#""session_id":""#)
+        .expect("响应需包含 session_id")
+        + 14;
+    let session_id_end = pair_resp[session_id_start..].find('"').unwrap() + session_id_start;
+    let session_id = &pair_resp[session_id_start..session_id_end];
+
+    // 轮询当前状态（未批准前为 pending）
+    let poll_body = format!(r#"{{"session_id":"{session_id}","client_id":"playwright-ext"}}"#);
+    let req_poll_pending = format!(
+        "POST /pair/poll HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        poll_body.len(),
+        poll_body
+    );
+    let (poll_pending_status, poll_pending_resp) = send_raw(req_poll_pending).await;
+    assert_eq!(poll_pending_status, 200);
+    assert!(poll_pending_resp.contains(r#""status":"pending""#));
+
+    // 服务端批准该会话（模拟桌面端用户点击“允许配对”）
+    let approve_ok = pairing_manager.approve(session_id).await;
+    assert!(approve_ok, "服务端批准配对会话应成功");
+
+    // 再次轮询（已批准，必须签发正确的 Bearer Token）
+    let req_poll_approved = format!(
+        "POST /pair/poll HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        poll_body.len(),
+        poll_body
+    );
+    let (poll_appr_status, poll_appr_resp) = send_raw(req_poll_approved).await;
+    assert_eq!(poll_appr_status, 200);
+    assert!(poll_appr_resp.contains(r#""status":"approved""#));
+    assert!(
+        poll_appr_resp.contains("real-tcp-secret-token"),
+        "必须返回对应服务端 Token"
+    );
+
+    // 4. 携带错误 Token 访问 /translate 必须返回 401
+    let trans_body = r#"{"items":[{"id":"1","text":"Test Pipeline"}],"target_lang":"zh-CN"}"#;
+    let req_unauth = format!(
+        "POST /translate HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer wrong-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        trans_body.len(),
+        trans_body
+    );
+    let (unauth_status, _) = send_raw(req_unauth).await;
+    assert_eq!(unauth_status, 401, "错误 Token 必须返回 401 Unauthorized");
+
+    // 5. 携带正确 Token 发送批量翻译，验证跨进程真实 TCP 往返、术语库干预与结构化响应
+    let req_auth = format!(
+        "POST /translate HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer real-tcp-secret-token\r\nOrigin: chrome-extension://abcdefghijklmnopabcdefghijklmnop\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        trans_body.len(),
+        trans_body
+    );
+    let (auth_status, auth_resp) = send_raw(req_auth).await;
+    assert_eq!(auth_status, 200, "授权请求必须返回 200: {auth_resp}");
+    assert!(
+        auth_resp.contains("流水线"),
+        "术语库必须生效且在译文中体现: {auth_resp}"
+    );
+    assert!(
+        auth_resp.contains(r#""status":"success""#),
+        "响应必须包含成功状态项"
+    );
+
+    // 清理后台服务器
+    server_handle.abort();
+}

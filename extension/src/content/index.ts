@@ -606,10 +606,10 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
 
         // 增量批次是独立任务：用当前批次整体替换而不是追加。
         // 追加会让无限滚动页面持续增长该数组，并强引用已脱离文档的 Text 节点。
+        // 注意：不得清空 failedItemsMap，否则先前全页或上一批次失败的节点会被全部抹除。
         currentTaskEntries = batchEntries
         currentTaskTotal = batchEntries.length
         currentTaskCompleted = 0
-        failedItemsMap.clear()
 
         const failedBatches = await translateEntries(
           batchEntries,
@@ -952,8 +952,14 @@ function applyBatchResponse(
             }
             failedItemsMap.delete(entry.id)
             currentTaskCompleted += 1
-            continue
+          } else {
+            // 占位符丢失或语序损坏：保持原文 DOM 结构完整，记录失败项供后续重试
+            rememberFailed({
+              ...entry,
+              errorKind: 'rich_text_mismatch',
+            })
           }
+          continue
         }
         replaceTextNode(entry.node, itemRes.text, currentTranslateMode)
         failedItemsMap.delete(entry.id)
@@ -986,8 +992,13 @@ function applyBatchResponse(
               }
               failedItemsMap.delete(batch[idx].id)
               currentTaskCompleted += 1
-              return
+            } else {
+              rememberFailed({
+                ...batch[idx],
+                errorKind: 'rich_text_mismatch',
+              })
             }
+            return
           }
           replaceTextNode(batch[idx].node, translated, currentTranslateMode)
           failedItemsMap.delete(batch[idx].id)

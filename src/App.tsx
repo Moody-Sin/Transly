@@ -442,8 +442,9 @@ export default function App() {
     }
   }, [isFloatWindow])
 
-  // 监听划词原地替换失败事件并弹出 Toast 与桌面原生通知提醒
+  // 监听划词原地替换失败事件并弹出 Toast 与桌面原生通知提醒（仅限主窗口处理，防止双窗口重复弹窗）
   useEffect(() => {
+    if (isFloatWindow) return
     let unlisten: (() => void) | undefined
     let disposed = false
     listen<{ engine: string; message: string }>('transly://replacement-failed', (event) => {
@@ -476,10 +477,11 @@ export default function App() {
       disposed = true
       if (unlisten) unlisten()
     }
-  }, [t])
+  }, [t, isFloatWindow])
 
-  // 启动阶段按需预申请系统通知权限（供外部窗口原地替换失败时原生弹出通知）
+  // 启动阶段按需预申请系统通知权限（仅限主窗口，供外部窗口原地替换失败时原生弹出通知）
   useEffect(() => {
+    if (isFloatWindow) return
     if (
       typeof window !== 'undefined' &&
       'Notification' in window &&
@@ -487,7 +489,7 @@ export default function App() {
     ) {
       Notification.requestPermission().catch(() => {})
     }
-  }, [])
+  }, [isFloatWindow])
 
   // 迷你悬浮窗 Escape 键极速关闭交互
   useEffect(() => {
@@ -828,7 +830,7 @@ export default function App() {
 
   const handleClearSource = () => {
     setSourceText('')
-    runner.cancel()
+    runner.reset()
     cancelCompare()
   }
 

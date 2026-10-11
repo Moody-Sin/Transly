@@ -12,6 +12,13 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **中英混排术语库单词边界误判修复**: 修正 `glossary.rs` 中 `is_word_char` 判定逻辑，排除中日韩 CJK 汉字字符，使汉字与西文字词相邻（如「用Rust重构」）时构成合法的词边界，解决中英混排场景下英文术语 100% 无法命中的缺陷；补充中英紧挨词条替换回归单测。
+- **IPv6 Host 头解析切分漏洞加固**: 修正 `server/mod.rs` 中 `host_header_allowed` 对 IPv6 字面量的解析，严格验证 `']'` 之后仅允许为空或纯数字端口 `":\d+"`，拦截形如 `[::1].evil.com` 的绕过式域名，彻底堵死 DNS Rebinding 防线中的解析盲区；补充反例单测。
+- **浏览器扩展富文本段落占位符回填硬阻断**: 在 `content/index.ts` 中修正 `applyBatchResponse` 复合项处理逻辑，当翻译结果中占位符丢失或语序损坏导致 `restoreRichTextComposite` 返回 `null` 时，立即阻断并登记失败项，禁止穿透写入首个子文本节点，杜绝 DOM 产生重复堆叠与排版错乱。
+- **动态 MutationObserver 监听保留全局失败账本**: 移除增量监听防抖回调中对 `failedItemsMap.clear()` 的多余调用，确保首屏翻译产生的部分失败节点不会因页面后续微小 DOM 变动而被静默抹除，维持重试按钮有效性。
+- **桌面端前端输入清空与任务重置原子化**: 在 `useTaskRunner.ts` 中规范输入清空行为，当 `!text.trim()` 时立即作废在途代际并复位 UI 快照至 `EMPTY`，防止旧译文常驻或永远停留在 `running` 打字机光标态；新增 `runner.reset()` 供「清空内容」按钮调用。
+- **React 19 异步 Event 监听泄漏与悬浮窗通知重复治理**: 在 `useTaskRunner.ts` 的事件订阅中引入 `disposed` 守卫，杜绝组件快速卸载/重挂载导致的监听器内存泄漏；在 `App.tsx` 的 `transly://replacement-failed` 监听回调中增加 `if (isFloatWindow) return` 门禁，消除原地替换失败时多窗口重复弹出系统原生通知的问题。
+- **剪贴板划词翻译与替换异常分支锁保护与 RAII 抑制复位**: 在 `trigger_selection_replacement` 失败与拦截分支中引入 `CLIPBOARD_SIMULATION_MUTEX` 互斥保护，并在 `trigger_selection_translation` 中引入 `SelFlagGuard`，防止任何异常导致剪贴板监听被永久静默。
 - **Tauri 2 ACL 权限补齐与浮窗 Escape 关闭**: 在 `src-tauri/capabilities/default.json` 中补全 `"core:window:allow-hide"` 权限声明，并在 `App.tsx` 中为 `getCurrentWindow().hide()` 挂载未捕获 Promise 异常守卫，彻底解决悬浮迷你窗在真实环境中按 `Escape` 键无法关闭的问题。
 - **浏览器扩展 Shadow DOM 节点类型规范化与双语还原修复**: 修正 `domTraversal.ts` 与 `content/index.ts` 中针对 ShadowRoot 的容器类型守卫，放行 `Node.DOCUMENT_FRAGMENT_NODE`（11），使 Web Components 内部富文本段落及嵌套 Shadow DOM 正常提取与翻译，并解决双语对照模式下 Shadow DOM 内兄弟译文节点无法还原清理的问题；将单测 mock 对齐 W3C 真实标准。
 - **DeepL 批量翻译错误体脱敏防泄露**: 统一 `DeepLEngine::translate_batch` 错误处理，消除向前端与扩展 DOM 透传上游响应体的安全隐患，防止授权或账户敏感信息回显。

@@ -38,9 +38,13 @@ impl Clone for Glossary {
 }
 
 /// 判定字符是否构成"词内字符"。
+///
+/// 对于西文单词边界校验，中日韩（CJK）文字天然构成单词边界，
+/// 不得将 CJK 字符视作西文词内字符（`c.is_alphanumeric()` 对汉字恒为 true），
+/// 否则「用Rust重构」中的「Rust」会被前后汉字拒绝替换。
 #[inline]
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    (c.is_alphanumeric() && !is_cjk(c)) || c == '_'
 }
 
 /// 该词条所属书写系统是否存在词边界概念。
@@ -394,6 +398,24 @@ mod tests {
         // 长词优先策略在缓存命中后依然成立
         glossary.insert("beta gamma", "乙丙");
         assert_eq!(glossary.apply("alpha beta gamma"), "甲 乙丙");
+    }
+
+    /// 回归：中英混排语境下，汉字与英文单词相邻时构成有效边界。
+    /// 确保类似「用Rust重构」中的「Rust」能被正常替换，而「Crust」与「Rusting」仍受词边界保护。
+    #[test]
+    fn test_glossary_cjk_english_boundary() {
+        let mut glossary = Glossary::new();
+        glossary.insert("Rust", "锈语言");
+        glossary.insert("AI", "人工智能");
+
+        // 中文紧挨英文（前后无空格）
+        assert_eq!(glossary.apply("用Rust重构"), "用锈语言重构");
+        assert_eq!(glossary.apply("学Rust语言"), "学锈语言语言");
+        assert_eq!(glossary.apply("这个AI模型很强"), "这个人工智能模型很强");
+
+        // 包含英文前后缀的词内部仍受保护不被破坏
+        assert_eq!(glossary.apply("吃Crust面包"), "吃Crust面包");
+        assert_eq!(glossary.apply("正在Rusting生锈"), "正在Rusting生锈");
     }
 
     #[test]

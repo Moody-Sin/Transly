@@ -747,6 +747,7 @@ pub fn trigger_selection_replacement(
                                 place_float_near_cursor(&float_win);
                                 let _ = float_win.show();
                             }
+                            let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
                             let current = handle.clipboard().read_text().ok();
                             if current.as_deref() == Some(clean) {
                                 if let Some(old) = old_clipboard {
@@ -796,6 +797,7 @@ pub fn trigger_selection_replacement(
                         }
                         // 校验当前剪贴板是否仍为第一阶段模拟复制的选区原文：
                         // 若网络请求耗时期间用户在其它应用复制了新内容，则放弃还原，杜绝将用户的新复制内容冲掉。
+                        let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
                         let current = handle.clipboard().read_text().ok();
                         if current.as_deref() == Some(clean) {
                             if let Some(old) = old_clipboard {
@@ -898,6 +900,16 @@ pub fn trigger_selection_translation(
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     tauri::async_runtime::spawn(async move {
+        // 使用 RAII Guard 确保任何提前返回或 panic 都能可靠复位抑制标志，
+        // 杜绝划词异常导致系统剪贴板监听被永久抑制
+        struct SelFlagGuard(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for SelFlagGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _sel_guard = SelFlagGuard(Arc::clone(&sel_flag));
+
         // 获取互斥锁排队，避免划词悬浮与原地替换同时模拟读写剪贴板发生数据竞态
         let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
 

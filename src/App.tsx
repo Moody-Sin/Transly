@@ -442,7 +442,7 @@ export default function App() {
     }
   }, [isFloatWindow])
 
-  // 监听划词原地替换失败事件并弹出 Toast 告警提醒
+  // 监听划词原地替换失败事件并弹出 Toast 与桌面原生通知提醒
   useEffect(() => {
     let unlisten: (() => void) | undefined
     let disposed = false
@@ -450,6 +450,19 @@ export default function App() {
       showToastError(
         `${t.settings.replacementFailedPrefix} [${event.payload.engine}]: ${event.payload.message}`,
       )
+      if (
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission === 'granted'
+      ) {
+        try {
+          new Notification(t.settings.replacementFailedPrefix, {
+            body: `[${event.payload.engine}]: ${event.payload.message}`,
+          })
+        } catch {
+          // 降级使用内联 Toast 提示
+        }
+      }
     })
       .then((fn) => {
         if (disposed) fn()
@@ -464,6 +477,17 @@ export default function App() {
       if (unlisten) unlisten()
     }
   }, [t])
+
+  // 启动阶段按需预申请系统通知权限（供外部窗口原地替换失败时原生弹出通知）
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'default'
+    ) {
+      Notification.requestPermission().catch(() => {})
+    }
+  }, [])
 
   // 迷你悬浮窗 Escape 键极速关闭交互
   useEffect(() => {
@@ -646,6 +670,8 @@ export default function App() {
       if (res.status === 'ok') {
         setSaveStatus(t.settings.statusShortcutSaved)
         setTimeout(() => setSaveStatus(null), 2000)
+        const status = await commands.getShortcutStatus()
+        setShortcutConflict(status.ok ? '' : (status.reason ?? ''))
       } else {
         setSaveStatus(res.error)
       }

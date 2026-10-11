@@ -327,6 +327,72 @@ pub fn lookup_cache_with_fallback(
     None
 }
 
+/// 统一的带 Fallback 降级感知的批量缓存查询纯函数（结合 L1 内存直出与 L2 批量 SQL，杜绝循环单行查询）
+pub fn lookup_batch_with_fallback(
+    cache: &crate::TranslationCache,
+    engine: &dyn TranslateEngine,
+    items: &[BatchItemRequest],
+    source_lang: &str,
+    target_lang: &str,
+) -> Vec<Option<(String, String)>> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let engine_id = engine.id();
+    let primary_keys: Vec<String> = items
+        .iter()
+        .map(|item| {
+            crate::cache::TranslationCache::generate_key(
+                &item.text,
+                source_lang,
+                target_lang,
+                engine_id,
+            )
+        })
+        .collect();
+
+    let primary_hits = cache.get_by_keys(&primary_keys).unwrap_or_default();
+
+    let mut results = vec![None; items.len()];
+    let mut missing_fallback_indices = Vec::new();
+    let mut missing_fallback_keys = Vec::new();
+
+    let fallback_engine_id = engine
+        .capabilities()
+        .fallback_engine
+        .filter(|f| f != engine_id);
+
+    for (idx, key) in primary_keys.into_iter().enumerate() {
+        if let Some(text) = primary_hits.get(&key) {
+            results[idx] = Some((text.clone(), engine_id.to_string()));
+        } else if let Some(ref fb_id) = fallback_engine_id {
+            let fb_key = crate::cache::TranslationCache::generate_key(
+                &items[idx].text,
+                source_lang,
+                target_lang,
+                fb_id,
+            );
+            missing_fallback_indices.push(idx);
+            missing_fallback_keys.push(fb_key);
+        }
+    }
+
+    if let (Some(fb_id), false) = (fallback_engine_id, missing_fallback_keys.is_empty()) {
+        let fallback_hits = cache
+            .get_by_keys(&missing_fallback_keys)
+            .unwrap_or_default();
+        for (pos, key) in missing_fallback_keys.into_iter().enumerate() {
+            let original_idx = missing_fallback_indices[pos];
+            if let Some(text) = fallback_hits.get(&key) {
+                results[original_idx] = Some((text.clone(), format!("{fb_id}(fallback)")));
+            }
+        }
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +492,31 @@ mod tests {
         let json_failed = serde_json::to_string(&failed_item).unwrap();
         assert!(json_failed.contains(r#""status":"failed""#));
         assert!(json_failed.contains(r#""error_kind":"engine""#));
+    }
+
+    #[test]
+    fn test_lookup_batch_with_fallback() {
+        let cache = crate::TranslationCache::in_memory().unwrap();
+        let google = GoogleWebEngine::new();
+
+        cache
+            .set("hi", "你好", "en", "zh-CN", "google_web")
+            .unwrap();
+
+        let items = vec![
+            BatchItemRequest {
+                id: "1".into(),
+                text: "hi".into(),
+            },
+            BatchItemRequest {
+                id: "2".into(),
+                text: "not_cached".into(),
+            },
+        ];
+
+        let hits = lookup_batch_with_fallback(&cache, &google, &items, "en", "zh-CN");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0], Some(("你好".into(), "google_web".into())));
+        assert_eq!(hits[1], None);
     }
 }

@@ -63,3 +63,46 @@ test('富文本占位缺失降级：若引擎丢失占位符，返回 null 触�
   const restored = restoreRichTextComposite(translated, ['t0', 't2'], mapping)
   assert.equal(restored, null, '丢失占位符时必须返回 null 允许安全降级')
 })
+
+test('富文本段落以行内标签开头时准确生成与还原（isInline 显式支持）', () => {
+  // <p><a href="...">Google</a> is a powerful search engine.</p>
+  const parts = [
+    { id: 't0', text: 'Google', isInline: true },
+    { id: 't1', text: ' is a powerful search engine.', isInline: false },
+  ]
+  const composite = buildRichTextComposite(parts, true)
+  assert.equal(composite.compositeText, '⟦T_0⟧Google⟦/T_0⟧ is a powerful search engine.')
+  assert.deepEqual(composite.baseSlots, [null, 't1'])
+
+  const translated = '⟦T_0⟧谷歌⟦/T_0⟧是一款强大的搜索引擎。'
+  const mapping = new Map([['⟦T_0⟧', 't0']])
+  const restored = restoreRichTextComposite(translated, composite.baseSlots!, mapping)
+
+  assert.ok(restored)
+  assert.equal(restored.get('t0'), '谷歌')
+  assert.equal(restored.get('t1'), '是一款强大的搜索引擎。')
+})
+
+test('富文本段落以行内标签结尾且包含连续行内标签时准确还原', () => {
+  // <p>Visit <b>Site</b><i>Link</i></p>
+  const parts = [
+    { id: 't0', text: 'Visit ', isInline: false },
+    { id: 't1', text: 'Site', isInline: true },
+    { id: 't2', text: 'Link', isInline: true },
+  ]
+  const composite = buildRichTextComposite(parts, true)
+  assert.equal(composite.compositeText, 'Visit ⟦T_1⟧Site⟦/T_1⟧⟦T_2⟧Link⟦/T_2⟧')
+  assert.deepEqual(composite.baseSlots, ['t0', null, null])
+
+  const translated = '访问⟦T_1⟧网站⟦/T_1⟧⟦T_2⟧链接⟦/T_2⟧'
+  const mapping = new Map([
+    ['⟦T_1⟧', 't1'],
+    ['⟦T_2⟧', 't2'],
+  ])
+  const restored = restoreRichTextComposite(translated, composite.baseSlots!, mapping)
+
+  assert.ok(restored)
+  assert.equal(restored.get('t0'), '访问')
+  assert.equal(restored.get('t1'), '网站')
+  assert.equal(restored.get('t2'), '链接')
+})

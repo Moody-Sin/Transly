@@ -26,6 +26,7 @@ export default function HistoryPanel({ t, locale }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [exportNotice, setExportNotice] = useState<string | null>(null)
   const genRef = useRef(0)
 
   const load = useCallback(
@@ -104,56 +105,55 @@ export default function HistoryPanel({ t, locale }: Props) {
     speakText(text, lang)
   }
 
-  const fetchAllForExport = async (): Promise<CacheEntry[]> => {
-    // 导出时优先拉取全量历史数据（至多 100,000 条，与缓存维护上限对齐），杜绝仅导出首屏 50 条；
-    // 若当前处于搜索过滤状态，则导出匹配该关键词的全部记录。
+  const handleExport = async (format: 'json' | 'csv') => {
+    if (entries.length === 0) return
+    setLoading(true)
+    setError(null)
+    setExportNotice(null)
     try {
-      const kw = searchKeyword.trim()
-      const res = kw
-        ? await commands.searchTranslationHistory(kw, 100_000, 0)
-        : await commands.getTranslationHistory(100_000, 0)
-      if (res.status === 'ok' && res.data.length > 0) {
-        return res.data
+      const res = await commands.exportTranslationHistory(format, searchKeyword.trim() || null)
+      if (res.status === 'ok') {
+        setExportNotice(`${t.history.exportSuccess}: ${res.data.file_path} (${res.data.count})`)
+        setTimeout(() => setExportNotice(null), 5000)
+      } else {
+        setError(`${t.history.exportFailed}: ${res.error}`)
       }
     } catch {
-      // 降级使用当前已加载的 entries
+      // 浏览器端纯网页或桩环境兜底回退客户端直接下载
+      try {
+        if (format === 'json') {
+          const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' })
+          downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.json`)
+        } else {
+          const header = [
+            'Source Text',
+            'Translated Text',
+            'Source Lang',
+            'Target Lang',
+            'Engine',
+            'Time',
+          ]
+          const cell = (raw: string) => guardCsvFormulaInjection(raw)
+          const rows = entries.map((e) =>
+            formatCsvRow([
+              cell(e.source_text),
+              cell(e.translated_text),
+              cell(e.source_lang),
+              cell(e.target_lang),
+              cell(e.engine),
+              new Date(e.created_at * 1000).toISOString(),
+            ]),
+          )
+          const csvContent = '\uFEFF' + [header.join(','), ...rows].join('\n')
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+          downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.csv`)
+        }
+      } catch (err) {
+        setError(err instanceof Error && err.message ? err.message : t.history.exportFailed)
+      }
+    } finally {
+      setLoading(false)
     }
-    return entries
-  }
-
-  const handleExportJson = async () => {
-    if (entries.length === 0) return
-    const allEntries = await fetchAllForExport()
-    const blob = new Blob([JSON.stringify(allEntries, null, 2)], { type: 'application/json' })
-    downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.json`)
-  }
-
-  const handleExportCsv = async () => {
-    if (entries.length === 0) return
-    const allEntries = await fetchAllForExport()
-    const header = [
-      'Source Text',
-      'Translated Text',
-      'Source Lang',
-      'Target Lang',
-      'Engine',
-      'Time',
-    ]
-    // 字段由 formatCsvRow 统一执行 RFC 4180 加引号 + 内部引号双写，此处仅负责公式注入防御
-    const cell = (raw: string) => guardCsvFormulaInjection(raw)
-    const rows = allEntries.map((e) =>
-      formatCsvRow([
-        cell(e.source_text),
-        cell(e.translated_text),
-        cell(e.source_lang),
-        cell(e.target_lang),
-        cell(e.engine),
-        new Date(e.created_at * 1000).toISOString(),
-      ]),
-    )
-    const csvContent = '\uFEFF' + [header.join(','), ...rows].join('\n')
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.csv`)
   }
 
   const formatTime = (seconds: number) => new Date(seconds * 1000).toLocaleString(locale)
@@ -169,16 +169,18 @@ export default function HistoryPanel({ t, locale }: Props) {
             {entries.length > 0 && (
               <>
                 <button
-                  onClick={handleExportJson}
-                  className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  onClick={() => handleExport('json')}
+                  disabled={loading}
+                  className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
                   title={t.history.exportJson}
                 >
                   <Download className="h-3 w-3" />
                   <span>JSON</span>
                 </button>
                 <button
-                  onClick={handleExportCsv}
-                  className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  onClick={() => handleExport('csv')}
+                  disabled={loading}
+                  className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
                   title={t.history.exportCsv}
                 >
                   <Download className="h-3 w-3" />
@@ -210,6 +212,18 @@ export default function HistoryPanel({ t, locale }: Props) {
           />
         </div>
       </div>
+
+      {exportNotice && (
+        <div className="mx-4 mt-2.5 flex items-center justify-between rounded bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-1 text-xs text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+          <span className="truncate">{exportNotice}</span>
+          <button
+            onClick={() => setExportNotice(null)}
+            className="ml-2 text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="mx-4 mt-3 rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">

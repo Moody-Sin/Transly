@@ -49,6 +49,21 @@ jobs:
       - name: 运行 Windows 原生测试套件
         run: cargo test --workspace
 
+  macos-checks:
+    name: Rust 校验与测试 (macOS 原生)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: 格式校验
+        run: cargo fmt --all --check
+      - name: Clippy 校验 (Apple-native Keyring 分支)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: 运行 macOS 测试套件
+        run: cargo test --workspace
+
   frontend-checks:
     name: 前端与插件编译检查
     runs-on: ubuntu-latest
@@ -82,6 +97,12 @@ jobs:
         run: pnpm run test:task
       - name: 浏览器插件构建校验
         run: pnpm --filter transly-extension run build
+      - name: 安装 Playwright 无头浏览器
+        run: pnpm exec playwright install --with-deps chromium
+      - name: 运行桌面端 UI 全交互 E2E 测试
+        run: pnpm run test:e2e:ui
+      - name: 运行浏览器插件真实端到端 E2E 测试
+        run: pnpm run test:e2e:extension
 
   repo-hygiene:
     name: 仓库卫生检查（构建产物 / 大文件）

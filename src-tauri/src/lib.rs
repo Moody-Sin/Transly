@@ -56,6 +56,7 @@ macro_rules! app_command_builder {
             $crate::commands::get_translation_history,
             $crate::commands::search_translation_history,
             $crate::commands::delete_history_entry,
+            $crate::commands::export_translation_history,
             $crate::commands::set_cache_enabled,
             $crate::commands::get_cache_enabled,
             $crate::commands::ocr_clipboard_image,

@@ -1,14 +1,40 @@
 import http from 'node:http'
+import net from 'node:net'
 import path from 'node:path'
 import fs from 'node:fs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { chromium } from 'playwright'
 
-const SERVER_PORT = 39281
+const DEFAULT_SERVER_PORT = 39281
 const EXTENSION_DIST = path.resolve('extension/dist')
 const USER_DATA_DIR = path.resolve('target/playwright-user-data')
 const TEST_TOKEN = 'e2e-valid-token-39281'
+
+async function getAvailablePort(defaultPort = DEFAULT_SERVER_PORT) {
+  const isPortAvailable = (port) =>
+    new Promise((resolve) => {
+      const server = net.createServer()
+      server.once('error', () => resolve(false))
+      server.once('listening', () => {
+        server.close(() => resolve(true))
+      })
+      server.listen(port, '127.0.0.1')
+    })
+
+  if (await isPortAvailable(defaultPort)) {
+    return defaultPort
+  }
+  // 端口冲突时（例如本地已有 Transly 桌面端实例运行），动态申请一个空闲端口
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port
+      server.close(() => resolve(port))
+    })
+    server.on('error', reject)
+  })
+}
 
 if (!fs.existsSync(EXTENSION_DIST)) {
   console.error(`[E2E] 错误：未找到扩展构建产物目录: ${EXTENSION_DIST}`)
@@ -52,7 +78,7 @@ const TEST_PAGE_HTML = `<!DOCTYPE html>
 </html>`
 
 // 尝试启动真实 Rust 本地服务（target/debug/transly_test_server）
-function startRustServer() {
+function startRustServer(serverPort) {
   const binaryPath = path.resolve('target/debug/transly_test_server.exe')
   if (!fs.existsSync(binaryPath)) {
     return Promise.resolve(null)
@@ -62,7 +88,7 @@ function startRustServer() {
     const child = spawn(binaryPath, [], {
       env: {
         ...process.env,
-        TRANSLY_SERVER_PORT: String(SERVER_PORT),
+        TRANSLY_SERVER_PORT: String(serverPort),
         TRANSLY_SERVER_TOKEN: TEST_TOKEN,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -71,7 +97,7 @@ function startRustServer() {
     let started = false
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString()
-      if (text.includes('READY on port 39281')) {
+      if (text.includes(`READY on port ${serverPort}`)) {
         started = true
         resolve(child)
       }
@@ -99,7 +125,7 @@ function startRustServer() {
 }
 
 // 降级用 Mock 服务器（当未编译 Rust 测试二进制时启用）
-function startMockServer() {
+function startMockServer(serverPort) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
@@ -112,7 +138,7 @@ function startMockServer() {
         return
       }
 
-      const url = new URL(req.url, `http://127.0.0.1:${SERVER_PORT}`)
+      const url = new URL(req.url, `http://127.0.0.1:${serverPort}`)
 
       if (url.pathname === '/test-page.html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -194,7 +220,7 @@ function startMockServer() {
       res.end('Not Found')
     })
 
-    server.listen(SERVER_PORT, '127.0.0.1', () => {
+    server.listen(serverPort, '127.0.0.1', () => {
       resolve(server)
     })
     server.on('error', reject)
@@ -203,15 +229,20 @@ function startMockServer() {
 
 async function runTests() {
   console.log('[E2E] 正在初始化测试服务环境...')
-  let rustProcess = await startRustServer()
+  const targetPort = await getAvailablePort(
+    process.env.TRANSLY_TEST_PORT ? Number(process.env.TRANSLY_TEST_PORT) : DEFAULT_SERVER_PORT,
+  )
+  console.log(`[E2E] 测试使用本地服务端口: 127.0.0.1:${targetPort}`)
+
+  let rustProcess = await startRustServer(targetPort)
   let mockServer = null
 
   if (rustProcess) {
-    console.log(`[E2E] 成功启动【真实跨进程 Rust 本地 HTTP 服务】127.0.0.1:${SERVER_PORT}`)
+    console.log(`[E2E] 成功启动【真实跨进程 Rust 本地 HTTP 服务】127.0.0.1:${targetPort}`)
   } else {
-    console.log(`[E2E] 正在启动本地 Mock 桩服务 127.0.0.1:${SERVER_PORT}...`)
-    mockServer = await startMockServer()
-    console.log(`[E2E] Mock 桩服务已就绪: 127.0.0.1:${SERVER_PORT}`)
+    console.log(`[E2E] 正在启动本地 Mock 桩服务 127.0.0.1:${targetPort}...`)
+    mockServer = await startMockServer(targetPort)
+    console.log(`[E2E] Mock 桩服务已就绪: 127.0.0.1:${targetPort}`)
   }
 
   fs.mkdirSync(USER_DATA_DIR, { recursive: true })
@@ -253,20 +284,24 @@ async function runTests() {
     }
     assert(sw, 'Service Worker 必须正常初始化')
 
-    // 在扩展存储中预先配置已配对有效的 Bearer Token 与默认偏好
-    await sw.evaluate(async (token) => {
-      await chrome.storage.local.set({
-        transly_server_token: token,
-        transly_engine: 'google',
-        transly_target_lang: 'zh-CN',
-        transly_mode: 'replace',
-      })
-    }, TEST_TOKEN)
-    console.log('✔ [用例 0] 浏览器扩展后台 Service Worker 就绪并预设配对凭据')
+    // 在扩展存储中预先配置已配对有效的 Bearer Token 与默认偏好及测试端口
+    await sw.evaluate(
+      async ({ token, port }) => {
+        await chrome.storage.local.set({
+          transly_server_token: token,
+          transly_server_port: port,
+          transly_engine: 'google',
+          transly_target_lang: 'zh-CN',
+          transly_mode: 'replace',
+        })
+      },
+      { token: TEST_TOKEN, port: targetPort },
+    )
+    console.log('✔ [用例 0] 浏览器扩展后台 Service Worker 就绪并预设配对凭据与端口')
 
     // 2. 打开被测页面（由真实的 Rust 本地服务托管）
     const page = await context.newPage()
-    await page.goto(`http://127.0.0.1:${SERVER_PORT}/test-page.html`, { waitUntil: 'networkidle' })
+    await page.goto(`http://127.0.0.1:${targetPort}/test-page.html`, { waitUntil: 'networkidle' })
 
     // 验证初始原文状态
     const initialSimple = await page.locator('#simple-para').innerText()

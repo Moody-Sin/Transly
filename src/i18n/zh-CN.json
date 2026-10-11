@@ -64,6 +64,8 @@
     "searchPlaceholder": "搜索历史记录 (原文或译文)...",
     "exportJson": "导出 JSON",
     "exportCsv": "导出 CSV",
+    "exportSuccess": "已成功导出至文件",
+    "exportFailed": "导出失败",
     "speak": "朗读发音"
   },
   "ocrError": {

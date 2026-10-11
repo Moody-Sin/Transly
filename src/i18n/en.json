@@ -64,6 +64,8 @@
     "searchPlaceholder": "Search history (source or translated)...",
     "exportJson": "Export JSON",
     "exportCsv": "Export CSV",
+    "exportSuccess": "Successfully exported to file",
+    "exportFailed": "Export failed",
     "speak": "Read Aloud"
   },
   "ocrError": {

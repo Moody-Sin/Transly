@@ -244,35 +244,78 @@ impl TranslateEngine for GoogleWebEngine {
         // 超限文本按段落与字符窗口双重切片，彻底防止超长单行溢出。
         // 门槛按编码后长度判定，与 chunk_paragraph 内部上限保持同一量纲
         if needs_chunking(&req.text) {
-            let mut full_translated = String::new();
-            let mut detected_lang = None;
+            struct ChunkMeta {
+                ascii_tail: bool,
+            }
+
+            enum ParagraphElement {
+                EmptyLine,
+                Chunks(Vec<ChunkMeta>),
+            }
+
+            let mut elements = Vec::new();
+            let mut flat_chunk_texts = Vec::new();
 
             for paragraph in req.text.split('\n') {
                 if paragraph.trim().is_empty() {
-                    full_translated.push('\n');
+                    elements.push(ParagraphElement::EmptyLine);
                     continue;
                 }
 
-                // 段落内再按空白边界与字符窗口双重上限切块（含无空格的中文长段落）
-                for chunk_str in chunk_paragraph(paragraph) {
-                    let res = self
-                        .translate_single_chunk(&chunk_str, &req.source_lang, &req.target_lang)
-                        .await?;
-                    if detected_lang.is_none() {
-                        detected_lang = res.detected_source_lang;
-                    }
-                    full_translated.push_str(&res.text);
-                    // 仅在西文块之间补空格；中文等无空格语言补空格会在句中断字
+                let chunk_strs = chunk_paragraph(paragraph);
+                let mut metas = Vec::with_capacity(chunk_strs.len());
+                for chunk_str in chunk_strs {
                     let ascii_tail = chunk_str
                         .chars()
                         .next_back()
                         .map(|c| c.is_ascii())
                         .unwrap_or(false);
-                    if ascii_tail && !res.text.ends_with(' ') {
-                        full_translated.push(' ');
+                    flat_chunk_texts.push(chunk_str);
+                    metas.push(ChunkMeta { ascii_tail });
+                }
+                elements.push(ParagraphElement::Chunks(metas));
+            }
+
+            // 受控并发拉取（并发度 4，保序缓冲 buffered），将原本长文本串行累加延迟降为并发延迟
+            use futures::stream::{self, StreamExt};
+            let futures: Vec<_> = flat_chunk_texts
+                .iter()
+                .map(|chunk_str| {
+                    self.translate_single_chunk(chunk_str, &req.source_lang, &req.target_lang)
+                })
+                .collect();
+
+            let chunk_responses: Result<Vec<TranslationResponse>> = stream::iter(futures)
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect();
+            let mut resp_iter = chunk_responses?.into_iter();
+
+            let mut full_translated = String::new();
+            let mut detected_lang = None;
+
+            for element in elements {
+                match element {
+                    ParagraphElement::EmptyLine => {
+                        full_translated.push('\n');
+                    }
+                    ParagraphElement::Chunks(metas) => {
+                        for meta in metas {
+                            if let Some(res) = resp_iter.next() {
+                                if detected_lang.is_none() {
+                                    detected_lang = res.detected_source_lang;
+                                }
+                                full_translated.push_str(&res.text);
+                                if meta.ascii_tail && !res.text.ends_with(' ') {
+                                    full_translated.push(' ');
+                                }
+                            }
+                        }
+                        full_translated.push('\n');
                     }
                 }
-                full_translated.push('\n');
             }
 
             return Ok(TranslationResponse {

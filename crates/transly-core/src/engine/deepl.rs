@@ -268,6 +268,16 @@ impl TranslateEngine for DeepLEngine {
             }
 
             let data: DeepLApiResponse = resp.json().await?;
+            if data.translations.len() != chunk.len() {
+                return Err(Error::Engine {
+                    engine: self.id().to_string(),
+                    message: format!(
+                        "DeepL 批量返回项数不匹配：期望 {} 项，实际 {} 项",
+                        chunk.len(),
+                        data.translations.len()
+                    ),
+                });
+            }
             for t in data.translations {
                 all_responses.push(TranslationResponse {
                     text: t.text,
@@ -338,5 +348,17 @@ mod tests {
         };
         assert!(engine.translate(&req).await.is_err());
         assert!(engine.translate_batch(&[req]).await.is_err());
+    }
+
+    #[test]
+    fn test_deepl_api_response_deserialization() {
+        let json_raw = r#"{"translations":[{"detected_source_language":"EN","text":"你好"}]}"#;
+        let data: DeepLApiResponse = serde_json::from_str(json_raw).unwrap();
+        assert_eq!(data.translations.len(), 1);
+        assert_eq!(data.translations[0].text, "你好");
+        assert_eq!(
+            data.translations[0].detected_source_language.as_deref(),
+            Some("EN")
+        );
     }
 }

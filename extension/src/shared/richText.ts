@@ -9,12 +9,14 @@
 export interface TextPart {
   id: string
   text: string
+  isInline?: boolean
 }
 
 export interface RichTextComposite {
   compositeText: string
   placeholders: Map<string, string> // 占位符 -> 原文内容
   idToPlaceholder: Map<string, string> // id -> 占位符
+  baseSlots?: (string | null)[] // 各占位符前后对应的 base id 槽位
 }
 
 export function extractPlaceholderTokens(text: string): string[] {
@@ -24,7 +26,7 @@ export function extractPlaceholderTokens(text: string): string[] {
 
 /**
  * 将离散的段落碎片聚合为带占位符的单一句子。
- * 约定：偶数项为主干文本，奇数项为行内标签包裹的子文本。
+ * 支持显式 `isInline: boolean` 属性；缺省时回退为奇数项为行内的历史兼容策略。
  * 当 enclosed 为 true 时生成闭合标记 ⟦T_i⟧...⟦/T_i⟧ 以同时翻译行内子文本。
  */
 export function buildRichTextComposite(
@@ -33,19 +35,28 @@ export function buildRichTextComposite(
 ): RichTextComposite {
   const placeholders = new Map<string, string>()
   const idToPlaceholder = new Map<string, string>()
+  const baseSlots: (string | null)[] = []
 
   if (parts.length <= 1) {
     return {
       compositeText: parts.length === 1 ? parts[0].text : '',
       placeholders,
       idToPlaceholder,
+      baseSlots: parts.length === 1 && !parts[0].isInline ? [parts[0].id] : [null],
     }
   }
 
   let compositeText = ''
+  let currentBaseId: string | null = null
+
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i]
-    if (i % 2 === 1) {
+    const isInline = part.isInline !== undefined ? part.isInline : i % 2 === 1
+
+    if (isInline) {
+      baseSlots.push(currentBaseId)
+      currentBaseId = null
+
       const ph = `⟦T_${i}⟧`
       placeholders.set(ph, part.text)
       idToPlaceholder.set(part.id, ph)
@@ -55,14 +66,18 @@ export function buildRichTextComposite(
         compositeText += ph
       }
     } else {
+      currentBaseId = part.id
       compositeText += part.text
     }
   }
+
+  baseSlots.push(currentBaseId)
 
   return {
     compositeText,
     placeholders,
     idToPlaceholder,
+    baseSlots,
   }
 }
 
@@ -73,7 +88,7 @@ export function buildRichTextComposite(
  */
 export function restoreRichTextComposite(
   translatedComposite: string,
-  baseIds: string[],
+  baseIds: (string | null)[],
   placeholderToId: Map<string, string>,
 ): Map<string, string> | null {
   const tokens = extractPlaceholderTokens(translatedComposite)
@@ -84,7 +99,7 @@ export function restoreRichTextComposite(
 
   const result = new Map<string, string>()
   let remaining = translatedComposite
-  let baseIndex = 0
+  let slotIndex = 0
 
   for (const ph of tokens) {
     const targetId = placeholderToId.get(ph)
@@ -94,9 +109,12 @@ export function restoreRichTextComposite(
     if (idx === -1) return null
 
     const before = remaining.slice(0, idx)
-    if (baseIndex < baseIds.length) {
-      result.set(baseIds[baseIndex], before)
-      baseIndex += 1
+    if (slotIndex < baseIds.length) {
+      const baseId = baseIds[slotIndex]
+      if (baseId) {
+        result.set(baseId, before)
+      }
+      slotIndex += 1
     }
 
     remaining = remaining.slice(idx + ph.length)
@@ -115,8 +133,11 @@ export function restoreRichTextComposite(
     }
   }
 
-  if (baseIndex < baseIds.length) {
-    result.set(baseIds[baseIndex], remaining)
+  if (slotIndex < baseIds.length) {
+    const baseId = baseIds[slotIndex]
+    if (baseId) {
+      result.set(baseId, remaining)
+    }
   }
 
   return result

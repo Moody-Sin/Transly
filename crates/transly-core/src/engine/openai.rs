@@ -45,6 +45,47 @@ pub struct OpenAIEngine {
     style: TranslationStyle,
 }
 
+#[derive(Serialize, Deserialize)]
+struct BatchJsonItem {
+    id: usize,
+    text: String,
+}
+
+pub(crate) fn extract_json_payload(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    // 1. 若首尾直接为代码围栏
+    if let Some(rest) = trimmed.strip_prefix("```json") {
+        if let Some(inner) = rest.strip_suffix("```") {
+            return inner.trim();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        if let Some(inner) = rest.strip_suffix("```") {
+            return inner.trim();
+        }
+    }
+    // 2. 检查文本内部是否包含代码围栏
+    if let Some(start) = trimmed.find("```json") {
+        let after = &trimmed[start + 7..];
+        if let Some(end) = after.rfind("```") {
+            return after[..end].trim();
+        }
+    }
+    if let Some(start) = trimmed.find("```") {
+        let after = &trimmed[start + 3..];
+        if let Some(end) = after.rfind("```") {
+            return after[..end].trim();
+        }
+    }
+    // 3. 容错：查找最外层 JSON 数组 '[' 到 ']' 避免前置或后置说明文案干扰解析
+    if let (Some(first_bracket), Some(last_bracket)) = (trimmed.find('['), trimmed.rfind(']')) {
+        if first_bracket <= last_bracket {
+            return trimmed[first_bracket..=last_bracket].trim();
+        }
+    }
+    trimmed
+}
+
 #[derive(Serialize)]
 struct ChatMessage<'a> {
     role: &'a str,
@@ -205,6 +246,136 @@ impl OpenAIEngine {
             "You are a professional translator. Direct target language: '{target_lang}'. {modifier} Do not explain, greet, or wrap in markdown fences. Keep original line breaks and formatting identical.",
             modifier = self.style.prompt_modifier()
         )
+    }
+
+    pub fn build_batch_system_prompt(&self, target_lang: &str) -> String {
+        format!(
+            "You are a professional translator. Direct target language: '{target_lang}'. {modifier} You will receive a JSON array of items: [{{\"id\": <number>, \"text\": \"<text>\"}}]. Translate the 'text' of each item and respond strictly with a valid JSON array of objects with 'id' and 'text'. Keep formatting and line breaks identical. Output ONLY valid JSON array with NO explanation, NO greeting, and NO markdown code fences.",
+            modifier = self.style.prompt_modifier()
+        )
+    }
+
+    async fn try_translate_batch_aggregated(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Result<Vec<TranslationResponse>> {
+        if self.api_key.trim().is_empty() && !Self::is_local_endpoint(&self.base_url) {
+            return Err(Error::MissingCredentials("API Key 不能为空".into()));
+        }
+
+        let first_target = &requests[0].target_lang;
+        let is_homogeneous = requests.iter().all(|r| &r.target_lang == first_target);
+        if !is_homogeneous {
+            return Err(Error::Input("批量请求目标语言不一致".into()));
+        }
+
+        let items: Vec<BatchJsonItem> = requests
+            .iter()
+            .enumerate()
+            .map(|(idx, req)| BatchJsonItem {
+                id: idx,
+                text: req.text.clone(),
+            })
+            .collect();
+
+        let json_input = serde_json::to_string(&items)
+            .map_err(|e| Error::Internal(format!("序列化批量输入失败: {e}")))?;
+
+        let system_prompt = self.build_batch_system_prompt(first_target);
+
+        let body = ChatCompletionRequest {
+            model: &self.model,
+            messages: vec![
+                ChatMessage {
+                    role: "system",
+                    content: &system_prompt,
+                },
+                ChatMessage {
+                    role: "user",
+                    content: &json_input,
+                },
+            ],
+            temperature: match self.style {
+                TranslationStyle::Academic => 0.1,
+                TranslationStyle::General | TranslationStyle::Business => 0.2,
+                TranslationStyle::Literary => 0.4,
+            },
+            stream: false,
+        };
+
+        let url = format!("{}/chat/completions", self.base_url);
+        let resp = super::send_with_retry(1, std::time::Duration::from_millis(300), || {
+            let mut req_builder = self.client.post(&url).json(&body);
+            let key = self.api_key.trim();
+            if !key.is_empty() {
+                req_builder = req_builder.header("Authorization", format!("Bearer {key}"));
+            } else if Self::is_local_endpoint(&self.base_url) {
+                req_builder = req_builder.header("Authorization", "Bearer ollama");
+            }
+            req_builder.send()
+        })
+        .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            return Err(Error::Engine {
+                engine: self.id().to_string(),
+                message: format!("LLM API 聚合批量响应错误 ({status})"),
+            });
+        }
+
+        let data: ChatCompletionResponse = resp.json().await?;
+        let content = data
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.message.content)
+            .ok_or_else(|| Error::Engine {
+                engine: self.id().to_string(),
+                message: "LLM 批量返回内容为空".to_string(),
+            })?;
+
+        let cleaned = extract_json_payload(&content);
+        let parsed: Vec<BatchJsonItem> =
+            serde_json::from_str(cleaned).map_err(|e| Error::Engine {
+                engine: self.id().to_string(),
+                message: format!("解析 LLM 聚合批量 JSON 失败: {e}"),
+            })?;
+
+        if parsed.len() != requests.len() {
+            return Err(Error::Engine {
+                engine: self.id().to_string(),
+                message: format!(
+                    "LLM 聚合批量返回项数不匹配：期望 {} 项，实际 {} 项",
+                    requests.len(),
+                    parsed.len()
+                ),
+            });
+        }
+
+        let mut item_map: std::collections::HashMap<usize, String> =
+            std::collections::HashMap::with_capacity(parsed.len());
+        for item in parsed {
+            item_map.insert(item.id, item.text);
+        }
+
+        let mut ordered_responses = Vec::with_capacity(requests.len());
+        for idx in 0..requests.len() {
+            if let Some(text) = item_map.remove(&idx) {
+                ordered_responses.push(TranslationResponse {
+                    text,
+                    detected_source_lang: None,
+                    engine: self.id().to_string(),
+                });
+            } else {
+                return Err(Error::Engine {
+                    engine: self.id().to_string(),
+                    message: format!("LLM 聚合批量缺失 ID: {idx}"),
+                });
+            }
+        }
+
+        Ok(ordered_responses)
     }
 }
 
@@ -448,6 +619,12 @@ impl TranslateEngine for OpenAIEngine {
             return vec![self.translate(&requests[0]).await];
         }
 
+        // 优先尝试单次聚合批量 Prompting 优化（消除 90%+ 网络往返与 Token 浪费）
+        if let Ok(aggregated) = self.try_translate_batch_aggregated(requests).await {
+            return aggregated.into_iter().map(Ok).collect();
+        }
+
+        // 容错降级：若聚合批量失败（如部分第三方网关格式异常或网络波动），安全回退至逐项并发隔离翻译
         use futures::stream::{self, StreamExt};
         let concurrency = 5;
         let futures: Vec<_> = requests
@@ -615,5 +792,31 @@ mod tests {
         let business = literary.with_style(TranslationStyle::Business);
         let business_prompt = business.build_system_prompt("ja");
         assert!(business_prompt.contains("professional, polite, and executive business tone"));
+    }
+
+    #[test]
+    fn test_extract_json_payload() {
+        let raw = r#"[{"id":0,"text":"你好"}]"#;
+        assert_eq!(extract_json_payload(raw), raw);
+
+        let wrapped = format!("```json\n{raw}\n```");
+        assert_eq!(extract_json_payload(&wrapped), raw);
+
+        let wrapped_no_lang = format!("```\n{raw}\n```");
+        assert_eq!(extract_json_payload(&wrapped_no_lang), raw);
+
+        let chatty = format!("Here is the translation:\n```json\n{raw}\n```\nHope this helps!");
+        assert_eq!(extract_json_payload(&chatty), raw);
+
+        let bare_chatty = format!("Here is the translation:\n{raw}\nEnjoy!");
+        assert_eq!(extract_json_payload(&bare_chatty), raw);
+    }
+
+    #[test]
+    fn test_build_batch_system_prompt() {
+        let engine = OpenAIEngine::new("key", None, None);
+        let prompt = engine.build_batch_system_prompt("zh-CN");
+        assert!(prompt.contains("JSON array of items"));
+        assert!(prompt.contains("'id' and 'text'"));
     }
 }

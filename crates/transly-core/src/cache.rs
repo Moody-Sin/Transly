@@ -23,6 +23,54 @@ pub struct CacheEntry {
     pub created_at: u32,
 }
 
+struct L1Cache {
+    map: std::collections::HashMap<String, String>,
+    order: std::collections::VecDeque<String>,
+    capacity: usize,
+}
+
+impl L1Cache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::with_capacity(capacity),
+            order: std::collections::VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, val: String) {
+        if let std::collections::hash_map::Entry::Occupied(mut e) = self.map.entry(key.clone()) {
+            e.insert(val);
+            return;
+        }
+        while self.map.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        if self.order.len() > self.capacity * 2 {
+            self.order.retain(|k| self.map.contains_key(k));
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, val);
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.map.remove(key);
+    }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
+
 enum CacheBackend {
     File {
         writer: Mutex<Connection>,
@@ -35,6 +83,7 @@ enum CacheBackend {
 
 pub struct TranslationCache {
     backend: CacheBackend,
+    l1: Mutex<L1Cache>,
 }
 
 impl TranslationCache {
@@ -95,6 +144,7 @@ impl TranslationCache {
                 writer: Mutex::new(writer),
                 reader: Mutex::new(reader),
             },
+            l1: Mutex::new(L1Cache::new(4096)),
         })
     }
 
@@ -129,6 +179,7 @@ impl TranslationCache {
             backend: CacheBackend::Memory {
                 conn: Mutex::new(conn),
             },
+            l1: Mutex::new(L1Cache::new(4096)),
         })
     }
 
@@ -144,6 +195,7 @@ impl TranslationCache {
                         Connection::open_in_memory().expect("内存耗尽，无法建立内存缓存连接"),
                     ),
                 },
+                l1: Mutex::new(L1Cache::new(4096)),
             });
         Arc::new(cache)
     }
@@ -190,7 +242,7 @@ impl TranslationCache {
         }
     }
 
-    fn generate_key(text: &str, source_lang: &str, target_lang: &str, engine: &str) -> String {
+    pub fn generate_key(text: &str, source_lang: &str, target_lang: &str, engine: &str) -> String {
         let mut hasher = Sha256::new();
         // 使用明确的长度前缀编码，杜绝字段含冒号或分隔符碰撞
         hasher.update((text.len() as u64).to_le_bytes());
@@ -212,7 +264,13 @@ impl TranslationCache {
         engine: &str,
     ) -> Result<Option<String>> {
         let key = Self::generate_key(text, source_lang, target_lang, engine);
-        self.with_reader(|conn| {
+        if let Ok(guard) = self.l1.lock() {
+            if let Some(hit) = guard.get(&key) {
+                return Ok(Some(hit));
+            }
+        }
+
+        let db_res = self.with_reader(|conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT translated_text FROM translation_cache WHERE cache_key = ?1",
             )?;
@@ -224,7 +282,70 @@ impl TranslationCache {
             } else {
                 Ok(None)
             }
-        })
+        })?;
+
+        if let Some(ref val) = db_res {
+            if let Ok(mut guard) = self.l1.lock() {
+                guard.insert(key, val.clone());
+            }
+        }
+
+        Ok(db_res)
+    }
+
+    /// 批量按 keys 读取翻译缓存（优先 L1 内存直出，未命中部分单次批量 SQL IN 查询并写回 L1）
+    pub fn get_by_keys(
+        &self,
+        keys: &[String],
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let mut result = std::collections::HashMap::with_capacity(keys.len());
+        let mut missing_keys = Vec::new();
+
+        if let Ok(guard) = self.l1.lock() {
+            for k in keys {
+                if let Some(val) = guard.get(k) {
+                    result.insert(k.clone(), val);
+                } else {
+                    missing_keys.push(k.as_str());
+                }
+            }
+        } else {
+            missing_keys.extend(keys.iter().map(|s| s.as_str()));
+        }
+
+        if missing_keys.is_empty() {
+            return Ok(result);
+        }
+
+        let mut fetched_from_db = Vec::new();
+        self.with_reader(|conn| {
+            for chunk in missing_keys.chunks(100) {
+                let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+                let sql = format!(
+                    "SELECT cache_key, translated_text FROM translation_cache WHERE cache_key IN ({})",
+                    placeholders.join(",")
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let params: Vec<&dyn rusqlite::ToSql> =
+                    chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+                let mut rows = stmt.query(params.as_slice())?;
+                while let Some(row) = rows.next()? {
+                    let k: String = row.get(0)?;
+                    let v: String = row.get(1)?;
+                    fetched_from_db.push((k.clone(), v.clone()));
+                    result.insert(k, v);
+                }
+            }
+            Ok(())
+        })?;
+
+        if let Ok(mut guard) = self.l1.lock() {
+            for (k, v) in fetched_from_db {
+                guard.insert(k, v);
+            }
+        }
+
+        Ok(result)
     }
 
     pub fn set(
@@ -236,6 +357,10 @@ impl TranslationCache {
         engine: &str,
     ) -> Result<()> {
         let key = Self::generate_key(text, source_lang, target_lang, engine);
+        if let Ok(mut guard) = self.l1.lock() {
+            guard.insert(key.clone(), translated.to_string());
+        }
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -263,6 +388,13 @@ impl TranslationCache {
             entries.into_iter().collect();
         if items.is_empty() {
             return Ok(());
+        }
+
+        if let Ok(mut guard) = self.l1.lock() {
+            for (text, translated, source_lang, target_lang, engine) in &items {
+                let key = Self::generate_key(text, source_lang, target_lang, engine);
+                guard.insert(key, translated.to_string());
+            }
         }
 
         let now = std::time::SystemTime::now()
@@ -301,6 +433,10 @@ impl TranslationCache {
 
     /// 清理超过指定天数的过期缓存
     pub fn cleanup_older_than_days(&self, days: u32) -> Result<usize> {
+        if let Ok(mut guard) = self.l1.lock() {
+            guard.clear();
+        }
+
         let cutoff = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -318,6 +454,10 @@ impl TranslationCache {
 
     /// 限制缓存总条目数，保留最新的 max_items 条（基于 created_at 索引高效删除）
     pub fn trim_to_max_items(&self, max_items: usize) -> Result<usize> {
+        if let Ok(mut guard) = self.l1.lock() {
+            guard.clear();
+        }
+
         self.with_writer(|conn| {
             let deleted = conn.execute(
                 r#"
@@ -420,6 +560,10 @@ impl TranslationCache {
 
     /// 清空所有翻译缓存
     pub fn clear_all_cache(&self) -> Result<usize> {
+        if let Ok(mut guard) = self.l1.lock() {
+            guard.clear();
+        }
+
         self.with_writer(|conn| {
             let deleted = conn.execute("DELETE FROM translation_cache", [])?;
             Ok(deleted)
@@ -511,6 +655,10 @@ impl TranslationCache {
 
     /// 按 `cache_key` 删除单条翻译历史。返回是否确实删除了记录。
     pub fn delete_entry(&self, cache_key: &str) -> Result<bool> {
+        if let Ok(mut guard) = self.l1.lock() {
+            guard.remove(cache_key);
+        }
+
         self.with_writer(|conn| {
             let deleted = conn.execute(
                 "DELETE FROM translation_cache WHERE cache_key = ?1",
@@ -519,6 +667,152 @@ impl TranslationCache {
             Ok(deleted > 0)
         })
     }
+
+    /// 流式导出翻译历史到任意 Write 流中（支持 csv 与 json），避免大记录集一次性内存加载
+    pub fn export_history_to_writer<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        format: &str,
+        keyword: Option<&str>,
+    ) -> Result<usize> {
+        let is_csv = format.eq_ignore_ascii_case("csv");
+        let kw = keyword.map(|s| s.trim()).filter(|s| !s.is_empty());
+
+        self.with_reader(|conn| {
+            let mut count = 0usize;
+            if is_csv {
+                // 写入 UTF-8 BOM，确保 Excel 等软件打开中文不乱码
+                writer
+                    .write_all(b"\xEF\xBB\xBF")
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                writer
+                    .write_all(b"Source Text,Translated Text,Source Lang,Target Lang,Engine,Time\n")
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            } else {
+                writer
+                    .write_all(b"[\n")
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            }
+
+            let mut process_row = |row: &rusqlite::Row| -> std::io::Result<()> {
+                let cache_key: String = row.get(0).unwrap_or_default();
+                let source_text: String = row.get(1).unwrap_or_default();
+                let translated_text: String = row.get(2).unwrap_or_default();
+                let source_lang: String = row.get(3).unwrap_or_default();
+                let target_lang: String = row.get(4).unwrap_or_default();
+                let engine: String = row.get(5).unwrap_or_default();
+                let created_at: i64 = row.get(6).unwrap_or_default();
+
+                if is_csv {
+                    let escape_field = |val: &str| -> String {
+                        let guarded = if val.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+                            format!("'{val}")
+                        } else {
+                            val.to_string()
+                        };
+                        format!("\"{}\"", guarded.replace('"', "\"\""))
+                    };
+
+                    let time_str = format_timestamp_iso(created_at);
+                    let line = format!(
+                        "{},{},{},{},{},{}\n",
+                        escape_field(&source_text),
+                        escape_field(&translated_text),
+                        escape_field(&source_lang),
+                        escape_field(&target_lang),
+                        escape_field(&engine),
+                        time_str
+                    );
+                    writer.write_all(line.as_bytes())?;
+                } else {
+                    let entry = CacheEntry {
+                        cache_key,
+                        source_text,
+                        translated_text,
+                        source_lang,
+                        target_lang,
+                        engine,
+                        created_at: created_at as u32,
+                    };
+                    if count > 0 {
+                        writer.write_all(b",\n")?;
+                    }
+                    let json_line = serde_json::to_string(&entry).unwrap_or_default();
+                    writer.write_all(json_line.as_bytes())?;
+                }
+                count += 1;
+                Ok(())
+            };
+
+            if let Some(keyword) = kw {
+                let escaped: String = keyword
+                    .chars()
+                    .flat_map(|c| match c {
+                        '\\' => vec!['\\', '\\'],
+                        '%' => vec!['\\', '%'],
+                        '_' => vec!['\\', '_'],
+                        other => vec![other],
+                    })
+                    .collect();
+                let pattern = format!("%{escaped}%");
+                let mut stmt = conn.prepare_cached(
+                    r#"
+                    SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
+                    FROM translation_cache
+                    WHERE source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\'
+                    ORDER BY created_at DESC, rowid DESC
+                    "#,
+                )?;
+                let mut rows = stmt.query(params![pattern])?;
+                while let Some(row) = rows.next()? {
+                    process_row(row)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                }
+            } else {
+                let mut stmt = conn.prepare_cached(
+                    r#"
+                    SELECT cache_key, source_text, translated_text, source_lang, target_lang, engine, created_at
+                    FROM translation_cache
+                    ORDER BY created_at DESC, rowid DESC
+                    "#,
+                )?;
+                let mut rows = stmt.query([])?;
+                while let Some(row) = rows.next()? {
+                    process_row(row)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                }
+            }
+
+            if !is_csv {
+                writer
+                    .write_all(b"\n]")
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            }
+            writer
+                .flush()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(count)
+        })
+    }
+}
+
+fn format_timestamp_iso(ts: i64) -> String {
+    let secs = ts % 86400;
+    let days = ts / 86400;
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1024 + doe / 1461 - doe / 142401) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    format!("{y:04}-{m:02}-{d:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
 #[cfg(test)]
@@ -845,5 +1139,75 @@ mod tests {
 
         drop(cache);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_get_by_keys_and_l1_cache() {
+        let cache = TranslationCache::in_memory().unwrap();
+        let k1 = TranslationCache::generate_key("hello", "en", "zh-CN", "google");
+        let k2 = TranslationCache::generate_key("world", "en", "zh-CN", "google");
+        let k3 = TranslationCache::generate_key("transly", "en", "zh-CN", "google");
+
+        cache.set("hello", "你好", "en", "zh-CN", "google").unwrap();
+        cache.set("world", "世界", "en", "zh-CN", "google").unwrap();
+
+        // 批量查询存在的 k1, k2 以及不存在的 k3
+        let batch_hits = cache
+            .get_by_keys(&[k1.clone(), k2.clone(), k3.clone()])
+            .unwrap();
+        assert_eq!(batch_hits.len(), 2);
+        assert_eq!(batch_hits.get(&k1).map(|s| s.as_str()), Some("你好"));
+        assert_eq!(batch_hits.get(&k2).map(|s| s.as_str()), Some("世界"));
+        assert_eq!(batch_hits.get(&k3), None);
+
+        // 验证 L1 内存直出：再次查询时无需访问底层 DB
+        let l1_hits = cache.get_by_keys(std::slice::from_ref(&k1)).unwrap();
+        assert_eq!(l1_hits.get(&k1).map(|s| s.as_str()), Some("你好"));
+
+        // 清空缓存后 L1 亦同步失效
+        cache.clear_all_cache().unwrap();
+        let empty_hits = cache.get_by_keys(std::slice::from_ref(&k1)).unwrap();
+        assert!(empty_hits.is_empty());
+    }
+
+    #[test]
+    fn test_export_history_to_writer_csv_and_json() {
+        let cache = TranslationCache::in_memory().unwrap();
+        cache.set("apple", "苹果", "en", "zh-CN", "google").unwrap();
+        cache
+            .set("banana", "香蕉", "en", "zh-CN", "google")
+            .unwrap();
+
+        // 1. 测试 CSV 流式导出
+        let mut csv_buf = Vec::new();
+        let count_csv = cache
+            .export_history_to_writer(&mut csv_buf, "csv", None)
+            .unwrap();
+        assert_eq!(count_csv, 2);
+        let csv_str = String::from_utf8(csv_buf).unwrap();
+        assert!(csv_str.starts_with("\u{feff}Source Text,Translated Text"));
+        assert!(csv_str.contains("\"apple\",\"苹果\""));
+        assert!(csv_str.contains("\"banana\",\"香蕉\""));
+
+        // 2. 测试 JSON 流式导出
+        let mut json_buf = Vec::new();
+        let count_json = cache
+            .export_history_to_writer(&mut json_buf, "json", None)
+            .unwrap();
+        assert_eq!(count_json, 2);
+        let json_str = String::from_utf8(json_buf).unwrap();
+        assert!(json_str.starts_with("[\n"));
+        assert!(json_str.ends_with("\n]"));
+        assert!(json_str.contains("\"source_text\":\"apple\""));
+
+        // 3. 测试带关键词过滤导出
+        let mut filtered_buf = Vec::new();
+        let count_filter = cache
+            .export_history_to_writer(&mut filtered_buf, "csv", Some("apple"))
+            .unwrap();
+        assert_eq!(count_filter, 1);
+        let filtered_str = String::from_utf8(filtered_buf).unwrap();
+        assert!(filtered_str.contains("\"apple\""));
+        assert!(!filtered_str.contains("\"banana\""));
     }
 }

@@ -5,7 +5,7 @@
   "version": "0.3.0",
   "description": "__MSG_extDescription__",
   "permissions": ["activeTab", "scripting", "storage", "contextMenus", "tabs"],
-  "host_permissions": ["http://127.0.0.1:39281/*"],
+  "host_permissions": ["http://127.0.0.1/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

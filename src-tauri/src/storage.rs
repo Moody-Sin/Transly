@@ -191,6 +191,43 @@ pub fn migrate_legacy_cache(new_dir: &Path) -> std::io::Result<bool> {
     migrate_db_files(&legacy_dir, new_dir)
 }
 
+/// 首次运行时将系统 Keyring 中的旧版非敏感配置一次性迁移至 SQLite `app_settings` 表。
+/// 迁移完成后写入 `__migrated_from_keyring = "true"` 标记。
+/// 后续冷启动与日常查询直接走本地数据库，彻底杜绝主线程访问系统凭据管理器的阻塞 I/O。
+pub fn migrate_keyring_settings_to_db(cache: &transly_core::TranslationCache) {
+    if cache
+        .get_setting("__migrated_from_keyring")
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return;
+    }
+
+    const NON_SENSITIVE_KEYS: &[(&str, &str)] = &[
+        ("clipboard_monitor_enabled", "false"),
+        ("cache_enabled", "true"),
+        ("custom_shortcut", "Alt+Shift+D"),
+        ("custom_replace_shortcut", "Alt+Shift+R"),
+        ("preferred_replace_engine", "google"),
+        ("llm_style", "general"),
+    ];
+
+    for (key, default_val) in NON_SENSITIVE_KEYS {
+        let current_db_val = cache.get_setting(key).ok().flatten();
+        if current_db_val.is_none() {
+            let val = crate::secrets::get_secret(key)
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| default_val.to_string());
+            let _ = cache.set_setting(key, &val);
+            let _ = crate::secrets::delete_secret(key);
+        }
+    }
+
+    let _ = cache.set_setting("__migrated_from_keyring", "true");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +464,39 @@ mod tests {
         assert!(is_portable, "TRANSLY_PORTABLE=1 必须强制开启便携模式");
         assert_eq!(dir, root.join("data"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_migrate_keyring_settings_to_db() {
+        let cache = transly_core::TranslationCache::in_memory().unwrap();
+        assert_eq!(cache.get_setting("__migrated_from_keyring").unwrap(), None);
+
+        migrate_keyring_settings_to_db(&cache);
+        assert_eq!(
+            cache
+                .get_setting("__migrated_from_keyring")
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            cache.get_setting("custom_shortcut").unwrap().as_deref(),
+            Some("Alt+Shift+D")
+        );
+        assert_eq!(
+            cache
+                .get_setting("preferred_replace_engine")
+                .unwrap()
+                .as_deref(),
+            Some("google")
+        );
+
+        // 二次调用幂等性测试
+        cache.set_setting("custom_shortcut", "Ctrl+T").unwrap();
+        migrate_keyring_settings_to_db(&cache);
+        assert_eq!(
+            cache.get_setting("custom_shortcut").unwrap().as_deref(),
+            Some("Ctrl+T")
+        );
     }
 }

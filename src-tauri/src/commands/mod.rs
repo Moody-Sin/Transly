@@ -520,12 +520,16 @@ pub async fn set_cache_enabled(
 ) -> Result<(), String> {
     let cache_setting_ref = cache.inner().clone();
     let val = if enabled { "true" } else { "false" };
-    tokio::task::spawn_blocking(move || {
-        let _ = cache_setting_ref.set_setting("cache_enabled", val);
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_setting_ref
+            .set_setting("cache_enabled", val)
+            .map_err(|e| anyhow::anyhow!("配置保存失败: {e}"))?;
         let _ = crate::secrets::delete_secret("cache_enabled");
+        Ok(())
     })
     .await
-    .map_err(|e| format!("配置写入任务调度异常: {e}"))?;
+    .map_err(|e| format!("配置写入任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
 
     if enabled {
         controller.enable();
@@ -560,12 +564,16 @@ pub async fn set_clipboard_monitor(
 ) -> Result<(), String> {
     let cache_ref = cache.inner().clone();
     let val = if enabled { "true" } else { "false" };
-    tokio::task::spawn_blocking(move || {
-        let _ = cache_ref.set_setting("clipboard_monitor_enabled", val);
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_ref
+            .set_setting("clipboard_monitor_enabled", val)
+            .map_err(|e| anyhow::anyhow!("配置保存失败: {e}"))?;
         let _ = crate::secrets::delete_secret("clipboard_monitor_enabled");
+        Ok(())
     })
     .await
-    .map_err(|e| format!("配置保存调度异常: {e}"))?;
+    .map_err(|e| format!("配置保存调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
     flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }

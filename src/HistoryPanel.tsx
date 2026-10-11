@@ -105,9 +105,13 @@ export default function HistoryPanel({ t, locale }: Props) {
   }
 
   const fetchAllForExport = async (): Promise<CacheEntry[]> => {
-    // 导出时优先拉取全量历史数据（至多 100,000 条，与缓存维护上限对齐），杜绝仅导出首屏 50 条
+    // 导出时优先拉取全量历史数据（至多 100,000 条，与缓存维护上限对齐），杜绝仅导出首屏 50 条；
+    // 若当前处于搜索过滤状态，则导出匹配该关键词的全部记录。
     try {
-      const res = await commands.getTranslationHistory(100_000, 0)
+      const kw = searchKeyword.trim()
+      const res = kw
+        ? await commands.searchTranslationHistory(kw, 100_000, 0)
+        : await commands.getTranslationHistory(100_000, 0)
       if (res.status === 'ok' && res.data.length > 0) {
         return res.data
       }

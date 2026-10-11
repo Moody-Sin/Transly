@@ -53,6 +53,8 @@ export const commands = {
 	getShortcutStatus: () => __TAURI_INVOKE<ShortcutStatusDto>("get_shortcut_status"),
 	getPreferredReplaceEngine: () => typedError<string, string>(__TAURI_INVOKE("get_preferred_replace_engine")),
 	savePreferredReplaceEngine: (engine: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_replace_engine", { engine })),
+	getProxyConfig: () => typedError<ProxyConfig, string>(__TAURI_INVOKE("get_proxy_config")),
+	saveProxyConfig: (config: ProxyConfig) => typedError<null, string>(__TAURI_INVOKE("save_proxy_config", { config })),
 };
 
 /* Types */
@@ -115,6 +117,23 @@ export type PendingFloatResponse = {
 	/**  u32 而非 u64：specta 禁止导出 BigInt 类型以避免 JS 精度丢失 */
 	request_id: number,
 };
+
+/**  代理配置 */
+export type ProxyConfig = {
+	mode: ProxyMode,
+	url?: string | null,
+};
+
+/**  代理模式 */
+export type ProxyMode = 
+/**  默认自动：优先读取环境代理，若无则嗅探系统代理，否则直连 */
+"auto" | 
+/**  系统代理：强制使用操作系统系统代理配置（若无则直连） */
+"system" | 
+/**  手动配置：使用指定的代理地址 */
+"manual" | 
+/**  不使用代理：强制直连，忽略环境与系统代理 */
+"none";
 
 /**
  *  本地 HTTP 服务（供浏览器插件调用）的运行状态。

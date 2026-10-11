@@ -2,7 +2,10 @@ use crate::engine_pool::EnginePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::task::classify_error;
-use transly_core::{CacheEntry, Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
+use transly_core::{
+    CacheEntry, Error, ErrorKind, Glossary, ProxyConfig, ProxyMode, TranslationCache,
+    TranslationRequest,
+};
 
 /// 翻译成功结果：携带实际执行引擎，供 UI 展示与降级识别
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
@@ -1867,6 +1870,93 @@ pub async fn get_engine_capabilities(
     })
 }
 
+pub fn validate_proxy_config(config: &ProxyConfig) -> Result<(), String> {
+    if config.mode == ProxyMode::Manual {
+        match config.url {
+            Some(ref u) if !u.trim().is_empty() => {
+                if transly_core::normalize_proxy_url(u).is_none() {
+                    return Err("无效的手动代理地址格式".to_string());
+                }
+            }
+            _ => return Err("手动代理模式下必须填写代理地址".to_string()),
+        }
+    }
+    Ok(())
+}
+
+pub fn get_proxy_config_internal(cache: &TranslationCache) -> Result<ProxyConfig, String> {
+    let mode_str = cache
+        .get_setting("proxy_mode")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "auto".to_string());
+    let mode = ProxyMode::parse_str(&mode_str);
+    let url = cache
+        .get_setting("proxy_url")
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty());
+    Ok(ProxyConfig { mode, url })
+}
+
+pub async fn save_proxy_config_internal(
+    config: ProxyConfig,
+    pool: &EnginePool,
+    cache: &TranslationCache,
+) -> Result<(), String> {
+    validate_proxy_config(&config)?;
+
+    let mode_str = config.mode.as_str().to_string();
+    let url_opt = config.url.clone();
+
+    cache
+        .set_setting("proxy_mode", &mode_str)
+        .map_err(|e| format!("写入系统配置失败: {e}"))?;
+
+    if let Some(ref u) = url_opt {
+        let trimmed = u.trim();
+        if !trimmed.is_empty() {
+            cache
+                .set_setting("proxy_url", trimmed)
+                .map_err(|e| format!("写入系统配置失败: {e}"))?;
+        } else {
+            cache
+                .delete_setting("proxy_url")
+                .map_err(|e| format!("清理系统配置失败: {e}"))?;
+        }
+    } else {
+        cache
+            .delete_setting("proxy_url")
+            .map_err(|e| format!("清理系统配置失败: {e}"))?;
+    }
+
+    pool.reload_proxy().await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_proxy_config(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<ProxyConfig, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || get_proxy_config_internal(&cache_ref))
+        .await
+        .map_err(|e| format!("读取网络代理配置调度异常: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_proxy_config(
+    config: ProxyConfig,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let pool_ref = pool.inner().clone();
+    let cache_ref = cache.inner().clone();
+    save_proxy_config_internal(config, &pool_ref, &cache_ref).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2035,5 +2125,68 @@ mod tests {
             validate_preferred_replace_engine("openai"),
             Ok("openai".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_proxy_config_save_and_get() {
+        let dir =
+            std::env::temp_dir().join(format!("transly-proxy-test-{}", rand::random::<u64>()));
+        let cache = TranslationCache::open_default(&dir);
+        let pool = Arc::new(EnginePool::with_cache(cache.clone()));
+
+        // 默认应为 auto
+        let initial = cache.get_setting("proxy_mode").unwrap();
+        assert_eq!(initial, None);
+
+        // 验证手动代理没有 URL 时被拒绝
+        let invalid_manual = ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: None,
+        };
+        assert!(validate_proxy_config(&invalid_manual).is_err());
+        assert!(save_proxy_config_internal(invalid_manual, &pool, &cache,)
+            .await
+            .is_err());
+
+        // 保存合法手动代理
+        let valid_manual = ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: Some("127.0.0.1:7890".to_string()),
+        };
+        assert!(validate_proxy_config(&valid_manual).is_ok());
+        assert!(save_proxy_config_internal(valid_manual, &pool, &cache,)
+            .await
+            .is_ok());
+
+        assert_eq!(
+            cache.get_setting("proxy_mode").unwrap().as_deref(),
+            Some("manual")
+        );
+        assert_eq!(
+            cache.get_setting("proxy_url").unwrap().as_deref(),
+            Some("127.0.0.1:7890")
+        );
+
+        let retrieved = get_proxy_config_internal(&cache).unwrap();
+        assert_eq!(retrieved.mode, ProxyMode::Manual);
+        assert_eq!(retrieved.url.as_deref(), Some("127.0.0.1:7890"));
+
+        // 切换为 none
+        let none_cfg = ProxyConfig {
+            mode: ProxyMode::None,
+            url: None,
+        };
+        assert!(validate_proxy_config(&none_cfg).is_ok());
+        assert!(save_proxy_config_internal(none_cfg, &pool, &cache,)
+            .await
+            .is_ok());
+
+        assert_eq!(
+            cache.get_setting("proxy_mode").unwrap().as_deref(),
+            Some("none")
+        );
+        assert_eq!(cache.get_setting("proxy_url").unwrap(), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -72,17 +72,40 @@ impl BatchItemResult {
 /// 流式输出增量 Token 回调
 pub type StreamCallback = Box<dyn Fn(&str) + Send + Sync>;
 
-/// 构建带超时的 HTTP 客户端。
+/// 构建带超时与可选代理的 HTTP 客户端。
 ///
-/// reqwest 的默认客户端**不携带任何超时**。若调用方直接 `unwrap_or_default()`，
-/// 一旦 TLS 后端初始化失败（证书库损坏、企业代理拦截等），就会静默退化成
-/// 无超时客户端：请求会一直挂起到操作系统层的 TCP 超时为止，比配置了较短
-/// 超时更糟，且用户看不到任何提示。此处显式告警，把静默降级变成可观测事件。
-pub(crate) fn build_timed_client(
+/// 若 `no_proxy` 为真，则显式调用 `builder.no_proxy()` 阻断环境与系统代理；
+/// 若提供了 `proxy_url`，则配置 `reqwest::Proxy::all` 统一代理 HTTP/HTTPS 流量；
+/// 若两者皆非，则遵循 reqwest 默认行为（自动读取系统环境变量代理）。
+pub(crate) fn build_timed_client_with_proxy(
     builder: reqwest::ClientBuilder,
     timeout: std::time::Duration,
+    proxy_url: Option<&str>,
+    no_proxy: bool,
 ) -> reqwest::Client {
-    match builder.timeout(timeout).build() {
+    let mut builder = builder.timeout(timeout);
+
+    if no_proxy {
+        builder = builder.no_proxy();
+    } else if let Some(p) = proxy_url {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            let normalized =
+                crate::proxy::normalize_proxy_url(trimmed).unwrap_or_else(|| trimmed.to_string());
+            match reqwest::Proxy::all(&normalized) {
+                Ok(proxy) => {
+                    builder = builder.proxy(proxy);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[transly] 配置代理地址 '{normalized}' 失败: {err}。已退化为默认连接策略。"
+                    );
+                }
+            }
+        }
+    }
+
+    match builder.build() {
         Ok(client) => client,
         Err(err) => {
             eprintln!(
@@ -92,6 +115,14 @@ pub(crate) fn build_timed_client(
             reqwest::Client::new()
         }
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn build_timed_client(
+    builder: reqwest::ClientBuilder,
+    timeout: std::time::Duration,
+) -> reqwest::Client {
+    build_timed_client_with_proxy(builder, timeout, None, false)
 }
 
 /// 翻译引擎能力描述符

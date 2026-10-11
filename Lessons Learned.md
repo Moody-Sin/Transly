@@ -558,3 +558,31 @@
 1. **IPC 调用的物理边界与逻辑边界必须分清**：Rust 端的 `tauri::command` 只负责返回 `Result<T, E>`（底层物理 IPC 映射为 Promise resolve `T` 或 reject `E`）；业务层的 `{ status, data/error }` 结构由前端生成代码 `typedError` 在接收后封装。
 2. **测试基座契约必须忠实模拟底层运行时**：任何模拟 `window.__TAURI_INTERNALS__.invoke` 的桩，必须直接 resolve 裸数据 `T` 或 reject 错误 `E`，严禁越俎代庖自己加一层业务包装。
 3. **事件系统必须实现 `transformCallback` 契约**：使 Mock 环境在真实无头浏览器中具备完全一致的事件分发能力。
+
+---
+
+## 40. 平台原生代理探测缺失与公共翻译端点风控拦截引发级联挂死
+
+### 现象与问题
+- Windows 系统代理（Clash / v2rayN 等通过 WinINet 设置）写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`，通常不自动同步到操作系统的环境变量 `HTTP_PROXY` / `HTTPS_PROXY`。
+- Rust `reqwest` 在 Windows 下默认仅读取环境变量，不会主动查询系统注册表。国内直连 Google / DeepL / OpenAI 遭遇超时拦截时，单次请求超时 10s 叠加指数重试（10s + 200ms + 10s = 20.3s），30 项切批串行执行单批即可挂起近 3 分钟，整页 1000+ 项在扩展端串行排队近 100 分钟。
+- Google 翻译底层写死 `client=gtx`，该参数在代理出口 IP 上极易被 Google 触发 429 自动化脚本人机验证拦截；而官方 Chrome 扩展标识 `client=dict-chrome-ex` 返回相同数据结构且畅通无阻。
+- 扩展端 `sendBatchWithSplit` 在服务端返回 200 但内部项全部为 `failed` 时仍返回 `failedBatches: 0`，未将其计入失败批次，徽标维持正常蓝色 `0%`，且缺乏熔断机制，让用户直观误判为“插件彻底假死”。
+
+### 经验与规程
+1. **平台适配层必须主动嗅探操作系统原生系统代理**：在 Windows 上通过注册表 `ProxyEnable` 与 `ProxyServer` 提取系统代理，并在构建 HTTP 客户端时注入，支持 auto / system / manual / none 四种模式以应对不同网络环境。
+2. **公共端点必须具备客户端标识容错与回退**：优先采用风控概率极低的官方扩展标识（`client=dict-chrome-ex`），并保留备用客户端轮询机制。
+3. **前端批次统计必须忠实反映项级状态并提供熔断机制**：单批全项失败必须计为失败批次，连续多批失败且成功数为 0 时立即触发快速熔断，将数十甚至上百分钟的无意义超时快速转化为清晰明确的即时用户报错。
+
+---
+
+## 41. Tauri 2 单文件产物打包必须通过 `tauri build --no-bundle` 而非裸 `cargo build --release`
+
+### 现象与问题
+- 若直接通过 `cargo build --release -p src-tauri` 编译单文件，Tauri 的 `build.rs` 缺少 Tauri CLI 注入的发布期环境上下文，不会将 `frontendDist: "../dist"` 静态产物冻结并嵌入可执行文件二进制中，而是退化为配置中的 `devUrl: http://localhost:5173`。
+- 用户在无开发服务器的环境中启动该单文件时，WebView2 窗口会尝试请求 `localhost:5173`，直接白屏报错：`嗯... 无法访问此页面，localhost 拒绝连接 (ERR_CONNECTION_REFUSED)`。
+- 从二进制大小看：缺少前端内嵌的伪 Release 版约为 20.1 MB，而完整内嵌前端资源的真单文件版约为 20.2 MB（相差嵌入的静态 Web 资产包）。
+
+### 经验与规程
+1. **单文件免安装便携版必须通过 `tauri build --no-bundle` 编译**：绝对禁止直接裸调 `cargo build --release` 打包。Tauri CLI 会确保执行 `beforeBuildCommand` 并将 `dist/` 资源完整打包内嵌，做到真正的离线独立单文件。
+2. **在项目脚本中固化该工作流**：在 `package.json` 中配置 `"build:portable": "tauri build --no-bundle"`，杜绝维护者因手敲 cargo 命令而产生缺少内嵌前端的破损产物。

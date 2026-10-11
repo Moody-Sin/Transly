@@ -128,6 +128,16 @@ impl OpenAIEngine {
         base_url: Option<String>,
         model: Option<String>,
     ) -> Self {
+        Self::new_with_proxy(api_key, base_url, model, None, false)
+    }
+
+    pub fn new_with_proxy(
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+        model: Option<String>,
+        proxy_url: Option<&str>,
+        no_proxy: bool,
+    ) -> Self {
         let base = base_url
             .map(|u| Self::normalize_base_url(&u))
             .filter(|u| !u.is_empty())
@@ -139,9 +149,11 @@ impl OpenAIEngine {
         let engine_id = format!("{prefix_id}:{}", style.as_str());
 
         Self {
-            client: super::build_timed_client(
+            client: super::build_timed_client_with_proxy(
                 Client::builder(),
                 std::time::Duration::from_secs(30),
+                proxy_url,
+                no_proxy,
             ),
             api_key: api_key.into(),
             base_url: base,
@@ -150,6 +162,11 @@ impl OpenAIEngine {
             engine_id,
             style,
         }
+    }
+
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.client = client;
+        self
     }
 
     pub fn set_style(&mut self, style: TranslationStyle) {

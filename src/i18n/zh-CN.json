@@ -181,6 +181,16 @@
     "preferredReplaceEngineDesc": "划词原地替换 (Alt+Shift+R) 时优先调用的引擎；失败时将直接报错提醒",
     "statusReplaceEngineSaved": "原地替换引擎已更新！",
     "statusReplaceEngineFailed": "原地替换引擎保存失败",
-    "replacementFailedPrefix": "划词原地替换失败"
+    "replacementFailedPrefix": "划词原地替换失败",
+    "proxyTitle": "网络代理设置",
+    "proxyDesc": "用于外部翻译服务 (Google / DeepL / OpenAI) 的请求代理策略",
+    "proxyModeAuto": "默认自动 (推荐)",
+    "proxyModeSystem": "系统代理",
+    "proxyModeManual": "手动配置",
+    "proxyModeNone": "不使用代理 (直连)",
+    "proxyUrlPlaceholder": "例如: http://127.0.0.1:7890",
+    "btnSaveProxy": "保存代理",
+    "statusProxySaved": "网络代理设置已保存并生效！",
+    "statusProxySaveFailed": "保存网络代理设置失败"
   }
 }

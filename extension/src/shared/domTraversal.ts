@@ -12,18 +12,18 @@
 
 export const TEXT_NODE = 3
 export const ELEMENT_NODE = 1
+export const DOCUMENT_FRAGMENT_NODE = 11
 
 /**
  * 深度遍历 `root` 下的所有元素，并下探进入**开放模式**的 Shadow DOM。
  *
  * 只处理 `open` 模式：`closed` 模式的 shadowRoot 从外部不可访问，本就无从遍历。
  *
- * @param root 遍历起点；非元素节点（如 document）会被直接跳过，
- *             调用方应传入 `document.body` 或某个元素。
+ * @param root 遍历起点；接受 Element 或 DocumentFragment（ShadowRoot），非容器节点会被直接跳过。
  */
 export function* iterateElementsDeep(root: Node): Generator<Element> {
-  if (root.nodeType !== ELEMENT_NODE) return
-  const all = Array.from((root as Element).querySelectorAll('*'))
+  if (root.nodeType !== ELEMENT_NODE && root.nodeType !== DOCUMENT_FRAGMENT_NODE) return
+  const all = Array.from((root as Element | DocumentFragment).querySelectorAll('*'))
   for (const el of all) {
     yield el
   }

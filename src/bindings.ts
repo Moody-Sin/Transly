@@ -51,6 +51,8 @@ export const commands = {
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
 	getServerStatus: () => __TAURI_INVOKE<ServerStatus>("get_server_status"),
 	getShortcutStatus: () => __TAURI_INVOKE<ShortcutStatusDto>("get_shortcut_status"),
+	getPreferredReplaceEngine: () => typedError<string, string>(__TAURI_INVOKE("get_preferred_replace_engine")),
+	savePreferredReplaceEngine: (engine: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_replace_engine", { engine })),
 };
 
 /* Types */

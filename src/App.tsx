@@ -103,6 +103,7 @@ export default function App() {
   // 静默失败会让用户看到「划词莫名其妙不工作」且毫无线索。
   const [shortcutConflict, setShortcutConflict] = useState<string>('')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
+  const [preferredReplaceEngine, setPreferredReplaceEngine] = useState('google')
   const [isFloatPinned, setIsFloatPinned] = useState(false)
   const [isCompareMode, setIsCompareMode] = useState(false)
   const [compareResults, setCompareResults] = useState<CompareItem[]>([])
@@ -359,6 +360,17 @@ export default function App() {
         console.warn('[Transly] 读取划词替换快捷键失败：', err)
       })
 
+    commands
+      .getPreferredReplaceEngine()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setPreferredReplaceEngine(res.data)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取划词替换首选引擎失败：', err)
+      })
+
     // 启动时也查一次快捷键注册结果。
     //
     // Alt+Shift+D / Alt+Shift+R 极易被其它软件占用，而注册发生在应用启动阶段。
@@ -430,12 +442,37 @@ export default function App() {
     }
   }, [isFloatWindow])
 
+  // 监听划词原地替换失败事件并弹出 Toast 告警提醒
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    listen<{ engine: string; message: string }>('transly://replacement-failed', (event) => {
+      showToastError(
+        `${t.settings.replacementFailedPrefix} [${event.payload.engine}]: ${event.payload.message}`,
+      )
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlisten = fn
+      })
+      .catch((err) => {
+        console.warn('[Transly] 原地替换错误事件订阅失败：', err)
+      })
+
+    return () => {
+      disposed = true
+      if (unlisten) unlisten()
+    }
+  }, [t])
+
   // 迷你悬浮窗 Escape 键极速关闭交互
   useEffect(() => {
     if (!isFloatWindow) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        getCurrentWindow().hide()
+        getCurrentWindow()
+          .hide()
+          .catch((err) => console.warn('[Transly] 隐藏浮窗失败：', err))
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -615,6 +652,23 @@ export default function App() {
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusShortcutFailed,
+      )
+    }
+  }
+
+  const handleSavePreferredReplaceEngine = async (val: string) => {
+    setPreferredReplaceEngine(val)
+    try {
+      const res = await commands.savePreferredReplaceEngine(val)
+      if (res.status === 'ok') {
+        setSaveStatus(t.settings.statusReplaceEngineSaved)
+        setTimeout(() => setSaveStatus(null), 2000)
+      } else {
+        setSaveStatus(res.error)
+      }
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusReplaceEngineFailed,
       )
     }
   }
@@ -1548,6 +1602,28 @@ export default function App() {
                   onSave={handleSaveReplaceShortcut}
                   t={t}
                 />
+              </div>
+
+              {/* 划词原地替换首选引擎设置 */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+                <div>
+                  <div className="font-medium text-slate-700">
+                    {t.settings.preferredReplaceEngine}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {t.settings.preferredReplaceEngineDesc}
+                  </div>
+                </div>
+                <select
+                  value={preferredReplaceEngine}
+                  onChange={(e) => handleSavePreferredReplaceEngine(e.target.value)}
+                  className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none"
+                >
+                  <option value="google">{t.translation.engineGoogle}</option>
+                  <option value="deepl">{t.translation.engineDeepl}</option>
+                  <option value="deepseek">{t.translation.engineDeepseek}</option>
+                  <option value="openai">{t.translation.engineOpenai}</option>
+                </select>
               </div>
 
               {/* LLM 风格偏好设置 */}

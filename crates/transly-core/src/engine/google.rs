@@ -255,19 +255,19 @@ impl TranslateEngine for GoogleWebEngine {
             .await
     }
 
-    async fn translate_batch(
+    async fn translate_batch_tolerant(
         &self,
         requests: &[TranslationRequest],
-    ) -> Result<Vec<TranslationResponse>> {
+    ) -> Vec<Result<TranslationResponse>> {
         if requests.is_empty() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
         if requests.len() == 1 {
-            return Ok(vec![self.translate(&requests[0]).await?]);
+            return vec![self.translate(&requests[0]).await];
         }
 
-        // 使用受控并发（并发度 4）并发执行单项翻译，避免串行阻塞过慢
+        // 使用受控并发（并发度 4）并发执行单项翻译，保持故障隔离且避免串行阻塞过慢
         let chunk_size = 4;
         let mut all_results = Vec::with_capacity(requests.len());
 
@@ -275,11 +275,19 @@ impl TranslateEngine for GoogleWebEngine {
             let futures: Vec<_> = chunk.iter().map(|req| self.translate(req)).collect();
             let chunk_results = futures::future::join_all(futures).await;
             for res in chunk_results {
-                all_results.push(res?);
+                all_results.push(res);
             }
         }
 
-        Ok(all_results)
+        all_results
+    }
+
+    async fn translate_batch(
+        &self,
+        requests: &[TranslationRequest],
+    ) -> Result<Vec<TranslationResponse>> {
+        let tolerant = self.translate_batch_tolerant(requests).await;
+        tolerant.into_iter().collect()
     }
 }
 

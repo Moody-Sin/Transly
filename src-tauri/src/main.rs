@@ -268,13 +268,13 @@ fn main() {
             );
             match selection_reg {
                 Ok(()) => {
-                    selection_slot.set_ok();
+                    selection_slot.set_translate_ok();
                 }
                 Err(err) => {
                     eprintln!(
                         "[Shortcut Warning] 划词浮窗快捷键 {selection_accel} 注册失败：{err}"
                     );
-                    selection_slot.set_failed(format!("{selection_accel}: {err}"));
+                    selection_slot.set_translate_failed(format!("{selection_accel}: {err}"));
                 }
             }
 
@@ -298,9 +298,16 @@ fn main() {
                     }
                 },
             );
-            if let Err(err) = replace_reg {
-                eprintln!("[Shortcut Warning] 划词原地替换快捷键 {replace_accel} 注册失败：{err}");
-                replace_slot.set_failed(format!("{replace_accel}: {err}"));
+            match replace_reg {
+                Ok(()) => {
+                    replace_slot.set_replace_ok();
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[Shortcut Warning] 划词原地替换快捷键 {replace_accel} 注册失败：{err}"
+                    );
+                    replace_slot.set_replace_failed(format!("{replace_accel}: {err}"));
+                }
             }
 
             // 启动后台剪贴板变动监听任务

@@ -71,6 +71,12 @@ impl TranslationCache {
             "#,
         )?;
 
+        // 针对旧版本（v0.1 / v0.2）SQLite 文件执行幂等迁移，补充缺失的 match_case 列
+        let _ = writer.execute(
+            "ALTER TABLE glossary ADD COLUMN match_case INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
+
         // 读连接独立打开，专供高频非阻塞并发查询（WAL 模式下完全不阻塞写操作）
         let reader = Connection::open_with_flags(
             p,
@@ -795,5 +801,49 @@ mod tests {
         // 删除设置
         cache.delete_setting("custom_shortcut").unwrap();
         assert_eq!(cache.get_setting("custom_shortcut").unwrap(), None);
+    }
+
+    #[test]
+    fn test_migrate_legacy_glossary_table_adds_match_case() {
+        let dir = std::env::temp_dir().join(format!(
+            "transly_test_legacy_glossary_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db_path = dir.join("legacy_cache.db");
+
+        // 1. 模拟旧版本（缺少 match_case 列）的 SQLite 数据库
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE glossary (
+                    source_term TEXT PRIMARY KEY,
+                    target_term TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                INSERT INTO glossary VALUES ('apple', '苹果', 1000);
+                "#,
+            )
+            .unwrap();
+        }
+
+        // 2. 用新版本 TranslationCache 打开，验证自动迁移 match_case 列
+        let cache = TranslationCache::new(&db_path).unwrap();
+        let terms = cache.get_all_glossary_terms().unwrap();
+        assert_eq!(terms.len(), 1);
+        assert_eq!(terms[0], ("apple".to_string(), "苹果".to_string(), true));
+
+        // 3. 验证新插入带 match_case 的词条
+        cache.set_glossary_term("banana", "香蕉", false).unwrap();
+        let updated = cache.get_all_glossary_terms().unwrap();
+        assert_eq!(updated.len(), 2);
+        assert_eq!(
+            updated[1],
+            ("banana".to_string(), "香蕉".to_string(), false)
+        );
+
+        drop(cache);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

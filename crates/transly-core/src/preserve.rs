@@ -31,17 +31,25 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
     let mut chars = input.char_indices().peekable();
 
     while let Some((idx, ch)) = chars.next() {
-        // 1. 检查多行代码块: ```
+        // 1. 检查多行代码块: ``` 及更长围栏 (支持 CommonMark 4+ 反引号长围栏)
         if ch == '`' && input[idx..].starts_with("```") {
             let start = idx;
+            let fence_len = input[start..].chars().take_while(|&c| c == '`').count();
+            let fence_pattern = "`".repeat(fence_len);
 
             // 用克隆迭代器扫描闭合围栏，绝不消耗主迭代器：
             // 未闭合时主迭代器必须仍停在围栏之后，后续正文才能继续参与翻译。
-            let scan = chars.clone();
+            // 必须跳过起始围栏剩余的反引号（因为主循环在 idx 处只取出了首个反引号）
+            let mut scan = chars.clone();
+            for _ in 1..fence_len {
+                scan.next();
+            }
+
             let mut end = None;
             for (i, c) in scan {
-                if c == '`' && input[i..].starts_with("```") {
-                    end = Some(i + 3);
+                if c == '`' && input[i..].starts_with(&fence_pattern) {
+                    let close_len = input[i..].chars().take_while(|&k| k == '`').count();
+                    end = Some(i + close_len);
                     break;
                 }
             }
@@ -279,5 +287,27 @@ mod tests {
         );
         let restored = restore_code_blocks(&translated, &preserved.stash);
         assert!(restored.starts_with("使用 `keepme` 与 `keepme`") || restored.contains("keepme"));
+    }
+
+    #[test]
+    fn test_stash_and_restore_four_backtick_code_block_with_nested_blocks() {
+        let input = "请查看包含嵌套的 Markdown 示例：\n````markdown\n这里是外层 4 反引号，内含：\n```rust\nfn nested() {}\n```\n结束内层\n````\n外部正文保持。";
+        let preserved = stash_code_blocks(input);
+        assert_eq!(preserved.stash.len(), 1);
+        assert!(preserved.text.contains("⟦TRANSLY_CODE_0⟧"));
+        assert!(!preserved.text.contains("fn nested()"));
+        assert!(preserved.text.contains("外部正文保持。"));
+
+        let translated = preserved
+            .text
+            .replace(
+                "请查看包含嵌套的 Markdown 示例：",
+                "Please check the Markdown example:",
+            )
+            .replace("外部正文保持。", "Outer text preserved.");
+        let restored = restore_code_blocks(&translated, &preserved.stash);
+        assert!(restored.starts_with("Please check the Markdown example:"));
+        assert!(restored.contains("````markdown\n这里是外层 4 反引号，内含：\n```rust\nfn nested() {}\n```\n结束内层\n````"));
+        assert!(restored.ends_with("Outer text preserved."));
     }
 }

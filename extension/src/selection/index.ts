@@ -507,7 +507,7 @@ document.addEventListener('mouseup', (e) => {
   iconHost.style.position = 'absolute'
   iconHost.style.zIndex = '2147483646'
   iconHost.style.left = `${window.scrollX + rect.right + 4}px`
-  iconHost.style.top = `${window.scrollY + rect.top - 20}px`
+  iconHost.style.top = `${Math.max(window.scrollY + 4, window.scrollY + rect.top - 20)}px`
 
   const iconShadow = iconHost.attachShadow({ mode: 'closed' })
   const btn = document.createElement('div')

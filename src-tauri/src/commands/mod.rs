@@ -1053,9 +1053,10 @@ pub async fn set_shortcut(
     .await
     .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string());
 
-    // 尝试注销旧快捷键（若与新快捷键不同）
+    // 尝试注销旧快捷键以及即将注册的键（防止用户未改动快捷键重复保存时触发 AlreadyRegistered 错误）
+    let _ = app.global_shortcut().unregister(old_shortcut.as_str());
     if old_shortcut != clean {
-        let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+        let _ = app.global_shortcut().unregister(clean);
     }
 
     // 立即注册新快捷键
@@ -1098,7 +1099,7 @@ pub async fn set_shortcut(
             );
         }
         let err_msg = format!("快捷键注册失败，可能按键格式不合法或被系统占用: {e}");
-        shortcut_slot.set_failed(err_msg.clone());
+        shortcut_slot.set_translate_failed(err_msg.clone());
         return Err(err_msg);
     }
 
@@ -1135,11 +1136,11 @@ pub async fn set_shortcut(
             );
         }
         let err_msg = format!("保存快捷键失败（已回滚到原快捷键）: {e}");
-        shortcut_slot.set_failed(err_msg.clone());
+        shortcut_slot.set_translate_failed(err_msg.clone());
         return Err(err_msg);
     }
 
-    shortcut_slot.set_ok();
+    shortcut_slot.set_translate_ok();
     Ok(())
 }
 
@@ -1192,8 +1193,9 @@ pub async fn set_replace_shortcut(
     .await
     .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string());
 
+    let _ = app.global_shortcut().unregister(old_shortcut.as_str());
     if old_shortcut != clean {
-        let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+        let _ = app.global_shortcut().unregister(clean);
     }
 
     let app_h = app.clone();
@@ -1228,7 +1230,7 @@ pub async fn set_replace_shortcut(
             );
         }
         let err_msg = format!("划词替换快捷键注册失败，可能按键格式不合法或被系统占用: {e}");
-        shortcut_slot.set_failed(err_msg.clone());
+        shortcut_slot.set_replace_failed(err_msg.clone());
         return Err(err_msg);
     }
 
@@ -1263,11 +1265,11 @@ pub async fn set_replace_shortcut(
             );
         }
         let err_msg = format!("保存快捷键失败（已回滚到原快捷键）: {e}");
-        shortcut_slot.set_failed(err_msg.clone());
+        shortcut_slot.set_replace_failed(err_msg.clone());
         return Err(err_msg);
     }
 
-    shortcut_slot.set_ok();
+    shortcut_slot.set_replace_ok();
     Ok(())
 }
 
@@ -1488,39 +1490,69 @@ pub struct ShortcutStatusDto {
 }
 
 /// 快捷键注册状态槽位。与 `ServerStatusSlot` 同构（Tauri 按 TypeId 存 state）。
+/// 分离维护划词翻译与划词原地替换的错误状态，避免二者状态相互覆盖。
 #[derive(Debug, Default)]
-pub struct ShortcutStatusSlot(pub std::sync::Mutex<Option<ShortcutStatusDto>>);
+pub struct ShortcutStatusSlot {
+    translate_error: std::sync::Mutex<Option<String>>,
+    replace_error: std::sync::Mutex<Option<String>>,
+}
 
 impl ShortcutStatusSlot {
-    pub fn set_ok(&self) {
-        self.set(ShortcutStatusDto {
-            ok: true,
-            reason: None,
-        });
-    }
-
-    pub fn set_failed(&self, reason: String) {
-        self.set(ShortcutStatusDto {
-            ok: false,
-            reason: Some(reason),
-        });
-    }
-
-    pub fn set(&self, status: ShortcutStatusDto) {
-        if let Ok(mut slot) = self.0.lock() {
-            *slot = Some(status);
+    pub fn set_translate_ok(&self) {
+        if let Ok(mut slot) = self.translate_error.lock() {
+            *slot = None;
         }
     }
 
+    pub fn set_translate_failed(&self, reason: String) {
+        if let Ok(mut slot) = self.translate_error.lock() {
+            *slot = Some(reason);
+        }
+    }
+
+    pub fn set_replace_ok(&self) {
+        if let Ok(mut slot) = self.replace_error.lock() {
+            *slot = None;
+        }
+    }
+
+    pub fn set_replace_failed(&self, reason: String) {
+        if let Ok(mut slot) = self.replace_error.lock() {
+            *slot = Some(reason);
+        }
+    }
+
+    pub fn set_ok(&self) {
+        self.set_translate_ok();
+        self.set_replace_ok();
+    }
+
+    pub fn set_failed(&self, reason: String) {
+        self.set_translate_failed(reason);
+    }
+
     pub fn get(&self) -> ShortcutStatusDto {
-        self.0
-            .lock()
-            .ok()
-            .and_then(|s| s.clone())
-            .unwrap_or(ShortcutStatusDto {
+        let t_err = self.translate_error.lock().ok().and_then(|g| g.clone());
+        let r_err = self.replace_error.lock().ok().and_then(|g| g.clone());
+
+        match (t_err, r_err) {
+            (None, None) => ShortcutStatusDto {
+                ok: true,
+                reason: None,
+            },
+            (Some(t), None) => ShortcutStatusDto {
                 ok: false,
-                reason: Some("快捷键尚未完成注册".to_string()),
-            })
+                reason: Some(t),
+            },
+            (None, Some(r)) => ShortcutStatusDto {
+                ok: false,
+                reason: Some(r),
+            },
+            (Some(t), Some(r)) => ShortcutStatusDto {
+                ok: false,
+                reason: Some(format!("{t}; {r}")),
+            },
+        }
     }
 }
 
@@ -1939,12 +1971,39 @@ mod tests {
     fn test_shortcut_status_slot_transitions() {
         let slot = ShortcutStatusSlot::default();
         let initial = slot.get();
-        assert!(!initial.ok);
+        assert!(initial.ok);
 
-        slot.set_failed("Alt+Shift+D: conflict".to_string());
+        slot.set_translate_failed("Alt+Shift+D: conflict".to_string());
         let failed = slot.get();
         assert!(!failed.ok);
         assert_eq!(failed.reason.as_deref(), Some("Alt+Shift+D: conflict"));
+
+        // 原地替换注册成功不应冲掉划词快捷键的失败
+        slot.set_replace_ok();
+        let still_failed = slot.get();
+        assert!(!still_failed.ok);
+        assert_eq!(
+            still_failed.reason.as_deref(),
+            Some("Alt+Shift+D: conflict")
+        );
+
+        // 原地替换也失败时应聚合两者的原因
+        slot.set_replace_failed("Alt+Shift+R: conflict".to_string());
+        let both_failed = slot.get();
+        assert!(!both_failed.ok);
+        assert_eq!(
+            both_failed.reason.as_deref(),
+            Some("Alt+Shift+D: conflict; Alt+Shift+R: conflict")
+        );
+
+        // 划词修复后只留原地替换失败
+        slot.set_translate_ok();
+        let replace_only = slot.get();
+        assert!(!replace_only.ok);
+        assert_eq!(
+            replace_only.reason.as_deref(),
+            Some("Alt+Shift+R: conflict")
+        );
 
         slot.set_ok();
         let ok = slot.get();

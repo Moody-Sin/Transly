@@ -145,6 +145,8 @@ impl Glossary {
         // 提取全部重叠候选区间，并在业务层后验过滤 match_case 与 word_boundary。
         // 随后在候选池中执行贪婪 Leftmost-Longest 匹配，杜绝 LeftmostLongest
         // 内部提前剪枝导致同形大小写敏感词或子词被静默吞掉的缺陷。
+        // 注：AhoCorasick 的大小写折叠基于标准 ASCII 字节折叠，非 ASCII 拉丁扩展或西里尔大写
+        // 建议用户在录入术语时开启精准匹配或录入对应变体。
         let ac = AhoCorasick::builder()
             .match_kind(MatchKind::Standard)
             .ascii_case_insensitive(true)

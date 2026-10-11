@@ -100,9 +100,10 @@ export default function App() {
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
   // 快捷键注册失败原因（如被其他软件占用）。Alt+Shift+D/R 极易冲突，
-  // 静默失败会让用户看到「划词莫名其妙不工作」且毫无线索。
+  // 静默失败会让用户看到「划词莫名其妙不工作」且毫无线索。独立维护两者的冲突提示。
   const [shortcutConflict, setShortcutConflict] = useState<string>('')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
+  const [replaceShortcutConflict, setReplaceShortcutConflict] = useState<string>('')
   const [preferredReplaceEngine, setPreferredReplaceEngine] = useState('google')
   const [isFloatPinned, setIsFloatPinned] = useState(false)
   const [isCompareMode, setIsCompareMode] = useState(false)
@@ -379,7 +380,16 @@ export default function App() {
     commands
       .getShortcutStatus()
       .then((status) => {
-        setShortcutConflict(status.ok ? '' : (status.reason ?? ''))
+        if (status.ok || !status.reason) {
+          setShortcutConflict('')
+          setReplaceShortcutConflict('')
+          return
+        }
+        const parts = status.reason.split('; ')
+        const normalConflict = parts.find((p) => p.includes('Alt+Shift+D'))
+        const replaceConflict = parts.find((p) => p.includes('Alt+Shift+R'))
+        setShortcutConflict(normalConflict || (!replaceConflict ? status.reason : ''))
+        setReplaceShortcutConflict(replaceConflict || '')
       })
       .catch((err) => {
         console.warn('[Transly] 读取快捷键注册状态失败：', err)
@@ -655,7 +665,13 @@ export default function App() {
         // 保存成功不等于注册成功：组合键可能被其它软件占用。
         // 向后端确认真实注册结果，失败时把原因摆到界面上。
         const status = await commands.getShortcutStatus()
-        setShortcutConflict(status.ok ? '' : (status.reason ?? ''))
+        if (status.ok || !status.reason) {
+          setShortcutConflict('')
+        } else {
+          const parts = status.reason.split('; ')
+          const target = parts.find((p) => p.includes(customShortcut.trim()))
+          setShortcutConflict(target || status.reason)
+        }
       } else {
         setSaveStatus(res.error)
       }
@@ -673,7 +689,13 @@ export default function App() {
         setSaveStatus(t.settings.statusShortcutSaved)
         setTimeout(() => setSaveStatus(null), 2000)
         const status = await commands.getShortcutStatus()
-        setShortcutConflict(status.ok ? '' : (status.reason ?? ''))
+        if (status.ok || !status.reason) {
+          setReplaceShortcutConflict('')
+        } else {
+          const parts = status.reason.split('; ')
+          const target = parts.find((p) => p.includes(customReplaceShortcut.trim()))
+          setReplaceShortcutConflict(target || status.reason)
+        }
       } else {
         setSaveStatus(res.error)
       }
@@ -1634,6 +1656,11 @@ export default function App() {
                   onSave={handleSaveReplaceShortcut}
                   t={t}
                 />
+                {replaceShortcutConflict && (
+                  <div role="alert" className="text-[11px] text-amber-700 dark:text-amber-400">
+                    {t.settings.shortcutRegisterFailed}: {replaceShortcutConflict}
+                  </div>
+                )}
               </div>
 
               {/* 划词原地替换首选引擎设置 */}

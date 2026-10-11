@@ -532,3 +532,15 @@
 ### 经验与规程
 1. **所有异步注册操作必须配备 `let disposed = false` 守卫**：清理函数置 `disposed = true`，Promise 回调中若检测到已销毁则立即执行注销。
 2. 凡涉及跨窗口全局广播的事件，前端监听回调首行必须严格判断窗口标签（如 `if (isFloatWindow) return`），防止多窗口重复弹出通知与无效重绘。
+
+---
+
+## 38. `CREATE TABLE IF NOT EXISTS` 无法自动演进既有表字段导致旧版本数据库升级故障
+
+### 现象与问题
+- `CREATE TABLE IF NOT EXISTS` 仅在表完全不存在时生效。若后续版本向已有表（如 `glossary`）新增字段（如 `match_case`），旧版本已有本地数据库的用户升级后该表被跳过建表。
+- 随后执行包含新列的 `SELECT` 或 `INSERT` 会抛出 `rusqlite::Error: no such column: match_case`，并在启动加载时静默失效，导致旧用户的持久化数据功能异常。
+
+### 经验与规程
+1. **涉及已有表字段新增时，必须在建表语句后补充幂等列迁移**：使用 `ALTER TABLE ... ADD COLUMN`（配合错误捕获或 `PRAGMA table_info` 校验），确保旧库在打开瞬间无缝补齐字段。
+2. **编写跨版本升级单元测试**：显式构造一个无新字段的旧版 SQLite 数据库文件，使用新版缓存管理器打开并验证读写与默认值的正确性。

@@ -619,7 +619,7 @@ pub fn trigger_selection_replacement(
 ) {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
     use std::sync::atomic::Ordering;
-    use tauri::Emitter;
+    use tauri::{Emitter, Manager};
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     tauri::async_runtime::spawn(async move {
@@ -696,28 +696,22 @@ pub fn trigger_selection_replacement(
         .await
         .unwrap_or_else(|_| "google".to_string());
 
-        let active_engine = deps.pool.get_engine(&preferred_engine).await;
+        let active_engine = deps.pool.get_raw_engine(&preferred_engine).await;
 
-        // 优先查缓存
+        // 优先查缓存（仅查询首选引擎专属缓存，绝不跨引擎命中 Google 降级缓存）
         let mut final_text = None;
         if cache_enabled {
             let cache_ref = deps.cache.clone();
-            let engine_clone = active_engine.clone();
+            let eng_id = active_engine.id().to_string();
             let t = clean.to_string();
             let tl = target_lang.clone();
             let hit = tokio::task::spawn_blocking(move || {
-                transly_core::lookup_cache_with_fallback(
-                    &cache_ref,
-                    engine_clone.as_ref(),
-                    &t,
-                    "auto",
-                    &tl,
-                )
+                cache_ref.get(&t, "auto", &tl, &eng_id).unwrap_or(None)
             })
             .await
             .unwrap_or(None);
 
-            if let Some((cached_text, _used_engine)) = hit {
+            if let Some(cached_text) = hit {
                 let g = deps.glossary.read().await;
                 final_text = Some(g.apply(&cached_text));
             }
@@ -735,6 +729,33 @@ pub fn trigger_selection_replacement(
 
                 match active_engine.translate(&req).await {
                     Ok(res) => {
+                        // 防御性校验：若仍为降级结果，坚决不静默覆盖选区
+                        if res.engine.ends_with("(fallback)") {
+                            let e_msg = format!(
+                                "所选引擎 {} 暂时不可用，已拦截静默降级",
+                                active_engine.id()
+                            );
+                            eprintln!("[Selection Replacement Blocked] {e_msg}");
+                            let _ = handle.emit(
+                                "transly://replacement-failed",
+                                ReplacementFailedPayload {
+                                    engine: active_engine.id().to_string(),
+                                    message: e_msg,
+                                },
+                            );
+                            if let Some(float_win) = handle.get_webview_window("float") {
+                                place_float_near_cursor(&float_win);
+                                let _ = float_win.show();
+                            }
+                            let current = handle.clipboard().read_text().ok();
+                            if current.as_deref() == Some(clean) {
+                                if let Some(old) = old_clipboard {
+                                    let _ = handle.clipboard().write_text(old);
+                                }
+                            }
+                            return;
+                        }
+
                         let restored =
                             transly_core::restore_code_blocks(&res.text, &preserved.stash);
                         let cache_target_engine = res.actual_engine().to_string();
@@ -769,9 +790,17 @@ pub fn trigger_selection_replacement(
                                 message: e.to_string(),
                             },
                         );
-                        // 翻译失败安全还原用户原剪贴板，避免将选区文本误留为剪贴板数据
-                        if let Some(old) = old_clipboard {
-                            let _ = handle.clipboard().write_text(old);
+                        if let Some(float_win) = handle.get_webview_window("float") {
+                            place_float_near_cursor(&float_win);
+                            let _ = float_win.show();
+                        }
+                        // 校验当前剪贴板是否仍为第一阶段模拟复制的选区原文：
+                        // 若网络请求耗时期间用户在其它应用复制了新内容，则放弃还原，杜绝将用户的新复制内容冲掉。
+                        let current = handle.clipboard().read_text().ok();
+                        if current.as_deref() == Some(clean) {
+                            if let Some(old) = old_clipboard {
+                                let _ = handle.clipboard().write_text(old);
+                            }
                         }
                         return;
                     }

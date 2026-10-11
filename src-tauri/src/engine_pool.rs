@@ -10,6 +10,7 @@ pub type SecretGetter = Arc<dyn Fn(&str) -> anyhow::Result<String> + Send + Sync
 pub struct EnginePool {
     default_engine: Arc<dyn TranslateEngine>,
     cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
+    raw_cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
     secret_getter: Option<SecretGetter>,
 }
 
@@ -19,6 +20,7 @@ impl EnginePool {
         Self {
             default_engine: google,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
         }
     }
@@ -33,6 +35,7 @@ impl EnginePool {
         Self {
             default_engine: google,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: Some(getter),
         }
     }
@@ -47,12 +50,39 @@ impl EnginePool {
         Self {
             default_engine,
             cache: Arc::new(RwLock::new(HashMap::new())),
+            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
         }
     }
 
     pub fn default_engine(&self) -> Arc<dyn TranslateEngine> {
         self.default_engine.clone()
+    }
+
+    /// 获取不带 Fallback 降级包装的原生引擎实例。
+    /// 专用于划词原地替换等对结果质量要求严苛、禁止静默隐蔽降级的场景。
+    pub async fn get_raw_engine(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
+        let id_clean = engine_id.trim().to_lowercase();
+        if id_clean.is_empty() || id_clean == "google" || id_clean == "google_web" {
+            return self.default_engine.clone();
+        }
+
+        {
+            let map = self.raw_cache.read().await;
+            if let Some(engine) = map.get(&id_clean) {
+                return engine.clone();
+            }
+        }
+
+        let created = self.create_raw_engine_blocking(&id_clean).await;
+
+        let mut map = self.raw_cache.write().await;
+        if let Some(engine) = map.get(&id_clean) {
+            return engine.clone();
+        }
+
+        map.insert(id_clean, created.clone());
+        created
     }
 
     /// 获取或按需复用创建引擎实例（已配置 Fallback 降级）
@@ -84,7 +114,7 @@ impl EnginePool {
         created
     }
 
-    async fn create_engine_blocking(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
+    async fn create_raw_engine_blocking(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
         let id = engine_id.to_string();
         let fallback = self.default_engine.clone();
         let custom_getter = self.secret_getter.clone();
@@ -101,8 +131,7 @@ impl EnginePool {
             match id.as_str() {
                 "deepl" => {
                     let key = get_key("deepl");
-                    let deepl = Arc::new(DeepLEngine::new(key));
-                    Arc::new(FallbackEngine::new(deepl, fallback)) as Arc<dyn TranslateEngine>
+                    Arc::new(DeepLEngine::new(key)) as Arc<dyn TranslateEngine>
                 }
                 "openai" | "deepseek" => {
                     let key = get_key(&id);
@@ -139,7 +168,7 @@ impl EnginePool {
                     } else {
                         Arc::new(OpenAIEngine::new(key, base_url, model).with_style(style))
                     };
-                    Arc::new(FallbackEngine::new(llm, fallback)) as Arc<dyn TranslateEngine>
+                    llm
                 }
                 _ => fallback,
             }
@@ -148,11 +177,24 @@ impl EnginePool {
         .unwrap_or(self.default_engine.clone())
     }
 
+    async fn create_engine_blocking(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
+        let raw = self.get_raw_engine(engine_id).await;
+        let id_clean = engine_id.trim().to_lowercase();
+        if id_clean == "deepl" || id_clean == "openai" || id_clean == "deepseek" {
+            Arc::new(FallbackEngine::new(raw, self.default_engine.clone()))
+        } else {
+            raw
+        }
+    }
+
     /// 密钥更新或删除时，使对应引擎缓存失效。
     /// 归一化规则必须与 `get_engine` 一致，否则会漏删缓存导致旧密钥被继续复用。
     pub async fn invalidate(&self, engine_id: &str) {
+        let id = engine_id.trim().to_lowercase();
         let mut map = self.cache.write().await;
-        map.remove(&engine_id.trim().to_lowercase());
+        map.remove(&id);
+        let mut raw_map = self.raw_cache.write().await;
+        raw_map.remove(&id);
     }
 }
 
@@ -190,5 +232,23 @@ pub mod testing {
                 engine: self.id().to_string(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_get_raw_engine_isolation_and_fallback_contrast() {
+        let pool = EnginePool::new();
+        let fallback_wrapped = pool.get_engine("deepl").await;
+        assert_eq!(
+            fallback_wrapped.capabilities().fallback_engine,
+            Some("google_web".to_string())
+        );
+
+        let raw_engine = pool.get_raw_engine("deepl").await;
+        assert_eq!(raw_engine.capabilities().fallback_engine, None);
     }
 }

@@ -359,7 +359,11 @@ async function runTests() {
   } finally {
     if (context) await context.close()
     server.close()
-    fs.rmSync(USER_DATA_DIR, { recursive: true, force: true })
+    try {
+      fs.rmSync(USER_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    } catch {
+      // 容忍 Windows 系统对临时目录锁释放的微小延迟
+    }
   }
 }
 

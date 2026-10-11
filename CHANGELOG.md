@@ -7,6 +7,8 @@
 
 ## [未发布]
 
+## [0.3.0] - 2026-10-11
+
 ### 安全
 
 - **本地服务缺少 `Host` 头校验，DNS Rebinding 可窃取配对 Token (P0)**：唯一防线是 CORS 的 `AllowOrigin` 谓词，而 **CORS 不是服务端访问控制**——攻击者把域名 A 记录 TTL 设为 0 指向 `127.0.0.1` 后，恶意页面与本机服务同源，浏览器不发预检也不校验 CORS。`/pair/request` 为免鉴权握手端点，可被完整利用：诱导用户点「允许」即交出 Bearer Token，随后可任意消耗用户付费的翻译额度。现新增 `host_guard` 中间件（位于 CORS 之外），仅接受 `Host` 为 `127.0.0.1` / `localhost` / `[::1]`（含端口与 IPv6 字面量解析），其余一律 403；配套 2 项测试，并让既有 20 处请求构造携带合法 `Host`（此前全部省略，等于把被测防线绕过去）。
@@ -334,7 +336,8 @@
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.2.1...HEAD
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Moody-Sin/Transly/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Moody-Sin/Transly/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Moody-Sin/Transly/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Moody-Sin/Transly/releases/tag/v0.1.0

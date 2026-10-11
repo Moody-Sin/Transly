@@ -17,6 +17,7 @@
 - **`%APPDATA%` 为漫游目录，隐私数据会被同步出本机 (P2)**：域环境下翻译历史与自建术语库会被组策略同步到其它机器与备份介质，与「本地优先、零上报」承诺冲突。现改用 `%LOCALAPPDATA%`，并新增漫游目录一次性迁移（幂等、不覆盖），避免升级丢数据。
 
 ### 优化与增强
+- **桌面端单文件免解压免安装便携版支持 (P1)**：在 `src-tauri/src/storage.rs` 中引入智能便携模式判定（支持可执行文件名包含 `portable`、同级 `portable.flag` 标记文件、同级 `data/` 目录、`--portable` 命令行参数及 `TRANSLY_PORTABLE` 环境变量），便携模式下数据隔离保存在程序同级 `./data` 目录中，实现数据随身携带；同级目录不可写时平滑安全降级至系统标准目录。在 GitHub Actions 发布流（`.github/workflows/release.yml`）中自动提取并发布独立的 Windows 单文件免安装可执行程序 `Transly-Portable-windows-x64.exe`，用户下载后无需解压、无需安装向导，双击直接运行。
 - **LLM 翻译风格与持久化缓存隔离**：`OpenAIEngine` 实例标识与响应的实际引擎标识接入 `TranslationStyle` 后缀（如 `openai:gpt-4o-mini:academic`），彻底解决切换翻译风格后被旧通用风格缓存劫持的缺陷；添加独立隔离命中单测。
 - **SSE 流式数据帧解析优化与多字节安全解码**：在 `OpenAIEngine::translate_stream` 中重构字节流处理算法，基于换行符执行游标单趟扫描，将原每行 `drain` 的 $\mathcal{O}(n^2)$ 内存搬移优化为单趟单次缩容，并在严格换行边界上执行安全 UTF-8 解码，杜绝跨网络 chunk 多字节字符被 `from_utf8_lossy` 截断损坏。
 - **OpenAI / DeepSeek 批量翻译受控并发加速**：在 `OpenAIEngine` 中原生实现 `translate_batch_tolerant`，基于 `futures::stream::buffer_unordered(5)` 实施 5 路并发受控异步分发。将原本 30 项整批 45 秒以上的长耗时降低至 8~10 秒内，并在单项失败时保持故障隔离；支持批量能力声明。

@@ -30,6 +30,89 @@ pub fn app_data_dir(identifier: &str) -> PathBuf {
     base.unwrap_or_else(std::env::temp_dir).join(identifier)
 }
 
+/// 解析应用实际使用的数据目录，支持便携模式智能判定。
+///
+/// 便携模式判定逻辑（满足其一即尝试激活）：
+/// 1. 环境变量 `TRANSLY_PORTABLE=1` 强制开启，`TRANSLY_PORTABLE=0` 强制关闭；
+/// 2. 命令行参数 `--portable`；
+/// 3. 二进制特征：文件名包含 `portable`（不区分大小写，如 `Transly-Portable-windows-x64.exe`）；
+/// 4. 同级标记：可执行文件同级目录存在 `portable.flag` 文件或已有 `data` 目录。
+///
+/// 若便携模式生效且同级目录可写，返回 `(exe_dir/data, true)`；
+/// 若便携目录不可写（例如只读介质、受限目录）或未处于便携模式，安全回退至平台系统目录 `(app_data_dir(identifier), false)`。
+pub fn resolve_data_dir(identifier: &str) -> (PathBuf, bool) {
+    let args: Vec<String> = std::env::args().collect();
+    let env_var = std::env::var("TRANSLY_PORTABLE").ok();
+    let current_exe = std::env::current_exe().ok();
+
+    resolve_data_dir_internal(
+        identifier,
+        current_exe.as_deref(),
+        &args,
+        env_var.as_deref(),
+    )
+}
+
+pub fn resolve_data_dir_internal(
+    identifier: &str,
+    current_exe: Option<&Path>,
+    args: &[String],
+    env_override: Option<&str>,
+) -> (PathBuf, bool) {
+    let is_portable_intent = match env_override {
+        Some(v) if v == "1" || v.eq_ignore_ascii_case("true") => Some(true),
+        Some(v) if v == "0" || v.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
+    };
+
+    let should_try_portable = is_portable_intent.unwrap_or_else(|| {
+        if args.iter().any(|a| a == "--portable") {
+            return true;
+        }
+
+        if let Some(exe_path) = current_exe {
+            if let Some(name) = exe_path.file_name().and_then(|s| s.to_str()) {
+                if name.to_lowercase().contains("portable") {
+                    return true;
+                }
+            }
+            if let Some(parent) = exe_path.parent() {
+                if parent.join("portable.flag").is_file() || parent.join("data").is_dir() {
+                    return true;
+                }
+            }
+        }
+
+        false
+    });
+
+    if should_try_portable {
+        if let Some(exe_path) = current_exe {
+            if let Some(portable_dir) = try_resolve_portable_data_dir(exe_path) {
+                return (portable_dir, true);
+            }
+            eprintln!("便携数据目录不可写，已安全降级至系统标准数据目录");
+        }
+    }
+
+    (app_data_dir(identifier), false)
+}
+
+fn try_resolve_portable_data_dir(exe_path: &Path) -> Option<PathBuf> {
+    let exe_dir = exe_path.parent()?;
+    let data_dir = exe_dir.join("data");
+
+    if std::fs::create_dir_all(&data_dir).is_ok() {
+        let probe = data_dir.join(format!(".write_probe_{}", std::process::id()));
+        if std::fs::write(&probe, b"ok").is_ok() {
+            let _ = std::fs::remove_file(probe);
+            return Some(data_dir);
+        }
+    }
+
+    None
+}
+
 /// 把旧版漫游目录（`%APPDATA%/<identifier>`）下的缓存库迁移到本机目录。
 ///
 /// 与 `migrate_legacy_cache` 同理，术语库与翻译缓存同处一个 SQLite 文件，
@@ -247,6 +330,102 @@ mod tests {
         std::fs::create_dir_all(&new_dir).unwrap();
 
         assert!(!migrate_legacy_cache(&new_dir).unwrap());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_default_non_portable() {
+        let root = temp_dir("non_portable");
+        let exe = root.join("Transly.exe");
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &[], None);
+
+        assert!(!is_portable, "普通命名且无标记时必须是非便携模式");
+        assert_eq!(dir, app_data_dir("com.transly.desktop"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_portable_by_filename() {
+        let root = temp_dir("portable_name");
+        let exe = root.join("Transly-Portable-windows-x64.exe");
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &[], None);
+
+        assert!(is_portable, "文件名包含 portable 时应自动启用便携模式");
+        assert_eq!(dir, root.join("data"));
+        assert!(dir.is_dir(), "便携数据目录必须被自动创建");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_portable_by_flag_file() {
+        let root = temp_dir("portable_flag");
+        let exe = root.join("Transly.exe");
+        std::fs::write(root.join("portable.flag"), b"").unwrap();
+
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &[], None);
+
+        assert!(is_portable, "存在 portable.flag 时应自动启用便携模式");
+        assert_eq!(dir, root.join("data"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_portable_by_data_dir() {
+        let root = temp_dir("portable_data_dir");
+        let exe = root.join("Transly.exe");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &[], None);
+
+        assert!(is_portable, "存在 data 目录时应自动启用便携模式");
+        assert_eq!(dir, root.join("data"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_portable_by_cli_arg() {
+        let root = temp_dir("portable_arg");
+        let exe = root.join("Transly.exe");
+        let args = vec!["Transly.exe".to_string(), "--portable".to_string()];
+
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &args, None);
+
+        assert!(is_portable, "--portable 命令行参数必须启用便携模式");
+        assert_eq!(dir, root.join("data"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_env_override_disable() {
+        let root = temp_dir("portable_env_disable");
+        let exe = root.join("Transly-Portable.exe");
+
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &[], Some("0"));
+
+        assert!(
+            !is_portable,
+            "TRANSLY_PORTABLE=0 必须强制关闭便携模式（即使文件名包含 portable）"
+        );
+        assert_eq!(dir, app_data_dir("com.transly.desktop"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolve_data_dir_env_override_enable() {
+        let root = temp_dir("portable_env_enable");
+        let exe = root.join("Transly.exe");
+
+        let (dir, is_portable) =
+            resolve_data_dir_internal("com.transly.desktop", Some(&exe), &[], Some("1"));
+
+        assert!(is_portable, "TRANSLY_PORTABLE=1 必须强制开启便携模式");
+        assert_eq!(dir, root.join("data"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

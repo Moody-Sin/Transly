@@ -36,6 +36,7 @@ interface AnchorSnapshot {
   top: number
   left: number
   width: number
+  height: number
   scrollY: number
 }
 
@@ -244,9 +245,11 @@ function reposition() {
 
   const left = Math.min(Math.max(anchor.left, margin), Math.max(margin, vw - margin - width))
   const topInViewport = anchor.top - (window.scrollY - anchor.scrollY)
+  const anchorHeight = anchor.height || 0
 
-  let top = topInViewport + margin
-  // 选区下方放不下时翻到上方，上下都放不下则贴住可视区顶部
+  // 正常朝下放置：位于选区文字下方，避开正在阅读的选区，绝不遮盖选中文本
+  let top = topInViewport + anchorHeight + margin
+  // 选区下方放不下时翻到选区上方，上下都放不下则贴住可视区顶部
   if (top + height > vh - margin) {
     const above = topInViewport - margin - height
     top = above >= margin ? above : Math.max(margin, vh - margin - height)
@@ -343,6 +346,7 @@ function captureSelectionAnchor(): AnchorSnapshot | null {
     top: rect.top,
     left: rect.left,
     width: rect.width,
+    height: rect.height,
     scrollY: window.scrollY,
   }
 }
@@ -363,6 +367,7 @@ async function showSelectionTranslation(payload: {
     top: 0,
     left: document.documentElement.clientWidth - 380,
     width: 0,
+    height: 0,
     scrollY: window.scrollY,
   }
 

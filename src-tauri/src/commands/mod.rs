@@ -518,13 +518,14 @@ pub async fn set_cache_enabled(
     controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
-    // keyring 写入为同步阻塞 I/O，禁止占用主线程
+    let cache_setting_ref = cache.inner().clone();
+    let val = if enabled { "true" } else { "false" };
     tokio::task::spawn_blocking(move || {
-        crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
+        let _ = cache_setting_ref.set_setting("cache_enabled", val);
+        let _ = crate::secrets::delete_secret("cache_enabled");
     })
     .await
-    .map_err(|e| format!("配置写入任务调度异常: {e}"))?
-    .map_err(|e| format!("写入系统配置失败: {e}"))?;
+    .map_err(|e| format!("配置写入任务调度异常: {e}"))?;
 
     if enabled {
         controller.enable();
@@ -555,29 +556,38 @@ pub fn get_cache_enabled(
 pub async fn set_clipboard_monitor(
     enabled: bool,
     flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
-    // keyring 写入为同步阻塞 I/O，禁止占用主线程
+    let cache_ref = cache.inner().clone();
+    let val = if enabled { "true" } else { "false" };
     tokio::task::spawn_blocking(move || {
-        crate::secrets::set_secret(
-            "clipboard_monitor_enabled",
-            if enabled { "true" } else { "false" },
-        )
+        let _ = cache_ref.set_setting("clipboard_monitor_enabled", val);
+        let _ = crate::secrets::delete_secret("clipboard_monitor_enabled");
     })
     .await
-    .map_err(|e| format!("凭据写入任务调度异常: {e}"))?
-    .map_err(|e| format!("写入系统安全凭据失败: {e}"))?;
+    .map_err(|e| format!("配置保存调度异常: {e}"))?;
     flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_clipboard_monitor() -> bool {
-    // keyring 读取为同步阻塞 I/O，禁止占用主线程
-    tokio::task::spawn_blocking(|| crate::secrets::get_secret("clipboard_monitor_enabled"))
-        .await
-        .map(|res| res.map(|v| v == "true").unwrap_or(false))
-        .unwrap_or(false)
+pub async fn get_clipboard_monitor(app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let cache_ref = match app.try_state::<Arc<TranslationCache>>() {
+        Some(c) => c.inner().clone(),
+        None => return false,
+    };
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("clipboard_monitor_enabled")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("clipboard_monitor_enabled").ok())
+    })
+    .await
+    .map(|res| res.map(|v| v == "true").unwrap_or(false))
+    .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -687,14 +697,20 @@ pub fn trigger_selection_replacement(
         let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
         let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
 
-        let preferred_engine = tokio::task::spawn_blocking(|| {
-            crate::secrets::get_secret("preferred_replace_engine")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "google".to_string())
-        })
-        .await
-        .unwrap_or_else(|_| "google".to_string());
+        let preferred_engine = {
+            let cache_ref = deps.cache.clone();
+            tokio::task::spawn_blocking(move || {
+                cache_ref
+                    .get_setting("preferred_replace_engine")
+                    .ok()
+                    .flatten()
+                    .or_else(|| crate::secrets::get_secret("preferred_replace_engine").ok())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "google".to_string())
+            })
+            .await
+            .unwrap_or_else(|_| "google".to_string())
+        };
 
         let active_engine = deps.pool.get_raw_engine(&preferred_engine).await;
 
@@ -980,10 +996,16 @@ pub fn trigger_selection_translation(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_shortcut() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| {
-        crate::secrets::get_secret("custom_shortcut")
+pub async fn get_shortcut(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("custom_shortcut")
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_shortcut").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
     })
@@ -1000,6 +1022,7 @@ pub async fn set_shortcut(
     selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
     pending_slot: tauri::State<'_, Arc<PendingFloatRequests>>,
     shortcut_slot: tauri::State<'_, Arc<ShortcutStatusSlot>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -1008,10 +1031,14 @@ pub async fn set_shortcut(
         return Err("快捷键不能为空".to_string());
     }
 
-    // 读取当前生效的旧快捷键
-    let old_shortcut = tokio::task::spawn_blocking(|| {
-        crate::secrets::get_secret("custom_shortcut")
+    // 读取当前生效的旧快捷键（优先读取 SQLite，旧版回退 Keyring）
+    let cache_read = cache.inner().clone();
+    let old_shortcut = tokio::task::spawn_blocking(move || {
+        cache_read
+            .get_setting("custom_shortcut")
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_shortcut").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
     })
@@ -1067,14 +1094,12 @@ pub async fn set_shortcut(
         return Err(err_msg);
     }
 
-    // 持久化存储新快捷键。
-    //
-    // 注册在前、持久化在后：若持久化失败，进程内的新快捷键已生效、旧快捷键已注销，
-    // 而 keyring 里仍是旧值。用户会看到「保存失败」，重启后快捷键却回退了——
-    // 进程行为与持久化配置不一致。因此持久化失败时必须对称回滚到旧快捷键。
+    // 持久化存储新快捷键到 SQLite 设置表
     let to_save = clean.to_string();
+    let cache_write = cache.inner().clone();
     let persist_res = tokio::task::spawn_blocking(move || {
-        crate::secrets::set_secret("custom_shortcut", &to_save)
+        let _ = crate::secrets::delete_secret("custom_shortcut");
+        cache_write.set_setting("custom_shortcut", &to_save)
     })
     .await
     .map_err(|e| format!("快捷键调度异常: {e}"))?;
@@ -1112,10 +1137,16 @@ pub async fn set_shortcut(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_replace_shortcut() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| {
-        crate::secrets::get_secret("custom_replace_shortcut")
+pub async fn get_replace_shortcut(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("custom_replace_shortcut")
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_replace_shortcut").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
     })
@@ -1140,9 +1171,13 @@ pub async fn set_replace_shortcut(
         return Err("快捷键不能为空".to_string());
     }
 
-    let old_shortcut = tokio::task::spawn_blocking(|| {
-        crate::secrets::get_secret("custom_replace_shortcut")
+    let cache_ref = deps.cache.clone();
+    let old_shortcut = tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("custom_replace_shortcut")
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_replace_shortcut").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
     })
@@ -1190,8 +1225,10 @@ pub async fn set_replace_shortcut(
     }
 
     let to_save = clean.to_string();
+    let cache_write = deps.cache.clone();
     let persist_res = tokio::task::spawn_blocking(move || {
-        crate::secrets::set_secret("custom_replace_shortcut", &to_save)
+        let _ = crate::secrets::delete_secret("custom_replace_shortcut");
+        cache_write.set_setting("custom_replace_shortcut", &to_save)
     })
     .await
     .map_err(|e| format!("快捷键调度异常: {e}"))?;
@@ -1505,6 +1542,7 @@ pub async fn save_llm_config(
     base_url: Option<String>,
     model: Option<String>,
     pool: tauri::State<'_, Arc<EnginePool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
     let eng = engine.to_lowercase();
     if eng != "openai" && eng != "deepseek" {
@@ -1521,9 +1559,7 @@ pub async fn save_llm_config(
     // 允许任意 `http://` 意味着 API Key 可能以明文过网；
     // 唯一的例外是本地回环（Ollama / vLLM 等本机部署，不出网卡）。
     if !url_val.is_empty() {
-        let is_loopback = url_val.starts_with("http://127.0.0.1")
-            || url_val.starts_with("http://localhost")
-            || url_val.starts_with("http://[::1]");
+        let is_loopback = transly_core::OpenAIEngine::is_local_endpoint(&url_val);
         if !url_val.starts_with("https://") && !is_loopback {
             return Err(
                 "端点必须使用 https://（本地 Ollama 等本机服务可用 http://127.0.0.1 或 http://localhost）"
@@ -1532,17 +1568,22 @@ pub async fn save_llm_config(
         }
     }
 
+    let cache_ref = cache.inner().clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         if url_val.is_empty() {
+            let _ = cache_ref.delete_setting(&url_key);
             let _ = crate::secrets::delete_secret(&url_key);
         } else {
-            crate::secrets::set_secret(&url_key, &url_val)?;
+            cache_ref.set_setting(&url_key, &url_val)?;
+            let _ = crate::secrets::delete_secret(&url_key);
         }
 
         if model_val.is_empty() {
+            let _ = cache_ref.delete_setting(&model_key);
             let _ = crate::secrets::delete_secret(&model_key);
         } else {
-            crate::secrets::set_secret(&model_key, &model_val)?;
+            cache_ref.set_setting(&model_key, &model_val)?;
+            let _ = crate::secrets::delete_secret(&model_key);
         }
         Ok(())
     })
@@ -1556,7 +1597,10 @@ pub async fn save_llm_config(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_llm_config(engine: String) -> Result<LlmConfigDto, String> {
+pub async fn get_llm_config(
+    engine: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<LlmConfigDto, String> {
     let eng = engine.to_lowercase();
     if eng != "openai" && eng != "deepseek" {
         return Err("仅支持读取 OpenAI 或 DeepSeek 的端点与模型".to_string());
@@ -1564,13 +1608,20 @@ pub async fn get_llm_config(engine: String) -> Result<LlmConfigDto, String> {
 
     let url_key = format!("{eng}_base_url");
     let model_key = format!("{eng}_model");
+    let cache_ref = cache.inner().clone();
 
     tokio::task::spawn_blocking(move || {
-        let base_url = crate::secrets::get_secret(&url_key)
+        let base_url = cache_ref
+            .get_setting(&url_key)
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret(&url_key).ok())
             .filter(|s| !s.trim().is_empty());
-        let model = crate::secrets::get_secret(&model_key)
+        let model = cache_ref
+            .get_setting(&model_key)
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret(&model_key).ok())
             .filter(|s| !s.trim().is_empty());
         Ok(LlmConfigDto { base_url, model })
     })
@@ -1583,6 +1634,7 @@ pub async fn get_llm_config(engine: String) -> Result<LlmConfigDto, String> {
 pub async fn save_llm_style(
     style: String,
     pool: tauri::State<'_, Arc<EnginePool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
     let s = style.trim().to_lowercase();
     match s.as_str() {
@@ -1590,8 +1642,10 @@ pub async fn save_llm_style(
         _ => return Err("无效的 LLM 翻译风格".to_string()),
     }
 
+    let cache_ref = cache.inner().clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        crate::secrets::set_secret("llm_style", &s)?;
+        cache_ref.set_setting("llm_style", &s)?;
+        let _ = crate::secrets::delete_secret("llm_style");
         Ok(())
     })
     .await
@@ -1605,10 +1659,16 @@ pub async fn save_llm_style(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_preferred_replace_engine() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| {
-        crate::secrets::get_secret("preferred_replace_engine")
+pub async fn get_preferred_replace_engine(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("preferred_replace_engine")
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("preferred_replace_engine").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "google".to_string())
     })
@@ -1616,23 +1676,26 @@ pub async fn get_preferred_replace_engine() -> Result<String, String> {
     .map_err(|e| format!("读取划词原地替换引擎配置异常: {e}"))
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn save_preferred_replace_engine(engine: String) -> Result<(), String> {
+pub fn validate_preferred_replace_engine(engine: &str) -> Result<String, String> {
     let clean = engine.trim().to_lowercase();
     match clean.as_str() {
-        "google" | "google_web" | "deepl" | "deepseek" | "openai" => {}
-        _ => return Err("无效或不受支持的划词替换引擎".to_string()),
+        "google" | "google_web" => Ok("google".to_string()),
+        "deepl" | "deepseek" | "openai" => Ok(clean),
+        _ => Err("无效或不受支持的划词替换引擎".to_string()),
     }
+}
 
-    let to_save = if clean == "google_web" {
-        "google".to_string()
-    } else {
-        clean
-    };
-
+#[tauri::command]
+#[specta::specta]
+pub async fn save_preferred_replace_engine(
+    engine: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let to_save = validate_preferred_replace_engine(&engine)?;
+    let cache_ref = cache.inner().clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        crate::secrets::set_secret("preferred_replace_engine", &to_save)?;
+        cache_ref.set_setting("preferred_replace_engine", &to_save)?;
+        let _ = crate::secrets::delete_secret("preferred_replace_engine");
         Ok(())
     })
     .await
@@ -1644,10 +1707,16 @@ pub async fn save_preferred_replace_engine(engine: String) -> Result<(), String>
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_llm_style() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| {
-        crate::secrets::get_secret("llm_style")
+pub async fn get_llm_style(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("llm_style")
             .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("llm_style").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "general".to_string())
     })
@@ -1682,14 +1751,21 @@ pub async fn save_api_key(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn is_api_key_configured(engine: String) -> bool {
+pub async fn is_api_key_configured(engine: String, app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
     if validate_engine_name(&engine).is_err() {
         return false;
     }
-    // keyring 读取为同步阻塞 I/O，禁止占用主线程
+    let cache_opt = app
+        .try_state::<Arc<TranslationCache>>()
+        .map(|c| c.inner().clone());
     tokio::task::spawn_blocking(move || {
         if engine == "openai" {
-            if let Ok(url) = crate::secrets::get_secret("openai_base_url") {
+            let url_opt = cache_opt
+                .as_ref()
+                .and_then(|c| c.get_setting("openai_base_url").ok().flatten())
+                .or_else(|| crate::secrets::get_secret("openai_base_url").ok());
+            if let Some(url) = url_opt {
                 if transly_core::OpenAIEngine::is_local_endpoint(&url) {
                     return true;
                 }
@@ -1868,16 +1944,29 @@ mod tests {
         assert_eq!(ok.reason, None);
     }
 
-    #[tokio::test]
-    async fn test_save_preferred_replace_engine_validation() {
-        assert!(save_preferred_replace_engine("invalid_eng".into())
-            .await
-            .is_err());
-        assert!(save_preferred_replace_engine("".into()).await.is_err());
-        assert!(save_preferred_replace_engine("google".into()).await.is_ok());
+    #[test]
+    fn test_save_preferred_replace_engine_validation() {
+        assert!(validate_preferred_replace_engine("invalid_eng").is_err());
+        assert!(validate_preferred_replace_engine("").is_err());
         assert_eq!(
-            get_preferred_replace_engine().await,
+            validate_preferred_replace_engine("google"),
             Ok("google".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("google_web"),
+            Ok("google".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("deepl"),
+            Ok("deepl".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("deepseek"),
+            Ok("deepseek".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("openai"),
+            Ok("openai".to_string())
         );
     }
 }

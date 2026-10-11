@@ -12,6 +12,7 @@ pub struct EnginePool {
     cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
     raw_cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
     secret_getter: Option<SecretGetter>,
+    app_cache: Option<Arc<transly_core::TranslationCache>>,
 }
 
 impl EnginePool {
@@ -22,6 +23,19 @@ impl EnginePool {
             cache: Arc::new(RwLock::new(HashMap::new())),
             raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
+            app_cache: None,
+        }
+    }
+
+    /// 关联本地 SQLite 缓存管理器以优先读取配置，避免阻塞冷启动
+    pub fn with_cache(app_cache: Arc<transly_core::TranslationCache>) -> Self {
+        let google = Arc::new(GoogleWebEngine::new());
+        Self {
+            default_engine: google,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            raw_cache: Arc::new(RwLock::new(HashMap::new())),
+            secret_getter: None,
+            app_cache: Some(app_cache),
         }
     }
 
@@ -37,6 +51,7 @@ impl EnginePool {
             cache: Arc::new(RwLock::new(HashMap::new())),
             raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: Some(getter),
+            app_cache: None,
         }
     }
 
@@ -52,6 +67,7 @@ impl EnginePool {
             cache: Arc::new(RwLock::new(HashMap::new())),
             raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
+            app_cache: None,
         }
     }
 
@@ -118,14 +134,20 @@ impl EnginePool {
         let id = engine_id.to_string();
         let fallback = self.default_engine.clone();
         let custom_getter = self.secret_getter.clone();
+        let app_cache = self.app_cache.clone();
 
         tokio::task::spawn_blocking(move || {
             let get_key = |key_name: &str| -> String {
                 if let Some(ref getter) = custom_getter {
-                    getter(key_name).unwrap_or_default()
-                } else {
-                    crate::secrets::get_secret(key_name).unwrap_or_default()
+                    return getter(key_name).unwrap_or_default();
                 }
+                // 优先从本地 SQLite 设置表读取，消除对凭据库的阻塞查询
+                if let Some(ref c) = app_cache {
+                    if let Ok(Some(val)) = c.get_setting(key_name) {
+                        return val;
+                    }
+                }
+                crate::secrets::get_secret(key_name).unwrap_or_default()
             };
 
             match id.as_str() {

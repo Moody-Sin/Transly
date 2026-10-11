@@ -75,8 +75,8 @@ fn main() {
     }
     let glossary = Arc::new(RwLock::new(initial_glossary));
 
-    // 初始化全局共享引擎池（长连接复用）
-    let pool = Arc::new(EnginePool::new());
+    // 初始化全局共享引擎池（关联本地 SQLite 缓存管理器以秒级快速加载非敏感设置）
+    let pool = Arc::new(EnginePool::with_cache(cache.clone()));
     // 获取或生成用于本地扩展通信的 Bearer Token（失败则不启动服务，杜绝固定 Token 降级）
     let token = match secrets::get_or_create_server_token() {
         Ok(t) => Some(Arc::new(RwLock::new(t))),
@@ -93,8 +93,12 @@ fn main() {
     // 从仓库根执行 `cargo test` / `cargo run` 时会在仓库外凭空生成文件）。
     #[cfg(debug_assertions)]
     src_tauri::export_bindings().expect("Failed to export typescript bindings");
-    // 剪贴板监听开关（从持久化凭据库加载状态，默认关闭）
-    let initial_monitor = secrets::get_secret("clipboard_monitor_enabled")
+    // 剪贴板监听开关（优先从本地 SQLite 设置表加载，消除对系统凭据库的阻塞冷启动查询；旧版本迁移从 Keyring 回退）
+    let initial_monitor = cache
+        .get_setting("clipboard_monitor_enabled")
+        .ok()
+        .flatten()
+        .or_else(|| secrets::get_secret("clipboard_monitor_enabled").ok())
         .map(|v| v == "true")
         .unwrap_or(false);
     let clipboard_monitor_enabled = Arc::new(AtomicBool::new(initial_monitor));
@@ -107,8 +111,12 @@ fn main() {
     let selection_flag = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
 
-    // 缓存状态协调器（从系统凭据读取初始开关，纳入 generation 版本控制）
-    let initial_cache_enabled = secrets::get_secret("cache_enabled")
+    // 缓存状态协调器（优先从本地 SQLite 设置表读取初始开关，纳入 generation 版本控制）
+    let initial_cache_enabled = cache
+        .get_setting("cache_enabled")
+        .ok()
+        .flatten()
+        .or_else(|| secrets::get_secret("cache_enabled").ok())
         .map(|v| v != "false")
         .unwrap_or(true);
     let cache_controller = Arc::new(src_tauri::cache_controller::CacheController::new(
@@ -141,7 +149,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .manage(cache)
+        .manage(cache.clone())
         .manage(pool)
         .manage(glossary)
         .manage(clipboard_monitor_enabled)
@@ -220,14 +228,20 @@ fn main() {
                 }
             }
 
-            // 注册全局快捷键（默认 Alt+Shift+D 划词悬浮翻译，Alt+Shift+R 划词原地替换）
-            let active_shortcut = secrets::get_secret("custom_shortcut")
+            // 注册全局快捷键（优先读取本地 SQLite 设置，旧版从 Keyring 回退）
+            let active_shortcut = cache
+                .get_setting("custom_shortcut")
                 .ok()
+                .flatten()
+                .or_else(|| secrets::get_secret("custom_shortcut").ok())
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| commands::DEFAULT_SHORTCUT.to_string());
 
-            let active_replace_shortcut = secrets::get_secret("custom_replace_shortcut")
+            let active_replace_shortcut = cache
+                .get_setting("custom_replace_shortcut")
                 .ok()
+                .flatten()
+                .or_else(|| secrets::get_secret("custom_replace_shortcut").ok())
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| commands::DEFAULT_REPLACE_SHORTCUT.to_string());
 

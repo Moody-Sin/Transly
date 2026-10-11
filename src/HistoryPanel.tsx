@@ -104,14 +104,29 @@ export default function HistoryPanel({ t, locale }: Props) {
     speakText(text, lang)
   }
 
-  const handleExportJson = () => {
+  const fetchAllForExport = async (): Promise<CacheEntry[]> => {
+    // 导出时优先拉取全量历史数据（至多 100,000 条，与缓存维护上限对齐），杜绝仅导出首屏 50 条
+    try {
+      const res = await commands.getTranslationHistory(100_000, 0)
+      if (res.status === 'ok' && res.data.length > 0) {
+        return res.data
+      }
+    } catch {
+      // 降级使用当前已加载的 entries
+    }
+    return entries
+  }
+
+  const handleExportJson = async () => {
     if (entries.length === 0) return
-    const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' })
+    const allEntries = await fetchAllForExport()
+    const blob = new Blob([JSON.stringify(allEntries, null, 2)], { type: 'application/json' })
     downloadBlob(blob, `transly-history-${new Date().toISOString().slice(0, 10)}.json`)
   }
 
-  const handleExportCsv = () => {
+  const handleExportCsv = async () => {
     if (entries.length === 0) return
+    const allEntries = await fetchAllForExport()
     const header = [
       'Source Text',
       'Translated Text',
@@ -122,7 +137,7 @@ export default function HistoryPanel({ t, locale }: Props) {
     ]
     // 字段由 formatCsvRow 统一执行 RFC 4180 加引号 + 内部引号双写，此处仅负责公式注入防御
     const cell = (raw: string) => guardCsvFormulaInjection(raw)
-    const rows = entries.map((e) =>
+    const rows = allEntries.map((e) =>
       formatCsvRow([
         cell(e.source_text),
         cell(e.translated_text),

@@ -63,6 +63,11 @@ impl TranslationCache {
                 created_at INTEGER NOT NULL,
                 match_case INTEGER NOT NULL DEFAULT 1
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )?;
 
@@ -107,6 +112,11 @@ impl TranslationCache {
                 created_at INTEGER NOT NULL,
                 match_case INTEGER NOT NULL DEFAULT 1
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )?;
         Ok(Self {
@@ -118,7 +128,9 @@ impl TranslationCache {
 
     /// 在指定应用数据目录下打开持久化缓存，失败时依次回退到内存缓存。
     pub fn open_default(data_dir: impl AsRef<Path>) -> Arc<Self> {
-        let cache = Self::new(data_dir.as_ref().join("cache.db"))
+        let p = data_dir.as_ref();
+        let _ = std::fs::create_dir_all(p);
+        let cache = Self::new(p.join("cache.db"))
             .or_else(|_| Self::in_memory())
             .unwrap_or_else(|_| Self {
                 backend: CacheBackend::Memory {
@@ -361,6 +373,41 @@ impl TranslationCache {
                 "DELETE FROM glossary WHERE source_term = ?1",
                 params![source],
             )?;
+            Ok(())
+        })
+    }
+
+    /// 读取持久化应用配置（非敏感配置项）
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare_cached("SELECT value FROM app_settings WHERE key = ?1")?;
+            let mut rows = stmt.query(params![key])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(row.get(0)?))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    /// 保存或更新持久化应用配置
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.with_writer(|conn| {
+            conn.execute(
+                r#"
+                INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                "#,
+                params![key, value],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 删除持久化应用配置
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.with_writer(|conn| {
+            conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])?;
             Ok(())
         })
     }
@@ -723,5 +770,30 @@ mod tests {
 
         drop(reopened);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_app_settings_persistence_and_update() {
+        let cache = TranslationCache::in_memory().unwrap();
+        // 初始为空
+        assert_eq!(cache.get_setting("custom_shortcut").unwrap(), None);
+
+        // 写入并读取
+        cache.set_setting("custom_shortcut", "Alt+Shift+T").unwrap();
+        assert_eq!(
+            cache.get_setting("custom_shortcut").unwrap().as_deref(),
+            Some("Alt+Shift+T")
+        );
+
+        // 覆盖更新 (upsert)
+        cache.set_setting("custom_shortcut", "Alt+Shift+X").unwrap();
+        assert_eq!(
+            cache.get_setting("custom_shortcut").unwrap().as_deref(),
+            Some("Alt+Shift+X")
+        );
+
+        // 删除设置
+        cache.delete_setting("custom_shortcut").unwrap();
+        assert_eq!(cache.get_setting("custom_shortcut").unwrap(), None);
     }
 }

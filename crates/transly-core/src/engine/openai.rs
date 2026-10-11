@@ -96,8 +96,22 @@ impl OpenAIEngine {
     }
 
     pub fn is_local_endpoint(url: &str) -> bool {
-        let trimmed = url.trim().to_lowercase();
-        trimmed.contains("localhost") || trimmed.contains("127.0.0.1") || trimmed.contains("::1")
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        let to_parse = if !trimmed.contains("://") {
+            format!("http://{trimmed}")
+        } else {
+            trimmed.to_string()
+        };
+        if let Ok(parsed) = reqwest::Url::parse(&to_parse) {
+            if let Some(host) = parsed.host_str() {
+                let clean_host = host.trim_start_matches('[').trim_end_matches(']');
+                return matches!(clean_host, "localhost" | "127.0.0.1" | "::1");
+            }
+        }
+        false
     }
 
     pub fn normalize_base_url(url: &str) -> String {
@@ -539,6 +553,16 @@ mod tests {
         assert!(OpenAIEngine::is_local_endpoint("http://localhost:11434/v1"));
         assert!(OpenAIEngine::is_local_endpoint("http://127.0.0.1:11434/v1"));
         assert!(OpenAIEngine::is_local_endpoint("http://[::1]:11434/v1"));
+        // 伪装与恶意子域名必须严格被识别为非本地端点
+        assert!(!OpenAIEngine::is_local_endpoint(
+            "http://localhost.evil.com:11434"
+        ));
+        assert!(!OpenAIEngine::is_local_endpoint(
+            "http://evil.com/localhost"
+        ));
+        assert!(!OpenAIEngine::is_local_endpoint(
+            "http://127.0.0.1.evil.com"
+        ));
         assert!(!OpenAIEngine::is_local_endpoint(
             "https://api.openai.com/v1"
         ));

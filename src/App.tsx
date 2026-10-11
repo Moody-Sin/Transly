@@ -1076,7 +1076,7 @@ export default function App() {
                   <select
                     value={targetLang}
                     onChange={(e) => setTargetLang(e.target.value)}
-                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+                    className="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 shadow-sm focus:border-indigo-500 focus:outline-none cursor-pointer"
                   >
                     <option value="zh-CN">{t.languages['zh-CN']}</option>
                     <option value="en">{t.languages.en}</option>
@@ -1087,7 +1087,7 @@ export default function App() {
                   </select>
                   {runner.snapshot.effectiveTargetLang &&
                     runner.snapshot.effectiveTargetLang !== targetLang && (
-                      <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 border border-indigo-200">
+                      <span className="rounded bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800">
                         {t.translation.smartRoutingTo}:{' '}
                         {t.languages[
                           runner.snapshot.effectiveTargetLang as keyof typeof t.languages
@@ -1130,11 +1130,13 @@ export default function App() {
                 </div>
                 {!isCompareMode && (
                   <>
-                    <span className="text-xs text-slate-500">{t.translation.engineSelect}:</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {t.translation.engineSelect}:
+                    </span>
                     <select
                       value={engine}
                       onChange={(e) => setEngine(e.target.value)}
-                      className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm focus:border-indigo-500 focus:outline-none"
+                      className="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 shadow-sm focus:border-indigo-500 focus:outline-none cursor-pointer"
                     >
                       {ENGINE_OPTIONS.map(({ id, labelKey }) => (
                         <option key={id} value={id}>
@@ -1157,7 +1159,7 @@ export default function App() {
             </div>
 
             <div className="grid flex-1 grid-cols-2 gap-4">
-              <div className="flex flex-col rounded-lg border border-slate-200 bg-white p-3 shadow-sm focus-within:border-indigo-500">
+              <div className="flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 shadow-sm focus-within:border-indigo-500 dark:focus-within:border-indigo-400">
                 <textarea
                   value={sourceText}
                   onChange={(e) => {
@@ -1180,7 +1182,7 @@ export default function App() {
                     }
                   }}
                   placeholder={t.translation.inputPlaceholder}
-                  className="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none"
+                  className="flex-1 resize-none bg-transparent text-sm text-slate-800 dark:text-slate-100 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"
                 />
                 {error && (
                   <div className="mt-1 flex flex-col gap-1 text-xs">
@@ -1230,7 +1232,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={handleClearSource}
-                        className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-500 shadow-sm hover:bg-slate-100"
+                        className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1.5 text-xs text-slate-500 dark:text-slate-400 shadow-sm hover:bg-slate-100 dark:hover:bg-slate-700"
                         title={t.translation.clearText}
                       >
                         <X className="h-3.5 w-3.5" />
@@ -1257,7 +1259,7 @@ export default function App() {
                             runner.cancel()
                           }
                         }}
-                        className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                        className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                       >
                         {t.task.btnCancel}
                       </button>
@@ -1598,9 +1600,11 @@ export default function App() {
               </div>
 
               {/* 全局划词快捷键设置 */}
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div>
-                  <div className="font-medium text-slate-700">{t.settings.shortcutTitle}</div>
+                  <div className="font-medium text-slate-700 dark:text-slate-200">
+                    {t.settings.shortcutTitle}
+                  </div>
                   <div className="text-[11px] text-slate-400">{t.settings.shortcutDesc}</div>
                 </div>
                 <ShortcutRecorder
@@ -1610,16 +1614,16 @@ export default function App() {
                   t={t}
                 />
                 {shortcutConflict && (
-                  <div role="alert" className="text-[11px] text-amber-700">
+                  <div role="alert" className="text-[11px] text-amber-700 dark:text-amber-400">
                     {t.settings.shortcutRegisterFailed}: {shortcutConflict}
                   </div>
                 )}
               </div>
 
               {/* 划词原地替换快捷键设置 */}
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div>
-                  <div className="font-medium text-slate-700">
+                  <div className="font-medium text-slate-700 dark:text-slate-200">
                     {t.settings.replaceShortcutTitle}
                   </div>
                   <div className="text-[11px] text-slate-400">{t.settings.replaceShortcutDesc}</div>
@@ -1633,9 +1637,9 @@ export default function App() {
               </div>
 
               {/* 划词原地替换首选引擎设置 */}
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div>
-                  <div className="font-medium text-slate-700">
+                  <div className="font-medium text-slate-700 dark:text-slate-200">
                     {t.settings.preferredReplaceEngine}
                   </div>
                   <div className="text-[11px] text-slate-400">
@@ -1645,7 +1649,7 @@ export default function App() {
                 <select
                   value={preferredReplaceEngine}
                   onChange={(e) => handleSavePreferredReplaceEngine(e.target.value)}
-                  className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none"
+                  className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 cursor-pointer"
                 >
                   <option value="google">{t.translation.engineGoogle}</option>
                   <option value="deepl">{t.translation.engineDeepl}</option>
@@ -1655,9 +1659,11 @@ export default function App() {
               </div>
 
               {/* LLM 风格偏好设置 */}
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div>
-                  <div className="font-medium text-slate-700">{t.settings.llmStyleTitle}</div>
+                  <div className="font-medium text-slate-700 dark:text-slate-200">
+                    {t.settings.llmStyleTitle}
+                  </div>
                   <div className="text-[11px] text-slate-400">
                     {llmStyle === 'general' && t.settings.llmStyleGeneral}
                     {llmStyle === 'academic' && t.settings.llmStyleAcademic}
@@ -1685,9 +1691,9 @@ export default function App() {
               </div>
 
               {/* 剪贴板监听开关 */}
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div>
-                  <div className="font-medium text-slate-700">
+                  <div className="font-medium text-slate-700 dark:text-slate-200">
                     {t.settings.clipboardMonitorLabel}
                   </div>
                   <div className="text-[11px] text-slate-400">
@@ -1703,30 +1709,34 @@ export default function App() {
               </div>
 
               {/* 插件通信 Token 轮换管理 */}
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="font-medium text-slate-700">{t.settings.tokenRotateTitle}</div>
+                    <div className="font-medium text-slate-700 dark:text-slate-200">
+                      {t.settings.tokenRotateTitle}
+                    </div>
                     <div className="text-[11px] text-slate-400">{t.settings.tokenRotateDesc}</div>
                   </div>
                   <button
                     onClick={handleRotateToken}
                     disabled={rotatingToken}
-                    className="rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50"
+                    className="rounded border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 px-2.5 py-1 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 disabled:opacity-50"
                   >
                     {t.settings.btnRotateToken}
                   </button>
                 </div>
                 {/* 本地扩展服务状态：启动失败（如端口被占）此前只进 stderr，
                     用户只能看到扩展端“桌面端未运行”而无法自查 */}
-                <div className="flex items-center justify-between border-t border-slate-200 pt-2">
-                  <div className="text-[11px] text-slate-500">{t.settings.serverStatusTitle}</div>
+                <div className="flex items-center justify-between border-t border-slate-200 dark:border-slate-700 pt-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {t.settings.serverStatusTitle}
+                  </div>
                   <span
                     className={
                       serverStatus?.state === 'running'
-                        ? 'text-[11px] font-medium text-emerald-600'
+                        ? 'text-[11px] font-medium text-emerald-600 dark:text-emerald-400'
                         : serverStatus?.state === 'failed'
-                          ? 'text-[11px] font-medium text-rose-600'
+                          ? 'text-[11px] font-medium text-rose-600 dark:text-rose-400'
                           : 'text-[11px] text-slate-400'
                     }
                   >
@@ -1738,17 +1748,19 @@ export default function App() {
                   </span>
                 </div>
                 {serverStatus?.state === 'failed' && (
-                  <div className="rounded bg-rose-50 border border-rose-200 px-2 py-1 text-[11px] leading-snug text-rose-600">
+                  <div className="rounded bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900/60 px-2 py-1 text-[11px] leading-snug text-rose-600 dark:text-rose-400">
                     {serverStatus.reason}
                   </div>
                 )}
               </div>
 
               {/* 缓存数据管理 */}
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="font-medium text-slate-700">{t.settings.cachePersistTitle}</div>
+                    <div className="font-medium text-slate-700 dark:text-slate-200">
+                      {t.settings.cachePersistTitle}
+                    </div>
                     <div className="text-[11px] text-slate-400">{t.settings.cachePersistDesc}</div>
                   </div>
                   <input
@@ -1758,9 +1770,11 @@ export default function App() {
                     className="h-4 w-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
                 </div>
-                <div className="flex items-center justify-between border-t border-slate-200 pt-2 mt-1">
+                <div className="flex items-center justify-between border-t border-slate-200 dark:border-slate-700 pt-2 mt-1">
                   <div>
-                    <div className="font-medium text-slate-700">{t.settings.cacheClearTitle}</div>
+                    <div className="font-medium text-slate-700 dark:text-slate-200">
+                      {t.settings.cacheClearTitle}
+                    </div>
                     <div className="text-[11px] text-slate-400">{t.settings.cacheClearDesc}</div>
                   </div>
                   <button
@@ -1784,7 +1798,7 @@ export default function App() {
                       }
                       setTimeout(() => setSaveStatus(null), 2000)
                     }}
-                    className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
+                    className="rounded border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/50 px-2.5 py-1 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50"
                   >
                     {t.settings.btnClearCache}
                   </button>
@@ -1792,7 +1806,7 @@ export default function App() {
               </div>
 
               {/* 术语库管理 */}
-              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 border border-slate-100">
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-slate-700 dark:text-slate-200">
                     {t.settings.glossaryTitle}
@@ -1815,12 +1829,12 @@ export default function App() {
                           `transly-glossary-${new Date().toISOString().slice(0, 10)}.csv`,
                         )
                       }}
-                      className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50"
+                      className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
                       title={t.translation.exportGlossaryCsv}
                     >
                       {t.translation.exportGlossaryCsv}
                     </button>
-                    <label className="rounded border border-slate-200 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 cursor-pointer">
+                    <label className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer">
                       <span>{t.translation.importGlossaryCsv}</span>
                       <input
                         type="file"

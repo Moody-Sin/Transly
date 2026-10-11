@@ -26,6 +26,12 @@
 - **全局快捷键修改后状态槽位即时同步**: 在 `set_shortcut` 与 `set_replace_shortcut` 中注入 `ShortcutStatusSlot`，在快捷键注册成功与回滚时即时更新槽位状态，解决启动冲突后用户修改快捷键告警无法自动消除的问题。
 
 ### 优化
+- **统一本地持久化配置仓储与冷启动脱敏**: 在 SQLite `cache.db` 中引入 `app_settings` 配置表，将剪贴板监听开关、缓存开关、快捷键设置、划词替换首选引擎、LLM 翻译风格及端点模型等非敏感配置从系统原生凭据管理器迁移至本地数据库，消除主线程启动阶段因串行读取凭据库（Keyring/DBus）引发的阻塞延迟，实现旧版无缝迁移；商业 API Key 与内部 Server Token 严格保留于操作系统原生安全凭据库中。
+- **全量翻译历史导出支持**: 在 `HistoryPanel` 导出 CSV 与 JSON 时优先拉取 SQLite 全量历史数据（至多 100,000 条），彻底解决此前仅导出前端分页加载的首屏 50 条导致历史数据遗漏的问题。
+- **快捷键录制组件视觉与可访问性增强**: 在 `ShortcutRecorder` 中增加 `keyup` 事件监听，实时响应修饰键释放并即时清空卡滞提示；重构录制卡片布局结构，消除 `<div role="button">` 内部嵌套原生 `<button>` 违反 W3C a11y 规范的问题。
+- **深色模式（Dark Mode）样式深度对齐**: 补齐主翻译输入框容器、文本区与设置中心各配置卡片、下拉选择框及文件操作按钮的 `dark:` Tailwind 类名，消除切换暗色模式时的界面白灰斑驳与对比度撕裂。
+- **本地端点与 Base URL 判定严谨化**: 在 `OpenAIEngine::is_local_endpoint` 与 `save_llm_config` 中引入规范 URL 解析，严格对齐主机名白名单（`localhost` / `127.0.0.1` / `::1`），杜绝形如 `localhost.evil.com` 或 `evil.com/localhost` 伪装子域名绕过非 HTTPS 限制。
+- **划词气泡锚点定位包含选区高度**: 在 `selection/index.ts` 中采集选区矩形高度（`rect.height`），正常朝下放置时精准置于选区正文下方，杜绝气泡直接压在被选中文本上方遮挡视线。
 - **Google 网页翻译批量容错隔离与受控并发**: 在 `GoogleWebEngine` 中直接实现 `translate_batch_tolerant`，按 4 项一组受控并发请求并逐项保留 `Result`，消除单项失败时导致整批成功项被全量重复二次外呼的性能浪费。
 
 ## [0.3.0] - 2026-10-11

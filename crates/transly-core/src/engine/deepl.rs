@@ -241,9 +241,14 @@ impl TranslateEngine for DeepLEngine {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let err_body = resp.text().await.unwrap_or_default();
+                eprintln!(
+                    "[Engine Error] {} 批量返回 {status}，响应体 {} 字节（内容不记录）",
+                    self.id(),
+                    err_body.len()
+                );
                 return Err(Error::Engine {
                     engine: self.id().to_string(),
-                    message: format!("DeepL API 批量错误 ({status}): {err_body}"),
+                    message: format!("DeepL API 批量错误 ({status})"),
                 });
             }
 

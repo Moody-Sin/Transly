@@ -176,6 +176,11 @@
     "llmStyleAcademic": "学术论文 / 技术文档 (保留术语代码)",
     "llmStyleLiterary": "文学润色 / 日常口语 (地道自然)",
     "llmStyleBusiness": "商务公文 / 正式邮件 (专业严谨)",
-    "ollamaPresetBtn": "快速填入本地 Ollama 配置"
+    "ollamaPresetBtn": "快速填入本地 Ollama 配置",
+    "preferredReplaceEngine": "划词原地替换引擎",
+    "preferredReplaceEngineDesc": "划词原地替换 (Alt+Shift+R) 时优先调用的引擎；失败时将直接报错提醒",
+    "statusReplaceEngineSaved": "原地替换引擎已更新！",
+    "statusReplaceEngineFailed": "原地替换引擎保存失败",
+    "replacementFailedPrefix": "划词原地替换失败"
   }
 }

@@ -600,6 +600,13 @@ pub struct SelectionContext {
     pub counter: Arc<std::sync::atomic::AtomicU64>,
 }
 
+/// 划词原地替换失败事件载荷（通过 Tauri 事件广播至前端显示 Toast 告警）
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ReplacementFailedPayload {
+    pub engine: String,
+    pub message: String,
+}
+
 /// 触发划词原地翻译并替换工作流：
 /// 1. 模拟复制 (Ctrl+C / Cmd+C) 获取当前选区文本
 /// 2. 使用离线检测推断智能目标语言并执行翻译
@@ -612,6 +619,7 @@ pub fn trigger_selection_replacement(
 ) {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
     use std::sync::atomic::Ordering;
+    use tauri::Emitter;
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     tauri::async_runtime::spawn(async move {
@@ -678,7 +686,17 @@ pub fn trigger_selection_replacement(
         // 第二阶段：无锁执行网络翻译与术语库处理（网络耗时不阻塞其他快捷键与剪贴板监听）
         let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
         let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
-        let active_engine = deps.pool.default_engine();
+
+        let preferred_engine = tokio::task::spawn_blocking(|| {
+            crate::secrets::get_secret("preferred_replace_engine")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "google".to_string())
+        })
+        .await
+        .unwrap_or_else(|_| "google".to_string());
+
+        let active_engine = deps.pool.get_engine(&preferred_engine).await;
 
         // 优先查缓存
         let mut final_text = None;
@@ -744,6 +762,17 @@ pub fn trigger_selection_replacement(
                     }
                     Err(e) => {
                         eprintln!("[Selection Replacement Warning] 划词原地替换翻译失败: {e}");
+                        let _ = handle.emit(
+                            "transly://replacement-failed",
+                            ReplacementFailedPayload {
+                                engine: active_engine.id().to_string(),
+                                message: e.to_string(),
+                            },
+                        );
+                        // 翻译失败安全还原用户原剪贴板，避免将选区文本误留为剪贴板数据
+                        if let Some(old) = old_clipboard {
+                            let _ = handle.clipboard().write_text(old);
+                        }
                         return;
                     }
                 }
@@ -929,6 +958,7 @@ pub async fn set_shortcut(
     app: tauri::AppHandle,
     selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
     pending_slot: tauri::State<'_, Arc<PendingFloatRequests>>,
+    shortcut_slot: tauri::State<'_, Arc<ShortcutStatusSlot>>,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -991,9 +1021,9 @@ pub async fn set_shortcut(
                 },
             );
         }
-        return Err(format!(
-            "快捷键注册失败，可能按键格式不合法或被系统占用: {e}"
-        ));
+        let err_msg = format!("快捷键注册失败，可能按键格式不合法或被系统占用: {e}");
+        shortcut_slot.set_failed(err_msg.clone());
+        return Err(err_msg);
     }
 
     // 持久化存储新快捷键。
@@ -1030,9 +1060,12 @@ pub async fn set_shortcut(
                 },
             );
         }
-        return Err(format!("保存快捷键失败（已回滚到原快捷键）: {e}"));
+        let err_msg = format!("保存快捷键失败（已回滚到原快捷键）: {e}");
+        shortcut_slot.set_failed(err_msg.clone());
+        return Err(err_msg);
     }
 
+    shortcut_slot.set_ok();
     Ok(())
 }
 
@@ -1057,6 +1090,7 @@ pub async fn set_replace_shortcut(
     app: tauri::AppHandle,
     selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
     deps: tauri::State<'_, Arc<TranslationDependencies>>,
+    shortcut_slot: tauri::State<'_, Arc<ShortcutStatusSlot>>,
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -1109,9 +1143,9 @@ pub async fn set_replace_shortcut(
                 },
             );
         }
-        return Err(format!(
-            "划词替换快捷键注册失败，可能按键格式不合法或被系统占用: {e}"
-        ));
+        let err_msg = format!("划词替换快捷键注册失败，可能按键格式不合法或被系统占用: {e}");
+        shortcut_slot.set_failed(err_msg.clone());
+        return Err(err_msg);
     }
 
     let to_save = clean.to_string();
@@ -1142,9 +1176,12 @@ pub async fn set_replace_shortcut(
                 },
             );
         }
-        return Err(format!("保存快捷键失败（已回滚到原快捷键）: {e}"));
+        let err_msg = format!("保存快捷键失败（已回滚到原快捷键）: {e}");
+        shortcut_slot.set_failed(err_msg.clone());
+        return Err(err_msg);
     }
 
+    shortcut_slot.set_ok();
     Ok(())
 }
 
@@ -1527,6 +1564,45 @@ pub async fn save_llm_style(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_preferred_replace_engine() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::secrets::get_secret("preferred_replace_engine")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "google".to_string())
+    })
+    .await
+    .map_err(|e| format!("读取划词原地替换引擎配置异常: {e}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_preferred_replace_engine(engine: String) -> Result<(), String> {
+    let clean = engine.trim().to_lowercase();
+    match clean.as_str() {
+        "google" | "google_web" | "deepl" | "deepseek" | "openai" => {}
+        _ => return Err("无效或不受支持的划词替换引擎".to_string()),
+    }
+
+    let to_save = if clean == "google_web" {
+        "google".to_string()
+    } else {
+        clean
+    };
+
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        crate::secrets::set_secret("preferred_replace_engine", &to_save)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存划词原地替换引擎调度异常: {e}"))?
+    .map_err(|e| format!("写入系统配置失败: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn get_llm_style() -> Result<String, String> {
     tokio::task::spawn_blocking(|| {
         crate::secrets::get_secret("llm_style")
@@ -1732,5 +1808,35 @@ mod tests {
 
         let res_none = detect_text_language("".to_string()).await;
         assert_eq!(res_none, Ok(None));
+    }
+
+    #[test]
+    fn test_shortcut_status_slot_transitions() {
+        let slot = ShortcutStatusSlot::default();
+        let initial = slot.get();
+        assert!(!initial.ok);
+
+        slot.set_failed("Alt+Shift+D: conflict".to_string());
+        let failed = slot.get();
+        assert!(!failed.ok);
+        assert_eq!(failed.reason.as_deref(), Some("Alt+Shift+D: conflict"));
+
+        slot.set_ok();
+        let ok = slot.get();
+        assert!(ok.ok);
+        assert_eq!(ok.reason, None);
+    }
+
+    #[tokio::test]
+    async fn test_save_preferred_replace_engine_validation() {
+        assert!(save_preferred_replace_engine("invalid_eng".into())
+            .await
+            .is_err());
+        assert!(save_preferred_replace_engine("".into()).await.is_err());
+        assert!(save_preferred_replace_engine("google".into()).await.is_ok());
+        assert_eq!(
+            get_preferred_replace_engine().await,
+            Ok("google".to_string())
+        );
     }
 }

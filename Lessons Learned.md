@@ -440,3 +440,43 @@
 1. **任何影响 Prompt、模型输出语义的配置维度，必须正交编码进引擎标识**（如 `openai:{model}:{style}`）。
 2. `actual_engine()` 必须完整如实反映具体模型与风格，这样不仅写入与查询天然具备隔离性，且切换回旧风格时仍能命中旧风格的历史缓存，无需清空全量数据库。
 3. 增加多风格缓存隔离单元测试：同一文本、同一语言对在不同风格下，断言其缓存键互不冲突、命中互相隔离。
+
+---
+
+## 31. Mock DOM 继承假象：`ShadowRoot` 继承自 `DocumentFragment` 而非 `Element`
+
+### 现象与问题
+- `iterateElementsDeep` 用于遍历 DOM 元素并在开放模式 Shadow DOM 中下探，入口第一行写着 `if (root.nodeType !== ELEMENT_NODE) return;`。
+- 测试中构造的 `class MockShadowRoot extends MockElement` 默认赋予了 `nodeType = 1`（`ELEMENT_NODE`），导致单测 100% 绿色通过。
+- 但在 W3C 标准和真实浏览器运行时中，`ShadowRoot` 继承自 `DocumentFragment`，其 `nodeType` 恒为 `11`（`Node.DOCUMENT_FRAGMENT_NODE`），而非 `1`。
+- 后果：在真实网页环境中，`iterateElementsDeep(shadow)` 在第一行就会直接静默返回空，导致还原原文时无法清理 Web Components 内部插入的双语译文和标记；同时 `collectTextNodes` 也因将 `root.nodeType === ELEMENT_NODE` 作为前置守卫而跳过了 Shadow DOM 内部富文本段落的占位聚合与嵌套 Shadow DOM 探测。
+
+### 经验与规程
+1. **Mock 必须忠实反映平台标准的关键元属性**：涉及 `nodeType` / `tagName` / 继承链的 Mock，必须严格对照 W3C 标准（`ShadowRoot` 为 `DOCUMENT_FRAGMENT_NODE = 11`），禁止为了少写代码直接粗暴继承 `MockElement`。
+2. **容器遍历守卫必须包含 DocumentFragment**：接收可能包含 `ShadowRoot` 的遍历工具，守卫条件必须同时放行 `ELEMENT_NODE` 与 `DOCUMENT_FRAGMENT_NODE`（或直接检查 `querySelectorAll` 存在性）。
+
+---
+
+## 32. 序列化工具函数职责重叠：调用方前置转义导致二次引号破版
+
+### 现象与问题
+- `formatCsvRow` 工具函数的契约是“接收字段数组，内部对每个字段执行 RFC 4180 加引号与内部双写转义并用逗号拼接”。
+- 在 `HistoryPanel` 导出历史记录时，调用方写了 `const cell = (raw) => escapeCsvField(guardCsvFormulaInjection(raw))`，在传入 `formatCsvRow` 之前自己先执行了一次 `escapeCsvField`。
+- 后果：导出的 CSV 文件中，每个字段都被包裹了两层引号，产生形如 `"""value"""` 的破损转义，在 Excel 或外部工具打开时出现多余的引号。
+
+### 经验与规程
+1. **行序列化函数与单字段转义函数必须职责分明**：当整行序列化函数（`formatCsvRow`）已内建逐字段转义时，调用方严禁再在外层重复调用单字段转义；若需附加清洗（如公式注入转义 `guardCsvFormulaInjection`），调用方只负责值层面的预处理。
+2. 为导出单行用例编写端到端往返回归测试，确保 `formatCsvRow` 产物经 `parseCsv` 解析后能 100% 严格原样还原。
+
+---
+
+## 33. Playwright 测试 Chrome MV3 扩展：`headless: true` 默认注入 `--disable-extensions`
+
+### 现象与问题
+- 使用 Playwright `launchPersistentContext` 挂载解压 Chrome 扩展（`--load-extension`）时，若配置 `headless: true`，Playwright 默认会在进程启动参数中强行注入 `--disable-extensions` 与 `--headless`。
+- 这会导致 Chromium 启动后静默忽略扩展加载指令，`chrome://extensions` 没有任何扩展，Service Worker 永远无法启动并导致 `waitForEvent('serviceworker')` 超时报错。
+- 只有使用 `headless: false`，并在 `args` 中配置 `--headless=new`（或在 `ignoreDefaultArgs` 中显式排除 `--disable-extensions`），才能在保持无头运行的同时成功加载 MV3 扩展与 Background Service Worker。
+
+### 经验与规程
+1. **测试 MV3 扩展必须避开 Playwright 默认的 `--disable-extensions`**：使用 `headless: false` 配合 `args: ['--headless=new', ...]` 既保持真正的无头后台静默执行，又确保浏览器扩展正常加载。
+2. **多浏览器信道平滑降级**：优先探测 Windows 原生已安装的 Edge / Chrome（`channel: 'msedge'` / `channel: 'chrome'`），在开发机与 CI 上零额外下载、秒级启动。

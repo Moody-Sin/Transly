@@ -7,6 +7,20 @@
 
 ## [未发布]
 
+### 新增
+- **划词原地替换首选引擎配置与直接报错提醒**: 支持在桌面端设置中选择划词原地替换（默认 `Alt+Shift+R`）的首选引擎（`Google` / `DeepL` / `DeepSeek` / `OpenAI`），配置安全保存在系统原生凭据中；当所选商业引擎缺少 API Key 或网络请求失败时，通过 `transly://replacement-failed` 事件向主窗口广播并在界面弹出明确 Toast 告警，杜绝静默隐蔽降级，并自动安全还原系统剪贴板。
+- **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
+
+### 修复
+- **Tauri 2 ACL 权限补齐与浮窗 Escape 关闭**: 在 `src-tauri/capabilities/default.json` 中补全 `"core:window:allow-hide"` 权限声明，并在 `App.tsx` 中为 `getCurrentWindow().hide()` 挂载未捕获 Promise 异常守卫，彻底解决悬浮迷你窗在真实环境中按 `Escape` 键无法关闭的问题。
+- **浏览器扩展 Shadow DOM 节点类型规范化与双语还原修复**: 修正 `domTraversal.ts` 与 `content/index.ts` 中针对 ShadowRoot 的容器类型守卫，放行 `Node.DOCUMENT_FRAGMENT_NODE`（11），使 Web Components 内部富文本段落及嵌套 Shadow DOM 正常提取与翻译，并解决双语对照模式下 Shadow DOM 内兄弟译文节点无法还原清理的问题；将单测 mock 对齐 W3C 真实标准。
+- **DeepL 批量翻译错误体脱敏防泄露**: 统一 `DeepLEngine::translate_batch` 错误处理，消除向前端与扩展 DOM 透传上游响应体的安全隐患，防止授权或账户敏感信息回显。
+- **历史面板 CSV 导出双重引号转义修复**: 消除 `HistoryPanel` 导出 CSV 时调用方与 `formatCsvRow` 重复调用 `escapeCsvField` 导致字段出现破损三引号（`"""text"""`）的问题，并补充单行格式化与解析往返回归单测。
+- **全局快捷键修改后状态槽位即时同步**: 在 `set_shortcut` 与 `set_replace_shortcut` 中注入 `ShortcutStatusSlot`，在快捷键注册成功与回滚时即时更新槽位状态，解决启动冲突后用户修改快捷键告警无法自动消除的问题。
+
+### 优化
+- **Google 网页翻译批量容错隔离与受控并发**: 在 `GoogleWebEngine` 中直接实现 `translate_batch_tolerant`，按 4 项一组受控并发请求并逐项保留 `Result`，消除单项失败时导致整批成功项被全量重复二次外呼的性能浪费。
+
 ## [0.3.0] - 2026-10-11
 
 ### 安全

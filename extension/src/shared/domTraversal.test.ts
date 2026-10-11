@@ -5,6 +5,7 @@ import {
   iterateTextNodesDeep,
   TEXT_NODE,
   ELEMENT_NODE,
+  DOCUMENT_FRAGMENT_NODE,
 } from './domTraversal.ts'
 
 /**
@@ -75,12 +76,13 @@ class MockElement {
   }
 }
 
-/** 真实 DOM 中 mode 挂在 ShadowRoot 上（host.shadowRoot.mode），不在宿主元素上 */
+/** 真实 DOM 中 mode 挂在 ShadowRoot 上，且 ShadowRoot 为 DocumentFragment (nodeType = 11) */
 class MockShadowRoot extends MockElement {
   mode: 'open' | 'closed'
 
   constructor(mode: 'open' | 'closed') {
     super('', 'shadow-root')
+    this.nodeType = DOCUMENT_FRAGMENT_NODE
     this.mode = mode
   }
 }

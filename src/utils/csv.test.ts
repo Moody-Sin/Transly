@@ -79,3 +79,17 @@ test('转义：字段始终加引号且内部引号双写；公式注入前缀�
   assert.equal(guardCsvFormulaInjection('@cmd'), "'@cmd")
   assert.equal(guardCsvFormulaInjection('normal'), 'normal')
 })
+
+test('历史导出 CSV 单行格式化：不发生二次引号转义', () => {
+  const row = formatCsvRow([
+    guardCsvFormulaInjection('Hello'),
+    guardCsvFormulaInjection('你好'),
+    'en',
+    'zh-CN',
+    'google',
+    '2026-10-11T00:00:00.000Z',
+  ])
+  assert.equal(row, '"Hello","你好","en","zh-CN","google","2026-10-11T00:00:00.000Z"')
+  const parsed = parseCsv(row)
+  assert.deepEqual(parsed, [['Hello', '你好', 'en', 'zh-CN', 'google', '2026-10-11T00:00:00.000Z']])
+})

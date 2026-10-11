@@ -5,7 +5,7 @@ import type { CacheEntry } from './bindings'
 import type { I18nSchema, Locale } from './i18n'
 import { speakText } from './utils/speech'
 import { applyIfCurrent } from './task/generation'
-import { escapeCsvField, formatCsvRow, guardCsvFormulaInjection } from './utils/csv'
+import { formatCsvRow, guardCsvFormulaInjection } from './utils/csv'
 import { downloadBlob } from './utils/download'
 
 const PAGE_SIZE = 50
@@ -120,8 +120,8 @@ export default function HistoryPanel({ t, locale }: Props) {
       'Engine',
       'Time',
     ]
-    // 字段统一走 RFC 4180 加引号 + 内部引号双写，使含逗号 / 换行的译文可被无损再解析
-    const cell = (raw: string) => escapeCsvField(guardCsvFormulaInjection(raw))
+    // 字段由 formatCsvRow 统一执行 RFC 4180 加引号 + 内部引号双写，此处仅负责公式注入防御
+    const cell = (raw: string) => guardCsvFormulaInjection(raw)
     const rows = entries.map((e) =>
       formatCsvRow([
         cell(e.source_text),
@@ -129,7 +129,7 @@ export default function HistoryPanel({ t, locale }: Props) {
         cell(e.source_lang),
         cell(e.target_lang),
         cell(e.engine),
-        escapeCsvField(new Date(e.created_at * 1000).toISOString()),
+        new Date(e.created_at * 1000).toISOString(),
       ]),
     )
     const csvContent = '\uFEFF' + [header.join(','), ...rows].join('\n')

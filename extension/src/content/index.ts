@@ -9,7 +9,12 @@
 
 console.log('[Transly Content Script] 沉浸式翻译引擎已就绪')
 
-import { iterateElementsDeep, iterateTextNodesDeep, ELEMENT_NODE } from '../shared/domTraversal'
+import {
+  iterateElementsDeep,
+  iterateTextNodesDeep,
+  ELEMENT_NODE,
+  DOCUMENT_FRAGMENT_NODE,
+} from '../shared/domTraversal'
 
 // 使用 WeakMap 严格基于 Text 节点维护原始内容，杜绝父节点多 Text 节点互相覆盖
 const originalTextMap = new WeakMap<Text, string>()
@@ -358,8 +363,8 @@ export function collectTextNodes(
   const processedContainers = new WeakSet<Element>()
   const processedNodes = new WeakSet<Text>()
 
-  if (root.nodeType === Node.ELEMENT_NODE) {
-    const rootEl = root as Element
+  if (root.nodeType === ELEMENT_NODE || root.nodeType === DOCUMENT_FRAGMENT_NODE) {
+    const rootEl = root as Element | DocumentFragment
     const leafCandidates = rootEl.querySelectorAll(
       'p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th',
     )
@@ -470,8 +475,8 @@ export function collectTextNodes(
   }
 
   // 3. 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树）
-  if (root.nodeType === Node.ELEMENT_NODE) {
-    const el = root as Element
+  if (root.nodeType === ELEMENT_NODE || root.nodeType === DOCUMENT_FRAGMENT_NODE) {
+    const el = root as Element | DocumentFragment
     const elementsWithShadow = el.querySelectorAll('*')
     elementsWithShadow.forEach((subEl) => {
       if (subEl.shadowRoot && subEl.shadowRoot.mode === 'open' && shouldTranslateElement(subEl)) {

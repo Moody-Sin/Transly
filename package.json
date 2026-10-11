@@ -17,7 +17,9 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css}\" \"extension/src/**/*.ts\" \"extension/_locales/**/*.json\" extension/popup.html \"*.{js,ts,json}\" \"scripts/*.mjs\" \"extension/scripts/*.mjs\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css}\" \"extension/src/**/*.ts\" \"extension/_locales/**/*.json\" extension/popup.html \"*.{js,ts,json}\" \"scripts/*.mjs\" \"extension/scripts/*.mjs\"",
     "test:task": "node --experimental-strip-types --test \"src/task/*.test.ts\" \"src/utils/*.test.ts\" \"extension/src/shared/*.test.ts\"",
+    "test:e2e:ui": "node scripts/test-desktop-ui-e2e.mjs",
     "test:e2e:extension": "pnpm --filter transly-extension run build && node scripts/test-extension-e2e.mjs",
+    "test:e2e": "pnpm run test:e2e:ui && pnpm run test:e2e:extension",
     "build:extension": "pnpm --filter transly-extension run build",
     "build:extension:firefox": "pnpm --filter transly-extension run build && pnpm --filter transly-extension run build:firefox"
   },

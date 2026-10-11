@@ -60,7 +60,6 @@ impl EnginePool {
     /// 生产默认引擎是 `GoogleWebEngine`，测试若直接用 `new()` 会在缓存未命中时
     /// 真实外呼 translate.googleapis.com，违反“CI 不真调外部 API”规则，
     /// 且断言恒为 200 使用例失去信号。
-    #[cfg(test)]
     pub fn with_default_engine(default_engine: Arc<dyn TranslateEngine>) -> Self {
         Self {
             default_engine,
@@ -230,7 +229,6 @@ impl Default for EnginePool {
 ///
 /// 仅用于验证服务端编排逻辑（缓存门禁、参数校验、术语库替换），
 /// 绝不发起任何外部网络请求，也不触碰系统凭据管理器。
-#[cfg(test)]
 pub mod testing {
     use async_trait::async_trait;
     use transly_core::{Result, TranslateEngine, TranslationRequest, TranslationResponse};
@@ -248,8 +246,19 @@ pub mod testing {
         }
 
         async fn translate(&self, req: &TranslationRequest) -> Result<TranslationResponse> {
+            let translated = if req.text.contains("⟦T_") {
+                req.text
+                    .replace("Please visit ", "请访问 ")
+                    .replace(" and check ", " 并查阅 ")
+                    .replace(" before proceeding.", " 后继续操作。")
+                    .replace("Example Official Site", "示例官方站点")
+                    .replace("Crucial Document", "重要文档")
+            } else {
+                format!("[E2E译文] {}", req.text)
+            };
+
             Ok(TranslationResponse {
-                text: format!("[stub:{}]{}", req.target_lang, req.text),
+                text: translated,
                 detected_source_lang: Some("en".to_string()),
                 engine: self.id().to_string(),
             })

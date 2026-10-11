@@ -15,6 +15,10 @@ path = "bin/export_bindings.rs"
 name = "transly"
 path = "src/main.rs"
 
+[[bin]]
+name = "transly_test_server"
+path = "bin/transly_test_server.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
@@ -36,6 +40,7 @@ enigo = "0.3"
 rand = "0.8"
 # 恒定时间比较：Bearer Token 鉴权防止计时侧信道
 subtle = "2.6"
+async-trait = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
@@ -57,5 +62,4 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-async-trait = "0.1"
 

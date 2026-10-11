@@ -414,27 +414,20 @@ pub async fn delete_glossary_term(
     cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
-    // SQLite 删除与全表回读均为同步阻塞 I/O，统一下沉到阻塞线程池
     let cache_ref = cache.inner().clone();
     let deleted_key = source.clone();
-    let terms =
-        tokio::task::spawn_blocking(move || -> Result<Vec<(String, String, bool)>, String> {
-            cache_ref
-                .delete_glossary_term(&deleted_key)
-                .map_err(|e| e.to_string())?;
-            cache_ref
-                .get_all_glossary_terms()
-                .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| format!("术语删除任务调度异常: {e}"))??;
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .delete_glossary_term(&deleted_key)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("术语删除任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
 
-    // 重新构建内存术语库
+    // 增量从内存术语库中移除该词条（自动标记 dirty 并使已编译缓存失效，杜绝全量查库与全量重建）
     let mut g = glossary.write().await;
-    *g = Glossary::new();
-    for (src, tgt, match_case) in terms {
-        g.insert_with_options(src, tgt, match_case);
-    }
+    g.remove(&source);
     Ok(())
 }
 
@@ -512,6 +505,72 @@ pub async fn delete_history_entry(
     })
     .await
     .unwrap_or_else(|e| Err(format!("翻译历史删除任务调度异常: {e}")))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ExportHistoryOutcome {
+    pub count: u32,
+    pub file_path: String,
+}
+
+fn resolve_downloads_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(user) = std::env::var_os("USERPROFILE") {
+            let p = std::path::PathBuf::from(user).join("Downloads");
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let p = std::path::PathBuf::from(home).join("Downloads");
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// 流式将翻译历史记录导出为本地文件（写入用户 Downloads 目录），零大内存 IPC 传输与 UI 阻塞
+#[tauri::command]
+#[specta::specta]
+pub async fn export_translation_history(
+    format: String,
+    keyword: Option<String>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<ExportHistoryOutcome, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<ExportHistoryOutcome, String> {
+        let downloads_dir = resolve_downloads_dir();
+        let ext = if format.eq_ignore_ascii_case("csv") {
+            "csv"
+        } else {
+            "json"
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let filename = format!("transly-history-{now}.{ext}");
+        let file_path = downloads_dir.join(&filename);
+        let file = std::fs::File::create(&file_path)
+            .map_err(|e| format!("创建导出文件失败 ({file_path:?}): {e}"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        let count = cache_ref
+            .export_history_to_writer(&mut writer, ext, keyword.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(ExportHistoryOutcome {
+            count: count as u32,
+            file_path: file_path.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("导出任务调度异常: {e}"))?
 }
 
 #[tauri::command]

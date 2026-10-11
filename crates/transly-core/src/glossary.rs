@@ -111,6 +111,16 @@ impl Glossary {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
+    /// 从术语库中移除指定源词条
+    pub fn remove(&mut self, source: &str) -> bool {
+        if self.terms.remove(source).is_some() {
+            self.dirty.store(true, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
     /// 词条集合未变更时复用已编译自动机；否则重建并回填缓存。
     fn ensure_compiled(&self) -> Option<Arc<Compiled>> {
         if !self.dirty.load(Ordering::Relaxed) {
@@ -434,5 +444,17 @@ mod tests {
         cloned2.insert("cat", "猫咪");
         assert_eq!(cloned2.apply("cat"), "猫咪");
         assert_eq!(cloned.apply("cat"), "猫");
+    }
+
+    #[test]
+    fn test_glossary_remove_incremental() {
+        let mut glossary = Glossary::new();
+        glossary.insert("cat", "猫");
+        glossary.insert("dog", "狗");
+        assert_eq!(glossary.apply("cat and dog"), "猫 and 狗");
+
+        assert!(glossary.remove("cat"));
+        assert!(!glossary.remove("not_exist"));
+        assert_eq!(glossary.apply("cat and dog"), "cat and 狗");
     }
 }

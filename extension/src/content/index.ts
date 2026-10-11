@@ -263,7 +263,7 @@ export interface TextNodeEntry {
   inViewport?: boolean
   compositeInfo?: {
     parts: Array<{ id: string; node: Text }>
-    baseIds: string[]
+    baseIds: (string | null)[]
     placeholderToId: Map<string, string>
   }
 }
@@ -414,13 +414,14 @@ export function collectTextNodes(
 
         nodeSequenceId += 1
         const compId = `node_${nodeSequenceId}`
-        const textParts = rawParts.map((p, idx) => ({
+        const textParts: TextPart[] = rawParts.map((p, idx) => ({
           id: `${compId}_p${idx}`,
           text: p.text,
+          isInline: p.isInline,
         }))
 
         const composite = buildRichTextComposite(textParts, true)
-        const baseIds = textParts.filter((_, idx) => idx % 2 === 0).map((p) => p.id)
+        const baseIds = composite.baseSlots || []
         const placeholderToId = new Map<string, string>()
         for (const [id, ph] of composite.idToPlaceholder) {
           placeholderToId.set(ph, id)
@@ -474,15 +475,29 @@ export function collectTextNodes(
     currentNode = walker.nextNode()
   }
 
-  // 3. 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树）
+  // 3. 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树，采用流式 TreeWalker 消除 querySelectorAll('*') 大数组分配）
   if (root.nodeType === ELEMENT_NODE || root.nodeType === DOCUMENT_FRAGMENT_NODE) {
-    const el = root as Element | DocumentFragment
-    const elementsWithShadow = el.querySelectorAll('*')
-    elementsWithShadow.forEach((subEl) => {
-      if (subEl.shadowRoot && subEl.shadowRoot.mode === 'open' && shouldTranslateElement(subEl)) {
+    const elWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(elNode) {
+        const elem = elNode as Element
+        if (!shouldTranslateElement(elem)) {
+          return NodeFilter.FILTER_REJECT
+        }
+        if (elem.shadowRoot && elem.shadowRoot.mode === 'open') {
+          return NodeFilter.FILTER_ACCEPT
+        }
+        return NodeFilter.FILTER_SKIP
+      },
+    })
+
+    let shadowHost = elWalker.nextNode()
+    while (shadowHost) {
+      const subEl = shadowHost as Element
+      if (subEl.shadowRoot) {
         entries.push(...collectTextNodes(subEl.shadowRoot, vpCache))
       }
-    })
+      shadowHost = elWalker.nextNode()
+    }
   }
 
   return entries
@@ -665,7 +680,7 @@ export function processRichTextParagraph(
   translated: string,
 ): Map<string, string> | null {
   const composite = buildRichTextComposite(parts)
-  const baseIds = parts.filter((_, i) => i % 2 === 0).map((p) => p.id)
+  const baseIds = composite.baseSlots || []
   const placeholderToId = new Map<string, string>()
   for (const [id, ph] of composite.idToPlaceholder) {
     placeholderToId.set(ph, id)
@@ -839,7 +854,7 @@ export function classifyFailure(status: number | undefined): string {
 }
 
 /**
- * 翻译一批文本节点并原地写回 DOM。
+ * 翻译一批文本节点并原地写回 DOM（视口首批先行 + 受控并发流水线）。
  *
  * 返回本批次的失败批次数；**不广播任务终态**（由调用方在任务级广播一次），
  * 仅广播中途进度。
@@ -850,43 +865,31 @@ async function translateEntries(
   engine: string = 'google',
   expectedGen: number = currentGeneration,
 ): Promise<number> {
-  let failedBatches = 0
   const texts = entries.map((e) => e.text)
   const ranges = planBatchRanges(texts, currentLimits)
+  if (ranges.length === 0) return 0
 
-  for (const [rangeStart, rangeEnd] of ranges) {
-    // 发送前检查：如果用户已经点击“取消”、“还原原文”或发起了新任务，直接阻断
-    if (expectedGen !== currentGeneration) {
-      console.log(
-        `[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`,
-      )
-      chrome.runtime
-        .sendMessage({
-          type: 'TRANSLATION_CANCELLED',
-          generation: expectedGen,
-        })
-        .catch(() => {})
-      return failedBatches
+  let failedBatches = 0
+  let isAborted = false
+
+  // 执行单批次翻译、DOM 写回与进度广播
+  const processBatch = async (batch: TextNodeEntry[]): Promise<boolean> => {
+    if (isAborted || expectedGen !== currentGeneration) {
+      return false
     }
-
-    const batch = entries.slice(rangeStart, rangeEnd)
 
     try {
       const response = await sendBatchWithSplit(batch, targetLang, engine, expectedGen)
       failedBatches += response.failedBatches
 
-      // 响应后强校验：如果请求在途期间用户触发了取消、还原或新任务，彻底丢弃响应，严禁写入 DOM
       if (expectedGen !== currentGeneration) {
-        console.log(
-          `[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`,
-        )
         chrome.runtime
           .sendMessage({
             type: 'TRANSLATION_CANCELLED',
             generation: expectedGen,
           })
           .catch(() => {})
-        return failedBatches
+        return false
       }
     } catch (err) {
       failedBatches += 1
@@ -894,7 +897,6 @@ async function translateEntries(
       console.warn('[Transly] 批量翻译出错:', err)
     }
 
-    // 广播进度给 Popup 与扩展徽标
     if (expectedGen === currentGeneration) {
       chrome.runtime
         .sendMessage({
@@ -908,13 +910,43 @@ async function translateEntries(
         .catch(() => {})
     }
 
-    // 快速熔断防假死：若连续 2 批 100% 失败且累计成功数为 0（网络全面阻断或凭据失效），
-    // 立即中断后续批次，避免在不可达网络上长达数十分钟无声挂起
+    // 快速熔断防假死：若连续 2 批全部失败且累计成功数为 0，中断后续批次
     if (failedBatches >= 2 && currentTaskCompleted === 0) {
       console.warn(`[Transly] 连续 ${failedBatches} 批全部失败且成功数为 0，触发快速熔断保护`)
-      break
+      isAborted = true
+      return false
+    }
+
+    return true
+  }
+
+  // 1. 首屏视口第一批（Fast Path）：以最高优先级立即发出并等待，确保首屏最低延迟且快速验证网络
+  const firstBatch = entries.slice(ranges[0][0], ranges[0][1])
+  const firstOk = await processBatch(firstBatch)
+  if (!firstOk || isAborted || expectedGen !== currentGeneration || ranges.length === 1) {
+    return failedBatches
+  }
+
+  // 2. 视口外其余批次（Pipelining）：受控并发流水线（并发度 3），打满吞吐同时防止本地与网络过载
+  const CONCURRENCY = 3
+  const remainingRanges = ranges.slice(1)
+  let nextBatchIdx = 0
+
+  const worker = async () => {
+    while (
+      nextBatchIdx < remainingRanges.length &&
+      !isAborted &&
+      expectedGen === currentGeneration
+    ) {
+      const [start, end] = remainingRanges[nextBatchIdx++]
+      const batch = entries.slice(start, end)
+      const ok = await processBatch(batch)
+      if (!ok) break
     }
   }
+
+  const workerCount = Math.min(CONCURRENCY, remainingRanges.length)
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
 
   return failedBatches
 }

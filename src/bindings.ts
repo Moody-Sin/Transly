@@ -44,6 +44,8 @@ export const commands = {
 	searchTranslationHistory: (keyword: string, limit: number, offset: number) => typedError<CacheEntry[], string>(__TAURI_INVOKE("search_translation_history", { keyword, limit, offset })),
 	/**  按 `cache_key` 删除单条翻译历史。 */
 	deleteHistoryEntry: (cacheKey: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_history_entry", { cacheKey })),
+	/**  流式将翻译历史记录导出为本地文件（写入用户 Downloads 目录），零大内存 IPC 传输与 UI 阻塞 */
+	exportTranslationHistory: (format: string, keyword: string | null) => typedError<ExportHistoryOutcome, string>(__TAURI_INVOKE("export_translation_history", { format, keyword })),
 	setCacheEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_cache_enabled", { enabled })),
 	getCacheEnabled: () => __TAURI_INVOKE<boolean>("get_cache_enabled"),
 	ocrClipboardImage: (targetLang: string) => typedError<string, OcrErrorDto>(__TAURI_INVOKE("ocr_clipboard_image", { targetLang })),
@@ -91,6 +93,11 @@ export type EngineCapabilitiesDto = {
  *  每个变体都必须有真实构造路径，否则应随构造方一并删除。
  */
 export type ErrorKind = "input" | "auth" | "network" | "engine" | "internal";
+
+export type ExportHistoryOutcome = {
+	count: number,
+	file_path: string,
+};
 
 export type GlossaryTermDto = {
 	source: string,

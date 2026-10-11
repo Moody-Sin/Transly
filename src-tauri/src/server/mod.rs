@@ -461,7 +461,7 @@ async fn translate_batch_handler(
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
-    // 1. 若开启缓存，优先查缓存（先查当前引擎，若具备 fallback 且未命中，允许命中降级引擎历史缓存）
+    // 1. 若开启缓存，优先查缓存（结合 L1 内存与 L2 批量 SQL，单次完成整批带 Fallback 查询）
     if cache_enabled {
         let cached_items = {
             let cache_ref = state.cache.clone();
@@ -470,18 +470,13 @@ async fn translate_batch_handler(
             let s = source.clone();
             let t = target.clone();
             tokio::task::spawn_blocking(move || {
-                let mut matches = Vec::with_capacity(items.len());
-                for item in &items {
-                    let hit = transly_core::lookup_cache_with_fallback(
-                        cache_ref.as_ref(),
-                        engine_ref.as_ref(),
-                        &item.text,
-                        &s,
-                        &t,
-                    );
-                    matches.push(hit);
-                }
-                matches
+                transly_core::lookup_batch_with_fallback(
+                    cache_ref.as_ref(),
+                    engine_ref.as_ref(),
+                    &items,
+                    &s,
+                    &t,
+                )
             })
             .await
             .unwrap_or_else(|_| vec![None; unified_items.len()])

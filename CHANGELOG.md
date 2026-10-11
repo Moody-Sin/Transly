@@ -8,6 +8,10 @@
 ## [未发布]
 
 ### 新增
+- **流式文件导出后端命令 (`export_translation_history`)**: 新增直接在后台线程流式导出翻译历史到本地文件的后端命令，支持 CSV（带 BOM 防 Excel 乱码与公式注入转义）与 JSON 格式，直接从 SQLite 游标写入用户 Downloads 目录，彻底消除前端一次性拉取数万条记录跨 IPC 传输导致内存暴涨与界面假死的问题。
+- **悬浮迷你窗独立架构拆分 (`FloatWindow.tsx`)**: 在应用根入口 `main.tsx` 进行路由级分流，彻底解耦悬浮迷你窗（`#float`）与主窗口巨石组件，浮窗不再初始化主窗口的 50+ 个 Hook 与多套模态状态，冷启动性能大幅提升且内存更轻量，同时消除主窗口文本输入时的全局组件重绘。
+- **浏览器扩展本地服务端口自适应配置与动态连接**: 扩展端后台 Service Worker 支持从本地存储动态读取 `transly_server_port` 或 `transly_server_url`，并放宽回环权限至 `http://127.0.0.1/*`；E2E 测试套件自动嗅探空闲端口，彻底解决本地已运行 Transly 桌面端时测试出现 `EADDRINUSE: 39281` 端口死锁的问题。
+- **CI 工作流完整纳入桌面与扩展端到端自动化测试及 macOS Runner**: 在 `.github/workflows/ci.yml` 中配置 Playwright 无头环境，将桌面端 UI 交互 E2E（`pnpm run test:e2e:ui`）与浏览器插件真实端到端 E2E（`pnpm run test:e2e:extension`）纳入 CI 硬门禁，并新增 `macos-latest` 测试矩阵，保障跨平台质量。
 - **多策略网络代理体系支持 (Auto / System / Manual / None)**: 新增 `ProxyMode` 与 `ProxyConfig` 强类型契约，支持默认自动（环境代理优先 -> 自动嗅探系统原生代理 -> 直连回退）、系统代理（强制读取 Windows 注册表 Internet Settings 等）、手动配置（支持指定 HTTP/HTTPS/SOCKS5 代理端口）以及强制直连（禁用代理）；在 `src-tauri` 平台层通过 `Win32_System_Registry` 原生嗅探 Windows 注册表代理；在桌面端设置面板新增“网络代理设置”交互卡片，修改后即时热重载引擎连接池，无需重启应用立即对桌面端与浏览器插件生效。
 - **便携版单文件全内嵌标准构建工作流**: 在 `package.json` 中固化 `"build:portable": "tauri build --no-bundle"` 脚本，确保单文件编译时将前端静态资产（`dist/`）完整打包内嵌，杜绝裸运行 `cargo build --release` 导致的 `localhost:5173` 拒绝连接（ERR_CONNECTION_REFUSED）问题。
 - **桌面端 UI 全交互真实渲染端到端自动化测试套件**: 在 `scripts/test-desktop-ui-e2e.mjs` 中构建基于 Playwright 的桌面端前端真实渲染 E2E 测试套件（`pnpm run test:e2e:ui`），全真模拟 37 个 Tauri IPC 命令与事件通道注册表，覆盖主窗口挂载、主题即时切换、即输即译、多引擎并发对比、历史记录检索过滤与导出、设置中心与术语库管理、浏览器扩展配对申请弹窗以及迷你划词悬浮窗（`#float`）等全部 8 项交互场景，验证 0 未捕获异常。
@@ -17,6 +21,10 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **富文本段落占位聚合奇偶硬编码与 DOM 错位颠倒修复**: 修正 `richText.ts` 与 `content/index.ts`，摒弃基于奇偶索引的脆弱推断，改由显式的 `isInline: boolean` 属性驱动，通过 `tokens.length + 1` 拓扑槽位实现对行内标签开头、连续标签等复杂 HTML 结构的 100% 精准回填与还原；补充行内开头与连续标签单元测试。
+- **DeepL 批量响应条数硬契约对齐校验**: 修正 `deepl.rs` 中的 `translate_batch`，在反序列化后严格校验返回条数与请求切片长度一致性，数量失配时立即报错，触发上层 `translate_batch_tolerant` 安全退化为逐项单请求隔离翻译，杜绝由于数量差错导致的译文整体错位偏移。
+- **整页翻译 DOM 遍历流式优化**: 移除 `content/index.ts` 中针对 Shadow DOM 探查的 `root.querySelectorAll('*')` 全页大数组分配，改用原生 `TreeWalker` 流式遍历与节点过滤，消除复杂网页或长列表页面上数百毫秒的主线程冻结与布局抖动。
+- **术语库增量删除与 AC 自动机缓存保留**: 为核心 `Glossary` 引入原生 `remove` 方法，更新 `delete_glossary_term` 命令，在删除术语时直接执行内存增量更新并使编译缓存失效，彻底消除原本“全表读取 -> 销毁旧实例 -> 重新逐项循环插入所有词条”的沉重开销。
 - **Google 网页翻译端点风控拦截与级联假死修复**: 将 `GoogleWebEngine` 默认客户端标识由易触发 429 人机拦截的 `client=gtx` 升级为 Chrome 扩展官方标识 `client=dict-chrome-ex`，并提供容错备选回退；配合系统代理自动嗅探，彻底解决国内网络环境下整页翻译单项超时 20 秒、整批串行挂死长达近 100 分钟的问题。
 - **浏览器扩展批次失败统计与快速熔断机制**: 修正 `content/index.ts` 中的 `applyBatchResponse` 与 `sendBatchWithSplit`，当单批全项失败时正确上报失败批次计数（`failedBatches: 1`），使扩展徽标及时转为警示黄标（`WARN`）；新增连续 2 批 100% 失败快速熔断保护，遇网络不可达时即刻中断后续批次并弹出明确的中文引导提示，消除页面假死。
 - **中英混排术语库单词边界误判修复**: 修正 `glossary.rs` 中 `is_word_char` 判定逻辑，排除中日韩 CJK 汉字字符，使汉字与西文字词相邻（如「用Rust重构」）时构成合法的词边界，解决中英混排场景下英文术语 100% 无法命中的缺陷；补充中英紧挨词条替换回归单测。

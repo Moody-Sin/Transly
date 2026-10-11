@@ -1,4 +1,15 @@
-const LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
+const DEFAULT_LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
+
+async function getServerUrl(): Promise<string> {
+  const result = await chrome.storage.local.get(['transly_server_url', 'transly_server_port'])
+  if (result.transly_server_url) {
+    return result.transly_server_url
+  }
+  if (result.transly_server_port) {
+    return `http://127.0.0.1:${result.transly_server_port}`
+  }
+  return DEFAULT_LOCAL_SERVER_URL
+}
 
 const CONTEXT_MENU_ID_TRANSLATE_SELECTION = 'transly-translate-selection'
 
@@ -28,7 +39,8 @@ let cachedLimits: BatchLimits | null = null
 async function getBatchLimits(): Promise<BatchLimits> {
   if (cachedLimits) return cachedLimits
   try {
-    const res = await fetch(`${LOCAL_SERVER_URL}/health`)
+    const serverUrl = await getServerUrl()
+    const res = await fetch(`${serverUrl}/health`)
     const data = (await res.json()) as Partial<{
       max_batch_items: number
       max_batch_total_chars: number
@@ -285,7 +297,8 @@ async function getOrCreateClientId(): Promise<string> {
 async function performAutoPairing(): Promise<{ ok: boolean; error?: string }> {
   try {
     const clientId = await getOrCreateClientId()
-    const reqRes = await fetch(`${LOCAL_SERVER_URL}/pair/request`, {
+    const serverUrl = await getServerUrl()
+    const reqRes = await fetch(`${serverUrl}/pair/request`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -308,7 +321,7 @@ async function performAutoPairing(): Promise<{ ok: boolean; error?: string }> {
 
     for (let i = 0; i < maxPolls; i++) {
       await new Promise((r) => setTimeout(r, 1000))
-      const pollRes = await fetch(`${LOCAL_SERVER_URL}/pair/poll`, {
+      const pollRes = await fetch(`${serverUrl}/pair/poll`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -365,51 +378,53 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'CHECK_DESKTOP_SERVER') {
-    fetch(`${LOCAL_SERVER_URL}/health`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return res.json()
-      })
-      .then((data) => {
-        // 如果服务运行中，进一步检验 Token 配对有效性
-        getServerToken().then((token) => {
-          if (!token) {
-            sendResponse({ ok: true, serverRunning: true, paired: false, data })
-            return
-          }
-          // 发起无副作用的 Token 鉴权探针请求
-          fetch(`${LOCAL_SERVER_URL}/verify_token`, {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          })
-            .then((authRes) => {
-              // 只有 2xx 才代表鉴权探针成功。
-              // 旧实现把「非 401」一律当作已配对，于是桌面端内部故障（500）、
-              // 旧版本没有该路由（404）、权限问题（403）都会被报成「已连接」，
-              // Popup 还会解锁翻译按钮，用户点下去才收到失败。
-              if (authRes.ok) {
-                sendResponse({ ok: true, serverRunning: true, paired: true, data })
-              } else if (authRes.status === 401) {
-                sendResponse({ ok: true, serverRunning: true, paired: false, tokenExpired: true })
-              } else {
-                // 服务在跑但探针本身异常：不能报成已配对
-                sendResponse({
-                  ok: true,
-                  serverRunning: true,
-                  paired: false,
-                  error: `verify_failed_${authRes.status}`,
-                })
-              }
-            })
-            .catch(() => {
-              // 网络层失败：桌面端可能已退出，不能沿用旧状态报成「已连接」
-              sendResponse({ ok: false, serverRunning: false, error: 'network_unreachable' })
-            })
+    getServerUrl().then((serverUrl) => {
+      fetch(`${serverUrl}/health`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          return res.json()
         })
-      })
-      .catch((err) => sendResponse({ ok: false, serverRunning: false, error: err.message }))
+        .then((data) => {
+          // 如果服务运行中，进一步检验 Token 配对有效性
+          getServerToken().then((token) => {
+            if (!token) {
+              sendResponse({ ok: true, serverRunning: true, paired: false, data })
+              return
+            }
+            // 发起无副作用的 Token 鉴权探针请求
+            fetch(`${serverUrl}/verify_token`, {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            })
+              .then((authRes) => {
+                // 只有 2xx 才代表鉴权探针成功。
+                // 旧实现把「非 401」一律当作已配对，于是桌面端内部故障（500）、
+                // 旧版本没有该路由（404）、权限问题（403）都会被报成「已连接」，
+                // Popup 还会解锁翻译按钮，用户点下去才收到失败。
+                if (authRes.ok) {
+                  sendResponse({ ok: true, serverRunning: true, paired: true, data })
+                } else if (authRes.status === 401) {
+                  sendResponse({ ok: true, serverRunning: true, paired: false, tokenExpired: true })
+                } else {
+                  // 服务在跑但探针本身异常：不能报成已配对
+                  sendResponse({
+                    ok: true,
+                    serverRunning: true,
+                    paired: false,
+                    error: `verify_failed_${authRes.status}`,
+                  })
+                }
+              })
+              .catch(() => {
+                // 网络层失败：桌面端可能已退出，不能沿用旧状态报成「已连接」
+                sendResponse({ ok: false, serverRunning: false, error: 'network_unreachable' })
+              })
+          })
+        })
+        .catch((err) => sendResponse({ ok: false, serverRunning: false, error: err.message }))
+    })
     return true
   }
 
@@ -433,8 +448,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'TRANSLATE_BATCH') {
-    getServerToken().then((token) => {
-      fetch(`${LOCAL_SERVER_URL}/translate`, {
+    Promise.all([getServerToken(), getServerUrl()]).then(([token, serverUrl]) => {
+      fetch(`${serverUrl}/translate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -11,8 +11,6 @@ import {
   Globe,
   Image as ImageIcon,
   Volume2,
-  Pin,
-  PinOff,
 } from 'lucide-react'
 import { commands } from './bindings'
 import type { EngineCapabilitiesDto, ProxyMode, ServerStatus } from './bindings'
@@ -108,7 +106,6 @@ export default function App() {
   const [proxyMode, setProxyMode] = useState<ProxyMode>('auto')
   const [proxyUrl, setProxyUrl] = useState('')
   const [proxySaving, setProxySaving] = useState(false)
-  const [isFloatPinned, setIsFloatPinned] = useState(false)
   const [isCompareMode, setIsCompareMode] = useState(false)
   const [compareResults, setCompareResults] = useState<CompareItem[]>([])
   const compareGenRef = useRef(0)
@@ -243,10 +240,8 @@ export default function App() {
   const pairingDialogRef = useDialogFocus(pairingRequest !== null, closePairing)
   const ocrDialogRef = useDialogFocus(ocrConfirmOpen, closeOcrConfirm)
 
-  const isFloatWindow = window.location.hash === '#float'
-
   // 四类入口（输入框 / 划词 / 剪贴板 / 浮窗）共用同一任务状态机
-  const runner = useTaskRunner(engine, targetLang, { isPinned: isFloatPinned })
+  const runner = useTaskRunner(engine, targetLang)
   const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
   const isComparing = isCompareMode && compareResults.some((r) => r.loading)
   const isTranslating = isCompareMode ? isComparing : state === 'running'
@@ -434,7 +429,6 @@ export default function App() {
     listen<{ session_id: string; browser_hint?: string }>(
       'transly://pairing-requested',
       async (event) => {
-        if (isFloatWindow) return
         setPairingError(null)
         setPairingBusy(false)
         setPairingRequest({
@@ -452,8 +446,6 @@ export default function App() {
       },
     )
       .then((fn) => {
-        // cleanup 先于 promise 兑现时 unlisten 仍是 undefined，监听器会永久泄漏；
-        // 此处先判断是否已卸载，已卸载则立即注销。
         if (disposed) fn()
         else unlisten = fn
       })
@@ -465,11 +457,10 @@ export default function App() {
       disposed = true
       if (unlisten) unlisten()
     }
-  }, [isFloatWindow])
+  }, [])
 
   // 监听划词原地替换失败事件并弹出 Toast 与桌面原生通知提醒（仅限主窗口处理，防止双窗口重复弹窗）
   useEffect(() => {
-    if (isFloatWindow) return
     let unlisten: (() => void) | undefined
     let disposed = false
     listen<{ engine: string; message: string }>('transly://replacement-failed', (event) => {
@@ -502,11 +493,10 @@ export default function App() {
       disposed = true
       if (unlisten) unlisten()
     }
-  }, [t, isFloatWindow])
+  }, [t])
 
   // 启动阶段按需预申请系统通知权限（仅限主窗口，供外部窗口原地替换失败时原生弹出通知）
   useEffect(() => {
-    if (isFloatWindow) return
     if (
       typeof window !== 'undefined' &&
       'Notification' in window &&
@@ -514,21 +504,7 @@ export default function App() {
     ) {
       Notification.requestPermission().catch(() => {})
     }
-  }, [isFloatWindow])
-
-  // 迷你悬浮窗 Escape 键极速关闭交互
-  useEffect(() => {
-    if (!isFloatWindow) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        getCurrentWindow()
-          .hide()
-          .catch((err) => console.warn('[Transly] 隐藏浮窗失败：', err))
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isFloatWindow])
+  }, [])
 
   // 依赖必须是稳定的 sessionId：依赖整个 pairingRequest 对象时，
   // 倒计时每秒重建一次对象，也会把 setInterval 每秒 clear 一次再重建。
@@ -945,120 +921,6 @@ export default function App() {
       return
     }
     void runOcrClipboard()
-  }
-
-  // 迷你悬浮小窗模式 (无边框、紧凑置顶卡片)
-  if (isFloatWindow) {
-    return (
-      <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-indigo-100 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-md select-none text-slate-800 dark:text-slate-100">
-        <div
-          data-tauri-drag-region
-          className="flex cursor-move items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2"
-        >
-          <div data-tauri-drag-region className="flex items-center gap-1.5">
-            <Languages className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-            <span
-              data-tauri-drag-region
-              className="text-xs font-semibold text-slate-800 dark:text-slate-200"
-            >
-              {t.float.title}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                const next = !isFloatPinned
-                setIsFloatPinned(next)
-                commands.setFloatSticky(next).catch(() => {})
-              }}
-              className={`rounded p-1 transition-colors ${
-                isFloatPinned
-                  ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-900'
-                  : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300'
-              }`}
-              title={isFloatPinned ? t.float.unpin : t.float.pin}
-            >
-              {isFloatPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-            </button>
-            {isTranslating && (
-              <button
-                onClick={runner.cancel}
-                className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
-              >
-                {t.task.btnCancel}
-              </button>
-            )}
-            <select
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
-            >
-              <option value="zh-CN">{t.translation.languageZhCN}</option>
-              <option value="en">{t.languages.en}</option>
-              <option value="ja">{t.translation.languageJa}</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="my-2 flex-1 overflow-auto rounded-lg bg-slate-50/70 dark:bg-slate-800/70 p-2 text-xs leading-relaxed text-slate-800 dark:text-slate-200 border border-slate-100 dark:border-slate-800">
-          {isTranslating ? (
-            <span className="text-slate-400 animate-pulse">{t.float.translating}</span>
-          ) : error ? (
-            <div className="flex flex-col gap-1">
-              <span className="text-rose-500">{t.error[error.kind]}</span>
-              {canRetry(state, error) && (
-                <button
-                  onClick={runner.retry}
-                  className="self-start rounded bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
-                >
-                  {t.task.btnRetry}
-                </button>
-              )}
-              {showNetworkEngineHint && (
-                <span className="text-[10px] leading-snug text-amber-600">
-                  {t.error.networkHintGoogle}
-                </span>
-              )}
-            </div>
-          ) : (
-            translatedText || <span className="text-slate-400">{t.float.placeholder}</span>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between pt-1">
-          <span className="text-[10px] text-slate-400 truncate max-w-[200px]">
-            {state === 'cancelled'
-              ? t.task.cancelled
-              : runner.snapshot.sourceText
-                ? `“${runner.snapshot.sourceText.slice(0, 30)}...”`
-                : t.float.autoHideNotice}
-          </span>
-          {translatedText && (
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => handleSpeak(translatedText, targetLang)}
-                className="flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200"
-                title={t.translation.speak}
-              >
-                <Volume2 className="h-3 w-3" />
-                <span>{t.translation.speak}</span>
-              </button>
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
-              >
-                {copied ? (
-                  <Check className="h-3 w-3 text-emerald-600" />
-                ) : (
-                  <Copy className="h-3 w-3" />
-                )}
-                <span>{copied ? t.translation.copied : t.translation.copy}</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    )
   }
 
   return (

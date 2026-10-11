@@ -11,14 +11,25 @@ pub struct GoogleWebEngine {
 
 impl GoogleWebEngine {
     pub fn new() -> Self {
+        Self::new_with_proxy(None, false)
+    }
+
+    pub fn new_with_proxy(proxy_url: Option<&str>, no_proxy: bool) -> Self {
         Self {
-            client: super::build_timed_client(
+            client: super::build_timed_client_with_proxy(
                 Client::builder()
                     .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"),
                 std::time::Duration::from_secs(10),
+                proxy_url,
+                no_proxy,
             ),
         }
     }
+
+    pub fn with_client(client: Client) -> Self {
+        Self { client }
+    }
+
     pub fn parse_gtx_response(json: &Value, engine_id: &str) -> Result<TranslationResponse> {
         // Google GTX 响应结构示例: [[["译文1", "原文1", ...], ["译文2", "原文2", ...]], ...]
         let mut translated_full = String::new();
@@ -59,25 +70,45 @@ impl GoogleWebEngine {
             source_lang
         };
         let tl = target_lang;
+        let encoded_text = urlencoding::encode(text);
 
-        let url = format!(
-            "https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tl}&dt=t&q={}",
-            urlencoding::encode(text)
-        );
+        // 优先使用 Chrome 扩展客户端标识（dict-chrome-ex），避免 gtx 标识在公共代理/VPN 节点被 Google 429 拦截；
+        // 若首选客户端非 200，支持备选 gtx 客户端重试
+        let clients = ["dict-chrome-ex", "gtx"];
+        let mut last_err = None;
 
-        let resp = super::send_with_retry(1, std::time::Duration::from_millis(200), || {
-            self.client.get(&url).send()
-        })
-        .await?;
-        if !resp.status().is_success() {
-            return Err(Error::Engine {
-                engine: self.id().to_string(),
-                message: format!("HTTP 请求失败状态码: {}", resp.status()),
-            });
+        for client_name in clients {
+            let url = format!(
+                "https://translate.googleapis.com/translate_a/single?client={client_name}&sl={sl}&tl={tl}&dt=t&q={encoded_text}"
+            );
+
+            let resp = super::send_with_retry(1, std::time::Duration::from_millis(200), || {
+                self.client.get(&url).send()
+            })
+            .await;
+
+            match resp {
+                Ok(res) => {
+                    if res.status().is_success() {
+                        let json: Value = res.json().await?;
+                        return Self::parse_gtx_response(&json, self.id());
+                    } else {
+                        last_err = Some(Error::Engine {
+                            engine: self.id().to_string(),
+                            message: format!("HTTP 请求失败状态码: {}", res.status()),
+                        });
+                    }
+                }
+                Err(err) => {
+                    last_err = Some(Error::Network(err));
+                }
+            }
         }
 
-        let json: Value = resp.json().await?;
-        Self::parse_gtx_response(&json, self.id())
+        Err(last_err.unwrap_or_else(|| Error::Engine {
+            engine: self.id().to_string(),
+            message: "Google 网页翻译端点请求失败".to_string(),
+        }))
     }
 }
 

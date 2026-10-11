@@ -792,8 +792,8 @@ async function sendBatchWithSplit(
   }
 
   if (response.ok && response.data) {
-    applyBatchResponse(response.data, batch, expectedGen)
-    return { failedBatches: 0 }
+    const { succeeded } = applyBatchResponse(response.data, batch, expectedGen)
+    return { failedBatches: succeeded === 0 && batch.length > 0 ? 1 : 0 }
   }
 
   // 413：批次超限，对半拆开重试
@@ -907,6 +907,13 @@ async function translateEntries(
         })
         .catch(() => {})
     }
+
+    // 快速熔断防假死：若连续 2 批 100% 失败且累计成功数为 0（网络全面阻断或凭据失效），
+    // 立即中断后续批次，避免在不可达网络上长达数十分钟无声挂起
+    if (failedBatches >= 2 && currentTaskCompleted === 0) {
+      console.warn(`[Transly] 连续 ${failedBatches} 批全部失败且成功数为 0，触发快速熔断保护`)
+      break
+    }
   }
 
   return failedBatches
@@ -921,15 +928,18 @@ function markBatchFailed(batch: TextNodeEntry[], errorKind: string) {
 
 let currentTranslateMode = 'replace'
 
-/** 按 ID 将服务端响应写回 DOM，逐项记录失败 */
+/** 按 ID 将服务端响应写回 DOM，逐项记录失败，返回本批次成功与失败项计数 */
 function applyBatchResponse(
   resData: BatchResponsePayload | undefined,
   batch: TextNodeEntry[],
   expectedGen: number,
-) {
-  if (!resData) return
+): { succeeded: number; failed: number } {
+  if (!resData || expectedGen !== currentGeneration) {
+    return { succeeded: 0, failed: batch.length }
+  }
 
-  if (expectedGen !== currentGeneration) return
+  let succeeded = 0
+  let failed = 0
 
   if (resData.items && resData.items.length > 0) {
     // 优先消费结构化 items 契约：精准映射 ID
@@ -952,24 +962,28 @@ function applyBatchResponse(
             }
             failedItemsMap.delete(entry.id)
             currentTaskCompleted += 1
+            succeeded += 1
           } else {
             // 占位符丢失或语序损坏：保持原文 DOM 结构完整，记录失败项供后续重试
             rememberFailed({
               ...entry,
               errorKind: 'rich_text_mismatch',
             })
+            failed += 1
           }
           continue
         }
         replaceTextNode(entry.node, itemRes.text, currentTranslateMode)
         failedItemsMap.delete(entry.id)
         currentTaskCompleted += 1
+        succeeded += 1
       } else {
         // 失败项：保留当前 TextNode 原文不变，记录至 failedItemsMap
         rememberFailed({
           ...entry,
           errorKind: itemRes?.error_kind || 'internal',
         })
+        failed += 1
       }
     }
   } else if (resData.translations) {
@@ -992,23 +1006,29 @@ function applyBatchResponse(
               }
               failedItemsMap.delete(batch[idx].id)
               currentTaskCompleted += 1
+              succeeded += 1
             } else {
               rememberFailed({
                 ...batch[idx],
                 errorKind: 'rich_text_mismatch',
               })
+              failed += 1
             }
             return
           }
           replaceTextNode(batch[idx].node, translated, currentTranslateMode)
           failedItemsMap.delete(batch[idx].id)
           currentTaskCompleted += 1
+          succeeded += 1
         } else {
           rememberFailed({ ...batch[idx] })
+          failed += 1
         }
       }
     })
   }
+
+  return { succeeded, failed }
 }
 
 /**

@@ -181,6 +181,16 @@
     "preferredReplaceEngineDesc": "Preferred engine used for in-place replacement (Alt+Shift+R); errors will be reported directly on failure",
     "statusReplaceEngineSaved": "In-place replacement engine updated!",
     "statusReplaceEngineFailed": "Failed to save in-place replacement engine",
-    "replacementFailedPrefix": "In-place replacement failed"
+    "replacementFailedPrefix": "In-place replacement failed",
+    "proxyTitle": "Network Proxy",
+    "proxyDesc": "Proxy strategy for external translation requests (Google / DeepL / OpenAI)",
+    "proxyModeAuto": "Default Auto (Recommended)",
+    "proxyModeSystem": "System Proxy",
+    "proxyModeManual": "Manual Configuration",
+    "proxyModeNone": "No Proxy (Direct)",
+    "proxyUrlPlaceholder": "e.g., http://127.0.0.1:7890",
+    "btnSaveProxy": "Save Proxy",
+    "statusProxySaved": "Proxy settings saved successfully!",
+    "statusProxySaveFailed": "Failed to save proxy settings"
   }
 }

@@ -15,7 +15,7 @@ import {
   PinOff,
 } from 'lucide-react'
 import { commands } from './bindings'
-import type { EngineCapabilitiesDto, ServerStatus } from './bindings'
+import type { EngineCapabilitiesDto, ProxyMode, ServerStatus } from './bindings'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getTranslation, Locale } from './i18n'
@@ -105,6 +105,9 @@ export default function App() {
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
   const [replaceShortcutConflict, setReplaceShortcutConflict] = useState<string>('')
   const [preferredReplaceEngine, setPreferredReplaceEngine] = useState('google')
+  const [proxyMode, setProxyMode] = useState<ProxyMode>('auto')
+  const [proxyUrl, setProxyUrl] = useState('')
+  const [proxySaving, setProxySaving] = useState(false)
   const [isFloatPinned, setIsFloatPinned] = useState(false)
   const [isCompareMode, setIsCompareMode] = useState(false)
   const [compareResults, setCompareResults] = useState<CompareItem[]>([])
@@ -370,6 +373,18 @@ export default function App() {
       })
       .catch((err) => {
         console.warn('[Transly] 读取划词替换首选引擎失败：', err)
+      })
+
+    commands
+      .getProxyConfig()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setProxyMode(res.data.mode)
+          setProxyUrl(res.data.url || '')
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取代理配置失败：', err)
       })
 
     // 启动时也查一次快捷键注册结果。
@@ -720,6 +735,32 @@ export default function App() {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusReplaceEngineFailed,
       )
+    }
+  }
+
+  const handleSaveProxyConfig = async (newMode: ProxyMode, newUrl: string) => {
+    setProxySaving(true)
+    try {
+      const res = await commands.saveProxyConfig({
+        mode: newMode,
+        url: newMode === 'manual' ? newUrl.trim() : null,
+      })
+      if (res.status === 'ok') {
+        setProxyMode(newMode)
+        setProxyUrl(newUrl)
+        setSaveStatus(t.settings.statusProxySaved)
+        setTimeout(() => setSaveStatus(null), 2500)
+      } else {
+        setSaveStatus(`${t.settings.statusProxySaveFailed}: ${res.error}`)
+        setTimeout(() => setSaveStatus(null), 4000)
+      }
+    } catch (err) {
+      setSaveStatus(
+        `${t.settings.statusProxySaveFailed}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      setTimeout(() => setSaveStatus(null), 4000)
+    } finally {
+      setProxySaving(false)
     }
   }
 
@@ -1715,6 +1756,52 @@ export default function App() {
                   <option value="literary">{t.settings.llmStyleLiterary}</option>
                   <option value="business">{t.settings.llmStyleBusiness}</option>
                 </select>
+              </div>
+
+              {/* 网络代理设置 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-slate-700 dark:text-slate-200">
+                      {t.settings.proxyTitle}
+                    </div>
+                    <div className="text-[11px] text-slate-400">{t.settings.proxyDesc}</div>
+                  </div>
+                  <select
+                    value={proxyMode}
+                    onChange={(e) => {
+                      const newMode = e.target.value as ProxyMode
+                      setProxyMode(newMode)
+                      if (newMode !== 'manual') {
+                        handleSaveProxyConfig(newMode, proxyUrl)
+                      }
+                    }}
+                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    <option value="auto">{t.settings.proxyModeAuto}</option>
+                    <option value="system">{t.settings.proxyModeSystem}</option>
+                    <option value="manual">{t.settings.proxyModeManual}</option>
+                    <option value="none">{t.settings.proxyModeNone}</option>
+                  </select>
+                </div>
+                {proxyMode === 'manual' && (
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={proxyUrl}
+                      onChange={(e) => setProxyUrl(e.target.value)}
+                      placeholder={t.settings.proxyUrlPlaceholder}
+                      className="flex-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 font-mono"
+                    />
+                    <button
+                      onClick={() => handleSaveProxyConfig('manual', proxyUrl)}
+                      disabled={proxySaving || !proxyUrl.trim()}
+                      className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    >
+                      {proxySaving ? '...' : t.settings.btnSaveProxy}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* 剪贴板监听开关 */}

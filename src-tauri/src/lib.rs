@@ -3,6 +3,7 @@ pub mod clipboard_gate;
 pub mod commands;
 pub mod engine_pool;
 pub mod ocr;
+pub mod proxy;
 pub mod secrets;
 pub mod server;
 pub mod storage;
@@ -63,7 +64,9 @@ macro_rules! app_command_builder {
             $crate::commands::get_server_status,
             $crate::commands::get_shortcut_status,
             $crate::commands::get_preferred_replace_engine,
-            $crate::commands::save_preferred_replace_engine
+            $crate::commands::save_preferred_replace_engine,
+            $crate::commands::get_proxy_config,
+            $crate::commands::save_proxy_config
         ])
     };
 }

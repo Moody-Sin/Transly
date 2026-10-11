@@ -8,6 +8,8 @@
 ## [未发布]
 
 ### 新增
+- **多策略网络代理体系支持 (Auto / System / Manual / None)**: 新增 `ProxyMode` 与 `ProxyConfig` 强类型契约，支持默认自动（环境代理优先 -> 自动嗅探系统原生代理 -> 直连回退）、系统代理（强制读取 Windows 注册表 Internet Settings 等）、手动配置（支持指定 HTTP/HTTPS/SOCKS5 代理端口）以及强制直连（禁用代理）；在 `src-tauri` 平台层通过 `Win32_System_Registry` 原生嗅探 Windows 注册表代理；在桌面端设置面板新增“网络代理设置”交互卡片，修改后即时热重载引擎连接池，无需重启应用立即对桌面端与浏览器插件生效。
+- **便携版单文件全内嵌标准构建工作流**: 在 `package.json` 中固化 `"build:portable": "tauri build --no-bundle"` 脚本，确保单文件编译时将前端静态资产（`dist/`）完整打包内嵌，杜绝裸运行 `cargo build --release` 导致的 `localhost:5173` 拒绝连接（ERR_CONNECTION_REFUSED）问题。
 - **桌面端 UI 全交互真实渲染端到端自动化测试套件**: 在 `scripts/test-desktop-ui-e2e.mjs` 中构建基于 Playwright 的桌面端前端真实渲染 E2E 测试套件（`pnpm run test:e2e:ui`），全真模拟 37 个 Tauri IPC 命令与事件通道注册表，覆盖主窗口挂载、主题即时切换、即输即译、多引擎并发对比、历史记录检索过滤与导出、设置中心与术语库管理、浏览器扩展配对申请弹窗以及迷你划词悬浮窗（`#float`）等全部 8 项交互场景，验证 0 未捕获异常。
 - **Rust 本地服务真实 TCP 协议端到端集成测试**: 在 `src-tauri/src/server/tests.rs` 中新增 `test_real_tcp_server_e2e_lifecycle`，绑定系统真实 TCP 回环端口，全链路验证网络握手、`/health` 探针、DNS Rebinding 恶意 Host 阻断（403）、配对申请/轮询状态机、Bearer Token 强鉴权与批量翻译术语干预及缓存写入。
 - **跨进程真实 Rust 本地服务与浏览器扩展端到端联调测试**: 新增 `transly_test_server` 轻量测试服务器二进制，升级 `scripts/test-extension-e2e.mjs`，由真实 Rust 进程托管 127.0.0.1:39281 本地服务与测试页面，实现浏览器扩展在真实浏览器环境中向真实 Rust 后端发起跨域通信与整页沉浸式翻译的全闭环验证。
@@ -15,6 +17,8 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **Google 网页翻译端点风控拦截与级联假死修复**: 将 `GoogleWebEngine` 默认客户端标识由易触发 429 人机拦截的 `client=gtx` 升级为 Chrome 扩展官方标识 `client=dict-chrome-ex`，并提供容错备选回退；配合系统代理自动嗅探，彻底解决国内网络环境下整页翻译单项超时 20 秒、整批串行挂死长达近 100 分钟的问题。
+- **浏览器扩展批次失败统计与快速熔断机制**: 修正 `content/index.ts` 中的 `applyBatchResponse` 与 `sendBatchWithSplit`，当单批全项失败时正确上报失败批次计数（`failedBatches: 1`），使扩展徽标及时转为警示黄标（`WARN`）；新增连续 2 批 100% 失败快速熔断保护，遇网络不可达时即刻中断后续批次并弹出明确的中文引导提示，消除页面假死。
 - **中英混排术语库单词边界误判修复**: 修正 `glossary.rs` 中 `is_word_char` 判定逻辑，排除中日韩 CJK 汉字字符，使汉字与西文字词相邻（如「用Rust重构」）时构成合法的词边界，解决中英混排场景下英文术语 100% 无法命中的缺陷；补充中英紧挨词条替换回归单测。
 - **IPv6 Host 头解析切分漏洞加固**: 修正 `server/mod.rs` 中 `host_header_allowed` 对 IPv6 字面量的解析，严格验证 `']'` 之后仅允许为空或纯数字端口 `":\d+"`，拦截形如 `[::1].evil.com` 的绕过式域名，彻底堵死 DNS Rebinding 防线中的解析盲区；补充反例单测。
 - **浏览器扩展富文本段落占位符回填硬阻断**: 在 `content/index.ts` 中修正 `applyBatchResponse` 复合项处理逻辑，当翻译结果中占位符丢失或语序损坏导致 `restoreRichTextComposite` 返回 `null` 时，立即阻断并登记失败项，禁止穿透写入首个子文本节点，杜绝 DOM 产生重复堆叠与排版错乱。

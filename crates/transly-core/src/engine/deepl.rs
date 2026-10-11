@@ -32,16 +32,31 @@ struct DeepLApiResponse {
 
 impl DeepLEngine {
     pub fn new(api_key: impl Into<String>) -> Self {
+        Self::new_with_proxy(api_key, None, false)
+    }
+
+    pub fn new_with_proxy(
+        api_key: impl Into<String>,
+        proxy_url: Option<&str>,
+        no_proxy: bool,
+    ) -> Self {
         let key = api_key.into();
         let is_pro = !key.ends_with(":fx");
         Self {
-            client: super::build_timed_client(
+            client: super::build_timed_client_with_proxy(
                 Client::builder(),
                 std::time::Duration::from_secs(15),
+                proxy_url,
+                no_proxy,
             ),
             api_key: key,
             is_pro,
         }
+    }
+
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.client = client;
+        self
     }
 
     fn endpoint(&self) -> &'static str {

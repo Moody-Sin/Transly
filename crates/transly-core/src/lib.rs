@@ -6,6 +6,7 @@ pub mod error;
 pub mod glossary;
 pub mod ocr;
 pub mod preserve;
+pub mod proxy;
 pub mod task;
 pub mod validation;
 
@@ -25,6 +26,7 @@ pub use ocr::{
     OcrErrorDto, OcrErrorKind,
 };
 pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};
+pub use proxy::{normalize_proxy_url, ProxyConfig, ProxyMode};
 pub use task::{classify_error, TaskError};
 pub use validation::{
     validate_engine_id, validate_language_code, validate_language_pair, validate_translation_input,

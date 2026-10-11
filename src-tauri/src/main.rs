@@ -25,8 +25,12 @@ use src_tauri::commands::place_float_near_cursor;
 /// 迁移是必须的：术语库与翻译缓存在同一个 SQLite 文件中，
 /// 不迁移就等于直接丢掉用户自建的术语。
 fn resolve_data_dir(identifier: &str) -> std::path::PathBuf {
-    let dir = src_tauri::storage::app_data_dir(identifier);
+    let (dir, is_portable) = src_tauri::storage::resolve_data_dir(identifier);
     let _ = std::fs::create_dir_all(&dir);
+    if is_portable {
+        println!("已启用单文件便携模式，数据隔离保存在: {dir:?}");
+        return dir;
+    }
     // 先迁移最老版本的目录（<父目录>/Transly），再迁移漫游目录（%APPDATA%）。
     // 顺序有讲究：两者都存在时以更早的历史数据为准，且迁移本身不覆盖已有新库。
     match src_tauri::storage::migrate_legacy_cache(&dir) {

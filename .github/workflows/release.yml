@@ -62,6 +62,27 @@ jobs:
           releaseDraft: false
           prerelease: false
 
+      - name: 提取 Windows 单文件免安装便携版产物
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          if [ -f "target/release/transly.exe" ]; then
+            cp "target/release/transly.exe" "Transly-Portable-${{ matrix.platform }}.exe"
+          elif [ -f "src-tauri/target/release/transly.exe" ]; then
+            cp "src-tauri/target/release/transly.exe" "Transly-Portable-${{ matrix.platform }}.exe"
+          else
+            echo "未找到 release 二进制文件！"
+            exit 1
+          fi
+
+      - name: 上传 Windows 单文件便携版至 GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: Transly-Portable-${{ matrix.platform }}.exe
+
   build-extension:
     name: 打包浏览器扩展 (.zip)
     runs-on: ubuntu-latest

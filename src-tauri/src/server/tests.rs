@@ -28,6 +28,10 @@ fn test_host_header_allowed() {
     assert!(!host_header_allowed("127.0.0.1.evil.com:39281"));
     assert!(!host_header_allowed("localhost.evil.com:39281"));
     assert!(!host_header_allowed("evil-localhost"));
+    assert!(!host_header_allowed("[::1].evil.com"));
+    assert!(!host_header_allowed("[::1].evil.com:39281"));
+    assert!(!host_header_allowed("[::1]evil.com"));
+    assert!(!host_header_allowed("[::1]:evil"));
     // 畸形与空值
     assert!(!host_header_allowed(""));
     assert!(!host_header_allowed("   "));

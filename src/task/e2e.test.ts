@@ -127,3 +127,13 @@ test('E2E: 富文本段落闭合占位聚合 -> 批量翻译 -> 准确按语序�
   assert.equal(unpacked.get('part_1'), 'Transly 官方文档')
   assert.equal(unpacked.get('part_2'), '了解更多详情。')
 })
+
+test('E2E: 富文本占位符丢失或篡改时安全返回 null，回退逻辑不破坏 DOM', () => {
+  const baseIds = ['part_0', 'part_2']
+  const placeholderToId = new Map([['⟦T_1⟧', 'part_1']])
+
+  // 模拟引擎丢弃了 ⟦T_1⟧ 占位符
+  const mangledTranslation = '访问 Transly 官方文档了解更多详情。'
+  const unpacked = restoreRichTextComposite(mangledTranslation, baseIds, placeholderToId)
+  assert.equal(unpacked, null, '占位符丢失时必须安全返回 null 触发降级')
+})

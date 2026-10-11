@@ -158,8 +158,18 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 fn host_header_allowed(host: &str) -> bool {
     let host = host.trim();
     let name = match host.strip_prefix('[') {
-        // IPv6 字面量，如 `[::1]:39281`
-        Some(rest) => rest.split_once(']').map_or("", |(name, _)| name),
+        // IPv6 字面量，如 `[::1]:39281` 或 `[::1]`
+        Some(rest) => match rest.split_once(']') {
+            Some((name, tail))
+                if tail.is_empty()
+                    || (tail.starts_with(':')
+                        && !tail[1..].is_empty()
+                        && tail[1..].chars().all(|c| c.is_ascii_digit())) =>
+            {
+                name
+            }
+            _ => "",
+        },
         None => match host.rsplit_once(':') {
             // `主机名:端口`：端口必须全为数字，否则整体视为主机名
             Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {

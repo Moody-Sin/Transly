@@ -23,6 +23,7 @@ export interface TaskRunner {
   run: (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => void
   cancel: () => void
   retry: () => void
+  reset: () => void
 }
 
 interface FloatRequest {
@@ -175,13 +176,17 @@ export function useTaskRunner(
       // 空串（如用户全选删除）同样要走完整的作废流程。
       // 旧实现在此直接 return，导致上一次按键留下的防抖定时器不会被清除、
       // 在途任务也不会被取消——输入框已清空，右侧却冒出了旧文本的译文。
-      // 注意取消/清防抖必须排在空串守卫之前。
+      // 注意取消/清防抖必须排在空串守卫之前，且空串时必须重置 UI 快照。
       clearDebounce()
       const oldTaskId = genRef.current
       genRef.current += 1
       commands.cancelStreamTask(oldTaskId).catch(() => {})
 
-      if (!text.trim()) return
+      if (!text.trim()) {
+        setSnapshot(EMPTY)
+        lastRunRef.current = null
+        return
+      }
 
       const source = opts?.source ?? 'input'
       const delay = opts?.debounceMs ?? 0
@@ -208,6 +213,15 @@ export function useTaskRunner(
     setSnapshot((s) => (s.state === 'running' ? { ...s, state: nextState(s.state, 'cancel') } : s))
   }, [clearDebounce])
 
+  const reset = useCallback(() => {
+    clearDebounce()
+    const activeTaskId = genRef.current
+    genRef.current += 1
+    commands.cancelStreamTask(activeTaskId).catch(() => {})
+    setSnapshot(EMPTY)
+    lastRunRef.current = null
+  }, [clearDebounce])
+
   const retry = useCallback(() => {
     const last = lastRunRef.current
     // 从未发起过请求时无可重跑内容；静默返回会让按钮看起来失效，因此记录一次
@@ -223,6 +237,7 @@ export function useTaskRunner(
   // 订阅流式分块事件 (translate-stream-chunk)，实现打字机式实时逐字累加
   useEffect(() => {
     let unlisten: (() => void) | undefined
+    let disposed = false
     listen<{ task_id: number; chunk: string }>('translate-stream-chunk', (event) => {
       const payload = event.payload
       if (!payload || payload.task_id !== genRef.current) return
@@ -236,13 +251,15 @@ export function useTaskRunner(
       })
     })
       .then((fn) => {
-        unlisten = fn
+        if (disposed) fn()
+        else unlisten = fn
       })
       .catch((err) => {
         console.warn('[Transly] translate-stream-chunk 事件订阅失败：', err)
       })
 
     return () => {
+      disposed = true
       if (unlisten) unlisten()
     }
   }, [])
@@ -253,6 +270,7 @@ export function useTaskRunner(
   useEffect(() => {
     if (!isFloatWindow) return
     let unlisten: (() => void) | undefined
+    let disposed = false
     const handle = (payload: FloatRequest | null) => {
       if (!payload?.text?.trim()) return
       if (seenFloatIdsRef.current.has(payload.request_id)) return
@@ -267,7 +285,8 @@ export function useTaskRunner(
     // （见 Lessons Learned 第 8 条）。只降噪，不吞错。
     listen<FloatRequest>('float-translate', (event) => handle(event.payload))
       .then((fn) => {
-        unlisten = fn
+        if (disposed) fn()
+        else unlisten = fn
       })
       .catch((err) => {
         console.warn('[Transly] float-translate 事件订阅失败：', err)
@@ -290,6 +309,7 @@ export function useTaskRunner(
       }
     })()
     return () => {
+      disposed = true
       if (unlisten) unlisten()
     }
   }, [run, isFloatWindow])
@@ -314,5 +334,5 @@ export function useTaskRunner(
     })
   }, [needsSticky, isFloatWindow])
 
-  return { snapshot, run, cancel, retry }
+  return { snapshot, run, cancel, retry, reset }
 }

@@ -480,3 +480,55 @@
 ### 经验与规程
 1. **测试 MV3 扩展必须避开 Playwright 默认的 `--disable-extensions`**：使用 `headless: false` 配合 `args: ['--headless=new', ...]` 既保持真正的无头后台静默执行，又确保浏览器扩展正常加载。
 2. **多浏览器信道平滑降级**：优先探测 Windows 原生已安装的 Edge / Chrome（`channel: 'msedge'` / `channel: 'chrome'`），在开发机与 CI 上零额外下载、秒级启动。
+
+---
+
+## 34. `char::is_alphanumeric()` 包含全部 CJK 汉字，西文词边界判定必须排除 CJK
+
+### 现象与问题
+- 术语库为纯西文词条开启词边界保护（`word_boundary = true`），检查前后字符是否为“词内字符”（`is_word_char`）。
+- `is_word_char` 实现为 `c.is_alphanumeric() || c == '_'`。
+- 但根据 Unicode 规范，所有中日韩汉字（CJK Ideographs）均属于 Alphabetic 分类，Rust 中 `'中'.is_alphanumeric()` 恒为 `true`。
+- 后果：当中文用户在输入中使用紧挨汉字的西文术语时（如 `"用Rust重构"`、`"关于AI技术"`），前后汉字被误判为西文“词内字符”，导致西文单词边界校验 100% 失败，词条被静默忽略。
+
+### 经验与规程
+1. **西文单词边界判定必须将 CJK 字符视为合法的外部边界**：`is_word_char` 必须写为 `(c.is_alphanumeric() && !is_cjk(c)) || c == '_'`。
+2. 编写多语言混排专项单元测试（如中英紧挨词条替换），避免仅用纯 ASCII 词条覆盖测试。
+
+---
+
+## 35. IPv6 Host 头解析切分后丢弃后缀导致 DNS Rebinding 穿透
+
+### 现象与问题
+- `Host` 守卫对 IPv6 字面量采用 `rest.split_once(']').map_or("", |(name, _)| name)`，直接将 `']'` 之后的后缀丢弃。
+- 攻击者构造形如 `Host: [::1].evil.com:39281` 的请求头，`name` 被提取为 `"::1"` 并通过回环地址白名单匹配。
+
+### 经验与规程
+1. **IPv6 Host 解析必须完整校验闭合括号后的内容**：`']'` 之后仅允许为空或纯数字端口 `":\d+"`，任何其他字符一律视作非法域名并拒绝。
+2. 为安全守卫函数增加前缀伪装与畸形后缀的反例单测。
+
+---
+
+## 36. 富文本段落占位符回填失配必须硬阻断，禁止穿透写入首文本节点
+
+### 现象与问题
+- 浏览器扩展富文本段落翻译在占位符缺失或语序损坏时，`restoreRichTextComposite` 返回 `null`。
+- 但调用方代码在 `if (restored)` 之后未执行 `continue` 或 `return`，穿透至单文本节点的写入逻辑 `replaceTextNode(entry.node, itemRes.text)`。
+- 复合段落的 `entry.node` 仅为段落内首个子文本节点，导致整段带占位符的译文被塞进首个节点，而后续的链接、行内标签依然残留，造成 DOM 重复与排版破版。
+
+### 经验与规程
+1. **复合项处理必须实行原子性收敛**：若复合拆箱失败，必须安全阻断并登记失败项，绝不能降级穿透为单节点写入。
+2. 宁可保留原文并标记可重试，绝不在 DOM 中产生重复与破损内容。
+
+---
+
+## 37. React 19 异步 Event 注册必须内置 `disposed` 守卫防止 Unmount 泄漏
+
+### 现象与问题
+- `useTaskRunner` 在 `useEffect` 中调用异步 `listen` 注册 Tauri 事件监听器。
+- 在 React 19 / StrictMode 下，组件挂载后立即卸载，清理函数执行时 `unlisten` 仍为 `undefined`。
+- Promise 兑现后将注销函数赋给已被销毁闭包内的局部变量，导致事件监听器在后台永久泄漏。
+
+### 经验与规程
+1. **所有异步注册操作必须配备 `let disposed = false` 守卫**：清理函数置 `disposed = true`，Promise 回调中若检测到已销毁则立即执行注销。
+2. 凡涉及跨窗口全局广播的事件，前端监听回调首行必须严格判断窗口标签（如 `if (isFloatWindow) return`），防止多窗口重复弹出通知与无效重绘。

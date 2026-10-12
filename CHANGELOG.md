@@ -15,6 +15,9 @@
 - **移除根目录踩坑知识库 `Lessons Learned.md` (Breaking Change)**: 移除 637 行踩坑记录文件，并同步清理 `crates/transly-core/src/cache.rs`、`src/bindings.ts`、`extension/src/selection/index.ts`、`extension/src/background/index.ts`、`src/task/useTaskRunner.ts`、`src/task/README.md`、`PROJECT_RULES.md` 中共 8 处对其条目的引用；随后进一步移除源码注释中沉淀自该知识库的因果解释文字（`CacheEntry` 字段类型取舍、气泡代际设计动机、空 `catch` 暴露规程的由来），注释统一回归极简描述。移除原因在于集中式踩坑文档与注释中的经验复述均难以随代码同步演进，容易造成文档沉余与事实漂移。**注意：`created_at` 必须保持 `u32` 而非 `i64`**——specta 会把 `i64` 导出为 JS `BigInt`，在 `JSON.stringify` 时直接抛错并导致前端整页崩溃，该约束现仅由类型定义与 CI 绑定比对保障。
 
 ### 新增
+- **LaTeX 数学公式保真保护与还原 (`preserve.rs`)**: 在 `stash_code_blocks` 中新增块级公式（`$$...$$`）与行内公式（`$...$`）识别与占位符保护逻辑，严格遵循 Pandoc 边界规范（排除 `\$` 转义及 `$100` 等金额数字误判），防止学术文档中的数学公式被翻译引擎篡改；补充对应单元测试。
+- **推理模型 `reasoning_content` 容错回退 (`openai.rs`)**: 在 `OpenAIEngine` 的同步与流式响应解析中支持 `reasoning_content` 字段，当接入推理模型（如 DeepSeek-R1）且正式 `content` 为空时安全回退消费推理文本。
+- **悬浮迷你窗 (`FloatWindow.tsx`) 引擎切换与首选同步**: 悬浮迷你窗初始化时自动读取用户配置的划词首选引擎（`getPreferredReplaceEngine`），并在顶栏提供引擎选择下拉框且切换后即时重译。
 - **流式文件导出后端命令 (`export_translation_history`)**: 新增直接在后台线程流式导出翻译历史到本地文件的后端命令，支持 CSV（带 BOM 防 Excel 乱码与公式注入转义）与 JSON 格式，直接从 SQLite 游标写入用户 Downloads 目录，彻底消除前端一次性拉取数万条记录跨 IPC 传输导致内存暴涨与界面假死的问题。
 - **悬浮迷你窗独立架构拆分 (`FloatWindow.tsx`)**: 在应用根入口 `main.tsx` 进行路由级分流，彻底解耦悬浮迷你窗（`#float`）与主窗口巨石组件，浮窗不再初始化主窗口的 50+ 个 Hook 与多套模态状态，冷启动性能大幅提升且内存更轻量，同时消除主窗口文本输入时的全局组件重绘。
 - **浏览器扩展本地服务端口自适应配置与动态连接**: 扩展端后台 Service Worker 支持从本地存储动态读取 `transly_server_port` 或 `transly_server_url`，并放宽回环权限至 `http://127.0.0.1/*`；E2E 测试套件自动嗅探空闲端口，彻底解决本地已运行 Transly 桌面端时测试出现 `EADDRINUSE: 39281` 端口死锁的问题。
@@ -28,6 +31,9 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **浏览器扩展富文本占位符括线内空格容错归一化 (`richText.ts`)**: 针对大模型偶发在特殊占位符括线内插入空格（如 `⟦ T_1 ⟧` 或 `⟦/T_1 ⟧`）的现象，在 `extractPlaceholderTokens` 与 `restoreRichTextComposite` 中预先执行宽松正则归一化，避免占位符失配回退；补充对应单元测试。
+- **浏览器扩展划词悬浮图标视口右边界防溢出 (`selection/index.ts`)**: 对划词悬浮“译”图标的横向坐标执行视口右边界夹取，防止贴边选中文本时图标超出视口引发页面横向滚动条。
+- **扩展配对会话倒计时采用服务端权威 `expires_in`**: `transly://pairing-requested` 事件载荷新增 `expires_in` 字段，前端配对弹窗优先使用服务端下发的过期秒数，消除前后端双边硬编码潜在脱节。
 - **浏览器扩展多层嵌套行内标签富文本段落保真翻译与深层提取**: 加固 `isLeafRichTextContainer`（引入 16 种合法行内标签白名单并检查全部子孙元素属性）与 `collectTextNodes`，行内元素采用 `TreeWalker` 中序深度遍历收集所有深层未翻译文本节点，并将段落所有子孙元素登记至 `processedContainers`，彻底解决 `<p><strong><a href="...">link</a></strong></p>` 等多层嵌套结构下深层文本被整段漏翻与碎片化翻译的缺陷；在 `scripts/test-extension-e2e.mjs` 中新增针对真实 DOM 的端到端回归用例（用例 3.5），并在 `richText.test.ts` 中补充嵌套聚合单元测试。
 - **划词翻译气泡脚本 JSDoc 注释对齐隐私政策**: 修正 `extension/src/selection/index.ts` 头部注释对 `mouseup` 与 `selectionchange` 选区监听描述的陈旧陈述，如实反映当前仅在本地判定选区并驱动悬浮“译”图标、绝不主动读取或上传非选中文本的机制，与 `PRIVACY_POLICY.md` 保持完全一致。
 - **富文本段落占位聚合奇偶硬编码与 DOM 错位颠倒修复**: 修正 `richText.ts` 与 `content/index.ts`，摒弃基于奇偶索引的脆弱推断，改由显式的 `isInline: boolean` 属性驱动，通过 `tokens.length + 1` 拓扑槽位实现对行内标签开头、连续标签等复杂 HTML 结构的 100% 精准回填与还原；补充行内开头与连续标签单元测试。
@@ -50,6 +56,7 @@
 - **全局快捷键修改后状态槽位即时同步**: 在 `set_shortcut` 与 `set_replace_shortcut` 中注入 `ShortcutStatusSlot`，在快捷键注册成功与回滚时即时更新槽位状态，解决启动冲突后用户修改快捷键告警无法自动消除的问题。
 
 ### 优化
+- **扩展端深层 DOM 遍历与双语还原单趟合并 (`domTraversal.ts` / `content/index.ts`)**: 合并 `iterateElementsDeep` 中的元素 yield 与开放 Shadow DOM 递归以及 `restoreOriginalText` 中的双语节点移除与属性清理，减少重复全量 DOM 扫描。
 - **统一全链路端到端自动化测试入口**: 在 `package.json` 中配置 `"test:e2e"` 聚合命令，实现一键并行串联桌面端 UI 全交互测试与浏览器插件真实跨进程全套端到端自动化验证。
 - **统一本地持久化配置仓储与冷启动脱敏**: 在 SQLite `cache.db` 中引入 `app_settings` 配置表，将剪贴板监听开关、缓存开关、快捷键设置、划词替换首选引擎、LLM 翻译风格及端点模型等非敏感配置从系统原生凭据管理器迁移至本地数据库，消除主线程启动阶段因串行读取凭据库（Keyring/DBus）引发的阻塞延迟，实现旧版无缝迁移；商业 API Key 与内部 Server Token 严格保留于操作系统原生安全凭据库中。
 - **全量翻译历史导出支持**: 在 `HistoryPanel` 导出 CSV 与 JSON 时优先拉取 SQLite 全量历史数据（至多 100,000 条），彻底解决此前仅导出前端分页加载的首屏 50 条导致历史数据遗漏的问题。

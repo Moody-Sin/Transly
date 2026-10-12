@@ -180,21 +180,24 @@ fn main() {
                 .inner()
                 .clone();
             let app_handle_for_server = app.handle().clone();
-            let pairing_notify_hook: src_tauri::server::PairingNotifyHook =
-                Arc::new(move |session_id: &str, browser_hint: Option<&str>| {
+            let pairing_notify_hook: src_tauri::server::PairingNotifyHook = Arc::new(
+                move |session_id: &str, expires_in: u64, browser_hint: Option<&str>| {
                     #[derive(serde::Serialize, Clone)]
                     struct PairingRequestedPayload {
                         session_id: String,
+                        expires_in: u64,
                         browser_hint: Option<String>,
                     }
                     let _ = app_handle_for_server.emit(
                         "transly://pairing-requested",
                         PairingRequestedPayload {
                             session_id: session_id.to_string(),
+                            expires_in,
                             browser_hint: browser_hint.map(ToString::to_string),
                         },
                     );
-                });
+                },
+            );
 
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
             match server_token {

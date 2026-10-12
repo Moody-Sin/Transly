@@ -26,8 +26,6 @@ export function* iterateElementsDeep(root: Node): Generator<Element> {
   const all = Array.from((root as Element | DocumentFragment).querySelectorAll('*'))
   for (const el of all) {
     yield el
-  }
-  for (const el of all) {
     const shadow = el.shadowRoot
     if (shadow && shadow.mode === 'open') {
       yield* iterateElementsDeep(shadow)

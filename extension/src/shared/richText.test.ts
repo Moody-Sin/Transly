@@ -134,3 +134,25 @@ test('富文本段落包含多层嵌套行内标签时准确聚合与回填', ()
   assert.equal(restored.get('p3'), '须知')
   assert.equal(restored.get('p4'), '。')
 })
+
+test('富文本容错：大模型在占位符括线内插入空格时仍可准确提取与还原', () => {
+  const parts: TextPart[] = [
+    { id: 't0', text: 'Visit ', isInline: false },
+    { id: 't1', text: 'Transly', isInline: true },
+    { id: 't2', text: ' now.', isInline: false },
+  ]
+  const comp = buildRichTextComposite(parts, true)
+  assert.equal(comp.compositeText, 'Visit ⟦T_1⟧Transly⟦/T_1⟧ now.')
+
+  // 模拟大模型在特殊括号内插入空格的典型变形
+  const translatedWithSpaces = '立即访问 ⟦ T_1 ⟧ 译思 ⟦ /T_1 ⟧ 。'
+  const restored = restoreRichTextComposite(
+    translatedWithSpaces,
+    comp.baseSlots || [],
+    new Map([['⟦T_1⟧', 't1']]),
+  )
+  assert.ok(restored, '带空格占位符必须被成功还原')
+  assert.equal(restored.get('t0'), '立即访问 ')
+  assert.equal(restored.get('t1'), ' 译思 ')
+  assert.equal(restored.get('t2'), ' 。')
+})

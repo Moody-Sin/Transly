@@ -71,7 +71,7 @@ pub struct PairPollPayload {
     pub client_id: String,
 }
 
-pub type PairingNotifyHook = Arc<dyn Fn(&str, Option<&str>) + Send + Sync>;
+pub type PairingNotifyHook = Arc<dyn Fn(&str, u64, Option<&str>) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -358,9 +358,9 @@ async fn pair_request_handler(
         .create_session(client_id.to_string(), payload.browser_hint.clone())
         .await;
 
-    // 若注册了事件钩子（如 Tauri AppHandle），立即广播通知前端
+    // 若注册了事件钩子（如 Tauri AppHandle），立即广播通知前端（携带服务端权威 expires_in）
     if let Some(ref hook) = state.pairing_notify_hook {
-        hook(&session_id, payload.browser_hint.as_deref());
+        hook(&session_id, expires_in, payload.browser_hint.as_deref());
     }
 
     Ok(Json(PairRequestResponse {

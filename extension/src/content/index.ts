@@ -96,10 +96,13 @@ export function replaceTextNode(node: Text, translatedText: string, mode: string
 }
 
 export function restoreOriginalText(container: Node = document.body) {
-  // 1. 移除所有双语模式插入的译文元素（light DOM 与 open shadow DOM 都要覆盖）
+  // 1. 深度遍历元素：单趟同时移除双语译文节点与清除父标记（避免两次全量 DOM 扫描）
   for (const el of iterateElementsDeep(container)) {
     if (el.classList.contains('transly-bilingual-trans')) {
       el.remove()
+    }
+    if (el.hasAttribute('data-transly-has-translation')) {
+      el.removeAttribute('data-transly-has-translation')
     }
   }
 
@@ -113,10 +116,6 @@ export function restoreOriginalText(container: Node = document.body) {
     }
   }
 
-  // 3. 清除父元素标记与残留 Tooltip
-  for (const el of iterateElementsDeep(container)) {
-    el.removeAttribute('data-transly-has-translation')
-  }
   hideOriginalTooltip()
 }
 

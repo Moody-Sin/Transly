@@ -2,8 +2,10 @@
  * Transly 划词翻译气泡（按需注入）。
  *
  * 由 Service Worker 在用户点击右键菜单「Transly 翻译选中文本」后注入，
- * 收到 `SHOW_SELECTION_TRANSLATION` 消息才渲染气泡，不做常驻注入、
- * 不监听 `mouseup`，与 `PRIVACY_POLICY.md` 的「仅在主动触发时处理选中文本」一致。
+ * 收到 `SHOW_SELECTION_TRANSLATION` 消息或点击划词悬浮图标才渲染气泡。
+ * 气泡脚本在用户首次触发划词翻译时按需注入，不常驻注入全部网站；
+ * 注入后在当前页面注册 `mouseup` 与 `selectionchange` 仅在本地判定选区并驱动悬浮“译”图标，
+ * 绝不主动读取或上传任何非选中文本，与 `PRIVACY_POLICY.md` 保持完全一致。
  *
  * 气泡挂载在 **Shadow DOM** 中：
  * - 宿主页面的 CSS 无法污染气泡（`all: initial` + 封闭式 shadow root）；

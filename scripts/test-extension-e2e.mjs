@@ -303,6 +303,16 @@ async function runTests() {
     const page = await context.newPage()
     await page.goto(`http://127.0.0.1:${targetPort}/test-page.html`, { waitUntil: 'networkidle' })
 
+    // 注入嵌套行内标签段落：<p> 的一级子元素是 <strong>/<em>，深层才是 <a>/<span>。
+    // 回归点：旧实现只检查一级子元素、只遍历一级文本节点，该段落的深层文本会被整段漏翻。
+    await page.evaluate(() => {
+      const p = document.createElement('p')
+      p.id = 'nested-inline-para'
+      p.innerHTML =
+        'Please visit <strong><a id="nested-inline-link" href="https://example.com/nested">Example Official Site</a></strong> and check <em><span>Crucial Document</span></em> before proceeding.'
+      document.body.appendChild(p)
+    })
+
     // 验证初始原文状态
     const initialSimple = await page.locator('#simple-para').innerText()
     assert.match(initialSimple, /^Hello World/)
@@ -367,6 +377,24 @@ async function runTests() {
       '.notranslate 容器不得被翻译',
     )
     console.log('✔ [用例 3] code 与 notranslate 区域严格排除未受污染')
+
+    // 断言 3.5: 嵌套行内标签段落（<strong><a>、<em><span>）深层文本必须被聚合翻译
+    const nestedHtml = await page.locator('#nested-inline-para').innerHTML()
+    assert(
+      nestedHtml.includes('请访问') && nestedHtml.includes('示例官方站点'),
+      `嵌套行内标签深层文本必须参与整句翻译，实际 HTML: ${nestedHtml}`,
+    )
+    assert(
+      nestedHtml.includes('重要文档'),
+      `<em><span> 二级嵌套文本不得漏翻，实际 HTML: ${nestedHtml}`,
+    )
+    assert(
+      nestedHtml.includes('<a') && nestedHtml.includes('<span') && nestedHtml.includes('<em'),
+      `嵌套行内标签结构必须完整保留，实际 HTML: ${nestedHtml}`,
+    )
+    const nestedHref = await page.locator('#nested-inline-link').getAttribute('href')
+    assert.equal(nestedHref, 'https://example.com/nested', '嵌套 <a> 的 href 必须完全保真')
+    console.log('✔ [用例 3.5] 嵌套行内标签（<strong><a> / <em><span>）深层文本聚合翻译成功')
 
     // 断言 4: 开放模式 Shadow DOM 穿透翻译
     const shadowTranslated = await page.evaluate(() => {
@@ -441,7 +469,7 @@ async function runTests() {
     console.log('✔ [用例 7] 双语模式一键还原成功：兄弟译文节点彻底清除且原文保持完整')
 
     console.log('\n========================================')
-    console.log('🎉 全部 8 项浏览器插件真实环境端到端测试 100% 通过！')
+    console.log('🎉 全部 9 项浏览器插件真实环境端到端测试 100% 通过！')
     console.log('========================================\n')
   } finally {
     if (context) await context.close()

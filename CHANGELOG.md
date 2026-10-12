@@ -25,6 +25,8 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **浏览器扩展多层嵌套行内标签富文本段落保真翻译与深层提取**: 加固 `isLeafRichTextContainer`（引入 16 种合法行内标签白名单并检查全部子孙元素属性）与 `collectTextNodes`，行内元素采用 `TreeWalker` 中序深度遍历收集所有深层未翻译文本节点，并将段落所有子孙元素登记至 `processedContainers`，彻底解决 `<p><strong><a href="...">link</a></strong></p>` 等多层嵌套结构下深层文本被整段漏翻与碎片化翻译的缺陷；在 `scripts/test-extension-e2e.mjs` 中新增针对真实 DOM 的端到端回归用例（用例 3.5），并在 `richText.test.ts` 中补充嵌套聚合单元测试。
+- **划词翻译气泡脚本 JSDoc 注释对齐隐私政策**: 修正 `extension/src/selection/index.ts` 头部注释对 `mouseup` 与 `selectionchange` 选区监听描述的陈旧陈述，如实反映当前仅在本地判定选区并驱动悬浮“译”图标、绝不主动读取或上传非选中文本的机制，与 `PRIVACY_POLICY.md` 保持完全一致。
 - **富文本段落占位聚合奇偶硬编码与 DOM 错位颠倒修复**: 修正 `richText.ts` 与 `content/index.ts`，摒弃基于奇偶索引的脆弱推断，改由显式的 `isInline: boolean` 属性驱动，通过 `tokens.length + 1` 拓扑槽位实现对行内标签开头、连续标签等复杂 HTML 结构的 100% 精准回填与还原；补充行内开头与连续标签单元测试。
 - **DeepL 批量响应条数硬契约对齐校验**: 修正 `deepl.rs` 中的 `translate_batch`，在反序列化后严格校验返回条数与请求切片长度一致性，数量失配时立即报错，触发上层 `translate_batch_tolerant` 安全退化为逐项单请求隔离翻译，杜绝由于数量差错导致的译文整体错位偏移。
 - **整页翻译 DOM 遍历流式优化**: 移除 `content/index.ts` 中针对 Shadow DOM 探查的 `root.querySelectorAll('*')` 全页大数组分配，改用原生 `TreeWalker` 流式遍历与节点过滤，消除复杂网页或长列表页面上数百毫秒的主线程冻结与布局抖动。

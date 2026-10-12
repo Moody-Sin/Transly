@@ -64,7 +64,7 @@ export const commands = {
  *  翻译历史单条记录（对外暴露给 UI 的只读视图）。
  * 
  *  `created_at` 使用 `u32`（纪元秒）而非 `i64`：specta 会把 `i64` 导出为
- *  JS `BigInt`，在 `JSON.stringify` 时直接抛错（见 Lessons Learned 第 1 条）。
+ *  JS `BigInt`，在 `JSON.stringify` 时直接抛错。
  *  `u32` 上限至 2106 年，对「最近翻译」语义绰绰有余。
  */
 export type CacheEntry = {

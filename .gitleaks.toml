@@ -1,0 +1,10 @@
+title = "Gitleaks Configuration for Transly"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Chrome Extension public manifest key (RSA-2048 SPKI DER Base64 for deterministic extension ID, not a secret)"
+paths = [
+  '''^extension/manifest\.json$'''
+]

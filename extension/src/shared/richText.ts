@@ -20,8 +20,9 @@ export interface RichTextComposite {
 }
 
 export function extractPlaceholderTokens(text: string): string[] {
-  const matches = text.match(/⟦T_\d+⟧/g)
-  return matches || []
+  const matches = text.match(/⟦\s*T_\d+\s*⟧/g)
+  if (!matches) return []
+  return matches.map((m) => m.replace(/⟦\s*T_(\d+)\s*⟧/, '⟦T_$1⟧'))
 }
 
 /**
@@ -91,14 +92,19 @@ export function restoreRichTextComposite(
   baseIds: (string | null)[],
   placeholderToId: Map<string, string>,
 ): Map<string, string> | null {
-  const tokens = extractPlaceholderTokens(translatedComposite)
+  // 容错处理：大模型偶发在 Unicode 括线内插入空格（例如 ⟦ T_1 ⟧ 或 ⟦/T_1 ⟧），先进行归一化
+  const normalized = translatedComposite
+    .replace(/⟦\s*T_(\d+)\s*⟧/g, '⟦T_$1⟧')
+    .replace(/⟦\s*\/T_(\d+)\s*⟧/g, '⟦/T_$1⟧')
+
+  const tokens = extractPlaceholderTokens(normalized)
   if (tokens.length !== placeholderToId.size) {
     // 占位符数量不匹配，可能被翻译引擎吞掉或篡改，触发安全回退
     return null
   }
 
   const result = new Map<string, string>()
-  let remaining = translatedComposite
+  let remaining = normalized
   let slotIndex = 0
 
   for (const ph of tokens) {

@@ -117,6 +117,84 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
             }
         }
 
+        // 3. 检查块级数学公式: $$...$$
+        if ch == '$' && input[idx..].starts_with("$$") {
+            let start = idx;
+            let is_escaped = start > 0 && input[..start].ends_with('\\');
+            if !is_escaped {
+                let mut scan = chars.clone();
+                scan.next(); // 消费开头的第二个 $
+
+                let mut end = None;
+                let mut prev_char = '$';
+                for (i, c) in scan {
+                    if c == '$' && input[i..].starts_with("$$") && prev_char != '\\' {
+                        end = Some(i + 2);
+                        break;
+                    }
+                    prev_char = c;
+                }
+
+                if let Some(block_end) = end {
+                    while let Some(&(i, _)) = chars.peek() {
+                        if i < block_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let math_content = &input[start..block_end];
+                    let ph = placeholder(stash.len());
+                    stash.push(math_content.to_string());
+                    output.push_str(&ph);
+                    continue;
+                }
+            }
+        }
+
+        // 4. 检查行内数学公式: $...$
+        if ch == '$' && !input[idx..].starts_with("$$") {
+            let start = idx;
+            let is_escaped = start > 0 && input[..start].ends_with('\\');
+            // Pandoc 规范：行内公式 $ 后面紧随的字符不能是空白或数字（避免 $100 误判）
+            let first_inner = input[start + 1..].chars().next();
+            let valid_start = match first_inner {
+                Some(c) => !c.is_whitespace() && !c.is_ascii_digit() && c != '$',
+                None => false,
+            };
+
+            if !is_escaped && valid_start {
+                let mut end = None;
+                let mut prev_char = '$';
+                for (i, c) in chars.clone() {
+                    if c == '\n' {
+                        // 行内公式不跨行
+                        break;
+                    }
+                    if c == '$' && prev_char != '\\' && !prev_char.is_whitespace() {
+                        end = Some(i + 1);
+                        break;
+                    }
+                    prev_char = c;
+                }
+
+                if let Some(inline_end) = end {
+                    while let Some(&(i, _)) = chars.peek() {
+                        if i < inline_end {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let math_content = &input[start..inline_end];
+                    let ph = placeholder(stash.len());
+                    stash.push(math_content.to_string());
+                    output.push_str(&ph);
+                    continue;
+                }
+            }
+        }
+
         output.push(ch);
     }
 
@@ -309,5 +387,34 @@ mod tests {
         assert!(restored.starts_with("Please check the Markdown example:"));
         assert!(restored.contains("````markdown\n这里是外层 4 反引号，内含：\n```rust\nfn nested() {}\n```\n结束内层\n````"));
         assert!(restored.ends_with("Outer text preserved."));
+    }
+
+    #[test]
+    fn test_stash_and_restore_math_formulas() {
+        let input = "考虑欧拉公式 $e^{i\\pi} + 1 = 0$ 以及高斯积分：\n$$\\int_{-\\infty}^\\infty e^{-x^2} dx = \\sqrt{\\pi}$$\n售价不是公式：$100 美元和 $200 美元，还有转义 \\$not_math$。";
+        let preserved = stash_code_blocks(input);
+        assert_eq!(
+            preserved.stash.len(),
+            2,
+            "应仅提取行内公式与块级公式，不误判价格与转义符"
+        );
+        assert_eq!(preserved.stash[0], "$e^{i\\pi} + 1 = 0$");
+        assert_eq!(
+            preserved.stash[1],
+            "$$\\int_{-\\infty}^\\infty e^{-x^2} dx = \\sqrt{\\pi}$$"
+        );
+
+        assert!(preserved.text.contains("$100 美元和 $200 美元"));
+        assert!(preserved.text.contains("\\$not_math$"));
+
+        // 模拟翻译
+        let translated = preserved
+            .text
+            .replace("考虑欧拉公式", "Consider Euler's formula")
+            .replace("以及高斯积分：", "and Gaussian integral:");
+        let restored = restore_code_blocks(&translated, &preserved.stash);
+        assert!(restored.starts_with("Consider Euler's formula $e^{i\\pi} + 1 = 0$"));
+        assert!(restored.contains("$$\\int_{-\\infty}^\\infty e^{-x^2} dx = \\sqrt{\\pi}$$"));
+        assert!(restored.contains("$100 美元和 $200 美元"));
     }
 }

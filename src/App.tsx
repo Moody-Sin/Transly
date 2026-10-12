@@ -351,7 +351,7 @@ export default function App() {
     // 监听本地浏览器插件配对请求（仅主窗口响应并展示，浮窗静默忽略）
     let unlisten: (() => void) | undefined
     let disposed = false
-    listen<{ session_id: string; browser_hint?: string }>(
+    listen<{ session_id: string; browser_hint?: string; expires_in?: number }>(
       'transly://pairing-requested',
       async (event) => {
         setPairingError(null)
@@ -359,7 +359,7 @@ export default function App() {
         setPairingRequest({
           sessionId: event.payload.session_id,
           browserHint: event.payload.browser_hint,
-          countdown: PAIRING_TTL_SECONDS,
+          countdown: event.payload.expires_in ?? PAIRING_TTL_SECONDS,
         })
         try {
           const win = getCurrentWindow()

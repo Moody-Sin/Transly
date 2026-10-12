@@ -109,6 +109,8 @@ struct ChatChoice {
 #[derive(Deserialize)]
 struct ChatResponseMessage {
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +126,8 @@ struct StreamChatChoice {
 #[derive(Deserialize)]
 struct StreamDelta {
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -464,11 +468,23 @@ impl TranslateEngine for OpenAIEngine {
         let data: ChatCompletionResponse = resp.json().await?;
         if let Some(choice) = data.choices.into_iter().next() {
             if let Some(content) = choice.message.content {
-                return Ok(TranslationResponse {
-                    text: content.trim().to_string(),
-                    detected_source_lang: None,
-                    engine: self.id().to_string(),
-                });
+                if !content.trim().is_empty() {
+                    return Ok(TranslationResponse {
+                        text: content.trim().to_string(),
+                        detected_source_lang: None,
+                        engine: self.id().to_string(),
+                    });
+                }
+            }
+            // 容错兜底：若接入推理模型（如 DeepSeek-R1 / o1）且正式 content 为空，回退消费 reasoning_content
+            if let Some(reasoning) = choice.message.reasoning_content {
+                if !reasoning.trim().is_empty() {
+                    return Ok(TranslationResponse {
+                        text: reasoning.trim().to_string(),
+                        detected_source_lang: None,
+                        engine: self.id().to_string(),
+                    });
+                }
             }
         }
 
@@ -539,6 +555,7 @@ impl TranslateEngine for OpenAIEngine {
         use futures::StreamExt;
         let mut stream = resp.bytes_stream();
         let mut full_text = String::new();
+        let mut reasoning_text = String::new();
         let mut byte_buffer = Vec::new();
 
         'stream_loop: while let Some(item) = stream.next().await {
@@ -581,6 +598,10 @@ impl TranslateEngine for OpenAIEngine {
                                     on_chunk(&content);
                                     full_text.push_str(&content);
                                 }
+                            } else if let Some(reasoning) = choice.delta.reasoning_content {
+                                if !reasoning.is_empty() {
+                                    reasoning_text.push_str(&reasoning);
+                                }
                             }
                         }
                     }
@@ -594,6 +615,15 @@ impl TranslateEngine for OpenAIEngine {
         }
 
         if full_text.trim().is_empty() {
+            if !reasoning_text.trim().is_empty() {
+                let fallback = reasoning_text.trim().to_string();
+                on_chunk(&fallback);
+                return Ok(TranslationResponse {
+                    text: fallback,
+                    detected_source_lang: None,
+                    engine: self.id().to_string(),
+                });
+            }
             return Err(Error::Engine {
                 engine: self.id().to_string(),
                 message: "LLM API 流式返回内容为空".to_string(),

@@ -11,9 +11,21 @@ export default function FloatWindow() {
   const [locale] = useState<Locale>('zh-CN')
   const t = getTranslation(locale)
   const [targetLang, setTargetLang] = useState('zh-CN')
-  const [engine] = useState('google')
+  const [engine, setEngine] = useState('google')
   const [copied, setCopied] = useState(false)
   const [isFloatPinned, setIsFloatPinned] = useState(false)
+
+  // 迷你悬浮窗启动时尝试读取用户首选翻译引擎
+  useEffect(() => {
+    commands
+      .getPreferredReplaceEngine()
+      .then((res) => {
+        if (res.status === 'ok' && res.data) {
+          setEngine(res.data)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // 迷你悬浮窗 Escape 键极速关闭交互
   useEffect(() => {
@@ -90,8 +102,30 @@ export default function FloatWindow() {
             </button>
           )}
           <select
+            value={engine}
+            onChange={(e) => {
+              const newEng = e.target.value
+              setEngine(newEng)
+              if (runner.snapshot.sourceText && !isTranslating) {
+                runner.run(runner.snapshot.sourceText)
+              }
+            }}
+            className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
+          >
+            <option value="google">{t.translation.engineGoogle}</option>
+            <option value="deepl">{t.translation.engineDeepl}</option>
+            <option value="deepseek">{t.translation.engineDeepseek}</option>
+            <option value="openai">{t.translation.engineOpenai}</option>
+          </select>
+          <select
             value={targetLang}
-            onChange={(e) => setTargetLang(e.target.value)}
+            onChange={(e) => {
+              const newLang = e.target.value
+              setTargetLang(newLang)
+              if (runner.snapshot.sourceText && !isTranslating) {
+                runner.run(runner.snapshot.sourceText)
+              }
+            }}
             className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
           >
             <option value="zh-CN">{t.translation.languageZhCN}</option>

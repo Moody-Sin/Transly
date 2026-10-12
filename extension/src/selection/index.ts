@@ -496,13 +496,18 @@ document.addEventListener('mouseup', (e) => {
 
   removeHoverIcon()
 
+  // 视口边界夹取：右边界防止贴边选中文本导致图标超出视口产生横向滚动条
+  const maxLeft = window.scrollX + (window.innerWidth || document.documentElement.clientWidth) - 28
+  const left = Math.min(window.scrollX + rect.right + 4, maxLeft)
+  const top = Math.max(window.scrollY + 4, window.scrollY + rect.top - 20)
+
   iconHost = document.createElement('div')
   iconHost.id = 'transly-selection-hover-icon'
   iconHost.setAttribute('data-no-translate', 'true')
   iconHost.style.position = 'absolute'
   iconHost.style.zIndex = '2147483646'
-  iconHost.style.left = `${window.scrollX + rect.right + 4}px`
-  iconHost.style.top = `${Math.max(window.scrollY + 4, window.scrollY + rect.top - 20)}px`
+  iconHost.style.left = `${left}px`
+  iconHost.style.top = `${top}px`
 
   const iconShadow = iconHost.attachShadow({ mode: 'closed' })
   const btn = document.createElement('div')

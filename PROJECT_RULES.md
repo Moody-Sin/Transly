@@ -154,7 +154,6 @@ transly/
 │   └── package.json
 │
 ├── scripts/                   # 项目级端到端测试与质量验证脚本
-├── docs/                      # 架构决策与跨端边界说明
 │
 ├── .github/workflows/         # CI 与 Release 流水线
 ├── lefthook.yml               # 本地 Git 提交钩子

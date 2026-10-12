@@ -47,13 +47,6 @@ let activeShadow: ShadowRoot | null = null
 let anchor: AnchorSnapshot | null = null
 let teardownFns: Array<() => void> = []
 
-/**
- * 气泡实例代际。
- *
- * 翻译请求在途期间用户可能按 Esc、点击外部或重新划词（旧气泡被销毁并新建）。
- * 仅凭 `body.isConnected` 无法区分「旧气泡已被移除」与「新气泡已就绪」，
- * 因此每次创建/销毁都递增代际，响应回来时代际不符即丢弃。
- */
 let bubbleGeneration = 0
 
 const BUBBLE_CSS = `

@@ -79,8 +79,15 @@ const TEST_PAGE_HTML = `<!DOCTYPE html>
 
 // 尝试启动真实 Rust 本地服务（target/debug/transly_test_server）
 function startRustServer(serverPort) {
-  const binaryPath = path.resolve('target/debug/transly_test_server.exe')
-  if (!fs.existsSync(binaryPath)) {
+  // Windows 产物带 .exe 后缀，Linux/macOS 无后缀；
+  // 同时兼容工作区根 target/ 与 src-tauri/target/ 两种产物目录布局。
+  const binName = process.platform === 'win32' ? 'transly_test_server.exe' : 'transly_test_server'
+  const candidates = [
+    path.resolve('target/debug', binName),
+    path.resolve('src-tauri/target/debug', binName),
+  ]
+  const binaryPath = candidates.find((p) => fs.existsSync(p))
+  if (!binaryPath) {
     return Promise.resolve(null)
   }
 
@@ -247,16 +254,23 @@ async function runTests() {
 
   fs.mkdirSync(USER_DATA_DIR, { recursive: true })
 
-  // 尝试启动 Chromium 浏览器并挂载已解压的 Transly MV3 插件
+  // 尝试启动 Chromium 浏览器并挂载已解压的 Transly MV3 插件。
+  // 关键：Chrome 137+ 起品牌版 Google Chrome 彻底禁用 --load-extension 开关，
+  // 而 Linux runner 预装了 /usr/bin/google-chrome，若优先命中它会导致扩展
+  // 根本未加载、waitForEvent('serviceworker') 必然超时。
+  // 因此必须优先使用 Playwright 自带的 Chromium（Chrome for Testing），
+  // 它 100% 支持 --load-extension；系统浏览器仅作为最后兜底。
   const channels =
     process.platform === 'win32'
-      ? [{ channel: 'msedge' }, { channel: 'chrome' }, {}]
-      : [{ channel: 'chrome' }, { channel: 'msedge' }, {}]
+      ? [{ channel: 'chromium' }, {}, { channel: 'msedge' }, { channel: 'chrome' }]
+      : [{ channel: 'chromium' }, {}, { channel: 'chrome' }, { channel: 'msedge' }]
 
   let context
+  let sw
   for (const ch of channels) {
+    let candidateContext
     try {
-      context = await chromium.launchPersistentContext(USER_DATA_DIR, {
+      candidateContext = await chromium.launchPersistentContext(USER_DATA_DIR, {
         headless: false,
         ...ch,
         args: [
@@ -267,22 +281,30 @@ async function runTests() {
           '--disable-setuid-sandbox',
         ],
       })
-      break
+      // 立即验证扩展 Service Worker 是否真的起来了：
+      // 未起来的信道（如品牌版 Chrome 忽略 --load-extension）直接关掉换下一个。
+      sw =
+        candidateContext.serviceWorkers()[0] ||
+        (await candidateContext.waitForEvent('serviceworker', { timeout: 10000 }))
+      if (sw) {
+        context = candidateContext
+        break
+      }
+      await candidateContext.close()
     } catch {
+      if (candidateContext) {
+        await candidateContext.close().catch(() => {})
+      }
       // 尝试下一个可用浏览器信道
     }
   }
 
   assert(context, '必须成功启动 Chromium 实例')
+  assert(sw, '必须成功加载扩展 Service Worker（当前信道可能不支持 --load-extension）')
   console.log('[E2E] 成功启动包含 Transly 浏览器扩展的无头 Chromium 实例')
 
   try {
-    // 1. 等待 Background Service Worker 启动并预置测试 Token
-    let sw = context.serviceWorkers()[0]
-    if (!sw) {
-      sw = await context.waitForEvent('serviceworker', { timeout: 10000 })
-    }
-    assert(sw, 'Service Worker 必须正常初始化')
+    // 1. 等待 Background Service Worker 启动并预置测试 Token（握手阶段已完成就绪判定）
 
     // 在扩展存储中预先配置已配对有效的 Bearer Token 与默认偏好及测试端口
     await sw.evaluate(

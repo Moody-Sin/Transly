@@ -211,6 +211,10 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
 /// 后续轮次当成真占位符再次替换，用户原文被静默改写。
 /// 因此先把 stash 内容的占位符形态转义为 `LITERAL_PREFIX`，替换完成后再统一还原。
 /// 该方案与替换顺序无关，可彻底杜绝双向污染。
+///
+/// 漏还原兜底：大模型时常直接吞掉占位符（尤其在长文档里），若只做替换，
+/// 对应的代码块/公式就会被静默丢弃。因此全程记录每个索引是否被成功还原，
+/// 未被还原的按原顺序安全追加回文末。
 pub fn restore_code_blocks(input: &str, stash: &[String]) -> String {
     let safe_stash: Vec<String> = stash
         .iter()
@@ -218,9 +222,16 @@ pub fn restore_code_blocks(input: &str, stash: &[String]) -> String {
         .collect();
 
     let mut result = input.to_string();
+    // 记录每个索引是否已成功还原（精确匹配或正则容错匹配任一命中即算成功）
+    let mut restored_flags = vec![false; safe_stash.len()];
+
     // 1. 优先执行完全精确匹配替换
     for (idx, original) in safe_stash.iter().enumerate() {
-        result = result.replace(&placeholder(idx), original);
+        let ph = placeholder(idx);
+        if result.contains(&ph) {
+            restored_flags[idx] = true;
+            result = result.replace(&ph, original);
+        }
     }
 
     // 2. 二级容错：大模型翻译时偶发在特殊括线内引入空格（如 ⟦ TRANSLY_CODE_0 ⟧）
@@ -230,6 +241,9 @@ pub fn restore_code_blocks(input: &str, stash: &[String]) -> String {
                 if let Some(m) = caps.get(1) {
                     if let Ok(idx) = m.as_str().parse::<usize>() {
                         if let Some(orig) = safe_stash.get(idx) {
+                            if let Some(flag) = restored_flags.get_mut(idx) {
+                                *flag = true;
+                            }
                             return orig.clone();
                         }
                     }
@@ -239,7 +253,29 @@ pub fn restore_code_blocks(input: &str, stash: &[String]) -> String {
             .into_owned();
     }
 
-    // 3. 还原被转义的字面量
+    // 3. 漏还原兜底：大模型漏掉占位符时，绝不能静默丢弃代码块或公式，
+    //    按索引顺序把未还原内容安全追加回文末，保证信息零丢失。
+    for (idx, restored) in restored_flags.iter().enumerate() {
+        if *restored {
+            continue;
+        }
+        if let Some(original) = safe_stash.get(idx) {
+            if original.is_empty() {
+                continue;
+            }
+            // 与已有译文之间插入必要分隔，避免与末尾单词粘连
+            if !result.is_empty() && !result.ends_with(char::is_whitespace) {
+                if original.contains('\n') {
+                    result.push('\n');
+                } else {
+                    result.push(' ');
+                }
+            }
+            result.push_str(original);
+        }
+    }
+
+    // 4. 还原被转义的字面量
     result.replace(LITERAL_PREFIX, PLACEHOLDER_PREFIX)
 }
 
@@ -416,5 +452,64 @@ mod tests {
         assert!(restored.starts_with("Consider Euler's formula $e^{i\\pi} + 1 = 0$"));
         assert!(restored.contains("$$\\int_{-\\infty}^\\infty e^{-x^2} dx = \\sqrt{\\pi}$$"));
         assert!(restored.contains("$100 美元和 $200 美元"));
+    }
+
+    /// 回归：大模型在长文档中时常直接吞掉占位符。若只做替换，
+    /// 对应的代码块与公式会被静默丢弃——译文看起来「通顺」，用户却永久丢失原文内容。
+    #[test]
+    fn test_restore_preserves_stash_when_marker_dropped() {
+        // 场景 1：译文完全漏掉代码块占位符
+        let input = "请阅读以下代码：\n```rust\nfn main() {}\n```\n这是说明。";
+        let preserved = stash_code_blocks(input);
+        assert_eq!(preserved.stash.len(), 1);
+
+        // 模拟大模型漏译占位符：只翻译了正文，占位符整个消失
+        let translated = "Please read the code:\nThis is the description.";
+        let restored = restore_code_blocks(translated, &preserved.stash);
+
+        assert!(
+            restored.contains("```rust\nfn main() {}\n```"),
+            "大模型漏掉占位符时，原代码块必须被追加保留而非静默丢弃：{restored}"
+        );
+        assert!(
+            restored.starts_with("Please read the code:\nThis is the description."),
+            "译文正文必须完整保留：{restored}"
+        );
+        // 追加位置必须与译文之间保持分隔，不得与末尾单词粘连
+        assert!(
+            !restored.contains("description.```"),
+            "追加内容不得与译文粘连：{restored}"
+        );
+
+        // 场景 2：漏掉的是数学公式（行内 + 块级）
+        let math_input = "欧拉公式 $e^{i\\pi}+1=0$ 与积分：\n$$\\int_0^1 x dx$$";
+        let math_preserved = stash_code_blocks(math_input);
+        assert_eq!(math_preserved.stash.len(), 2);
+
+        let math_translated = "Euler's formula and the integral:";
+        let math_restored = restore_code_blocks(math_translated, &math_preserved.stash);
+
+        assert!(
+            math_restored.contains("$e^{i\\pi}+1=0$"),
+            "漏掉的行内公式必须被保留：{math_restored}"
+        );
+        assert!(
+            math_restored.contains("$$\\int_0^1 x dx$$"),
+            "漏掉的块级公式必须被保留：{math_restored}"
+        );
+
+        // 场景 3：部分命中、部分漏掉时，只有漏掉的那个被追加，且按索引顺序
+        let stash = vec!["`a`".to_string(), "`b`".to_string()];
+        let partial = restore_code_blocks(&format!("命中 {} 但漏掉", placeholder(0)), &stash);
+        assert!(partial.contains("`a`"), "已命中项必须原位还原：{partial}");
+        assert!(partial.ends_with("`b`"), "仅漏掉项被追加到末尾：{partial}");
+        assert_eq!(
+            partial.matches("`a`").count(),
+            1,
+            "已还原项不得被重复追加：{partial}"
+        );
+
+        // 场景 4：无 stash 时必须是恒等变换（不得凭空追加任何内容）
+        assert_eq!(restore_code_blocks("plain text", &[]), "plain text");
     }
 }

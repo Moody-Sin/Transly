@@ -148,6 +148,23 @@ pub fn migrate_roaming_cache(new_dir: &Path) -> std::io::Result<bool> {
 /// 绝不单独搬运旁路文件——SQLite 的 WAL 不校验盐值，
 /// 陈旧 WAL 被回放进新库会造成静默的数据损坏。
 fn migrate_db_files(from_dir: &Path, to_dir: &Path) -> std::io::Result<bool> {
+    migrate_db_files_with(from_dir, to_dir, |a, b| std::fs::rename(a, b))
+}
+
+/// `migrate_db_files` 的可注入实现（`rename_fn` 便于测试注入失败）。
+///
+/// 中途失败必须回滚：若 `cache.db` 已搬走而 `cache.db-wal` 搬运失败，
+/// 新目录会留下**残缺的主库**（丢掉未 checkpoint 的最新写入），
+/// 且下次启动因 `to_db.exists()` 直接跳过迁移，WAL 数据永久丢失。
+/// 因此任何一步失败都逆序把本次已搬移的文件还原回 `from_dir`。
+fn migrate_db_files_with<F>(
+    from_dir: &Path,
+    to_dir: &Path,
+    mut rename_fn: F,
+) -> std::io::Result<bool>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
     let from_db = from_dir.join("cache.db");
     let to_db = to_dir.join("cache.db");
 
@@ -157,11 +174,20 @@ fn migrate_db_files(from_dir: &Path, to_dir: &Path) -> std::io::Result<bool> {
 
     std::fs::create_dir_all(to_dir)?;
     let mut migrated = false;
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+
     for suffix in DB_SUFFIXES {
         let from = from_dir.join(format!("cache.db{suffix}"));
         let to = to_dir.join(format!("cache.db{suffix}"));
         if from.exists() {
-            std::fs::rename(&from, &to)?;
+            if let Err(e) = rename_fn(&from, &to) {
+                // 逆序回滚本次已成功搬移的文件，确保 to_dir 不留残缺状态
+                for (moved_from, moved_to) in moved.iter().rev() {
+                    let _ = std::fs::rename(moved_to, moved_from);
+                }
+                return Err(e);
+            }
+            moved.push((from, to));
             migrated = true;
         }
     }
@@ -335,6 +361,50 @@ mod tests {
         assert_eq!(
             std::fs::read(new_dir.join("cache.db")).unwrap(),
             b"current-db"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 回归：`cache.db` 搬移成功、`cache.db-wal` 搬移失败时，必须回滚已搬移的主库。
+    /// 否则新目录留下残缺主库（丢掉未 checkpoint 的写入），且下次启动因
+    /// `to_db.exists()` 跳过迁移，WAL 数据永久丢失。
+    #[test]
+    fn test_migrate_rolls_back_on_sidecar_failure() {
+        let root = temp_dir("rollback");
+        let legacy = root.join("Transly");
+        let new_dir = root.join("com.transly.desktop");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+
+        std::fs::write(legacy.join("cache.db"), b"legacy-db").unwrap();
+        std::fs::write(legacy.join("cache.db-wal"), b"legacy-wal").unwrap();
+
+        // 注入：主库正常搬运，WAL 搬运失败
+        let result = migrate_db_files_with(&legacy, &new_dir, |a, b| {
+            if a.to_string_lossy().ends_with("-wal") {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "注入的 WAL 搬运失败",
+                ));
+            }
+            std::fs::rename(a, b)
+        });
+
+        assert!(result.is_err(), "旁路文件搬运失败必须向外抛错");
+        assert!(
+            !new_dir.join("cache.db").exists(),
+            "主库必须被回滚，新目录不得以残缺状态存留"
+        );
+        assert_eq!(
+            std::fs::read(legacy.join("cache.db")).unwrap(),
+            b"legacy-db",
+            "主库必须完整还原回 from_dir"
+        );
+        assert_eq!(
+            std::fs::read(legacy.join("cache.db-wal")).unwrap(),
+            b"legacy-wal",
+            "失败的 WAL 必须原封不动留在 from_dir"
         );
 
         let _ = std::fs::remove_dir_all(&root);

@@ -25,3 +25,13 @@
 - **现象**：Markdown 中的 LaTeX 数学公式（`$...$`、`$$...$$`）容易被外部翻译引擎误翻译或反斜杠破坏，但在提取行内公式时容易误伤日常金额符号（如 `$100 and $200`）。
 - **教训**：
   - 行内公式识别必须遵循规范约束：排除反斜杠转义（`\$`），左 `$` 之后不得紧跟空白或数字（规避货币符号），右 `$` 前不得为反斜杠或空白，且行内公式不得跨行。
+
+### 5. Playwright 浏览器扩展 E2E 测试的信道选择与 Chrome 137+ 限制
+- **现象**：在 Linux CI（GitHub Actions `ubuntu-latest`）中若优先使用 `{ channel: 'chrome' }` 启动持久上下文，会命中系统预装的品牌版 Google Chrome，而 Chrome 137+ 已彻底移除品牌版对 `--load-extension` 参数的支持，导致扩展静默不加载、`waitForEvent('serviceworker')` 超时失败。
+- **教训**：
+  - 加载未打包 MV3 扩展的自动化测试必须优先使用 Playwright 自带的 Chromium（`{ channel: 'chromium' }` 或默认无 channel 配置，对应 Chrome for Testing），并在启动循环内校验 Service Worker 就绪后再锁定浏览器上下文。
+
+### 6. React 异步 State 更新与立即触发命令的 Ref 时序竞态
+- **现象**：在下拉框 `onChange` 中先调用 `setEngine(newEng)` 再立即调用 `runner.run(text)` 时，由于 React 状态更新异步生效，Hook 内部通过 `engineRef.current = engine` 同步的 Ref 仍停留在上一轮渲染的旧值，导致重跑请求实际发往旧引擎。
+- **教训**：
+  - 当命令式触发函数紧随 `setState` 同步调用时，必须通过调用参数（如 `run(text, { engine: newEng })`）显式传递新值并立即覆写内部 Ref，切忌假设 `setState` 后下一行代码能从渲染期同步的 Ref 中读到新状态。

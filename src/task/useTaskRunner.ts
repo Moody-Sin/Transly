@@ -18,9 +18,20 @@ export interface RunnerSnapshot {
   effectiveTargetLang?: string | null
 }
 
+// run() 的可选参数：source/debounceMs 控制投递方式，
+// engine/targetLang 用于「切换引擎或目标语言后立刻重跑」——
+// React state 更新是异步的，此时 engineRef/langRef 仍是旧值，
+// 必须把新值随调用同步传入，否则重跑会沿用旧引擎/旧语言。
+export interface RunOptions {
+  source?: RunnerSnapshot['source']
+  debounceMs?: number
+  engine?: string
+  targetLang?: string
+}
+
 export interface TaskRunner {
   snapshot: RunnerSnapshot
-  run: (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => void
+  run: (text: string, opts?: RunOptions) => void
   cancel: () => void
   retry: () => void
   reset: () => void
@@ -172,7 +183,17 @@ export function useTaskRunner(
   )
 
   const run = useCallback(
-    (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => {
+    (text: string, opts?: RunOptions) => {
+      // 切换引擎/目标语言后立刻重跑时，React state 尚未重渲染，
+      // 此处的 ref 还是旧值。调用方通过 opts 传入的新值必须同步写入，
+      // 否则紧接着的 execute() 会用旧引擎/旧语言发出请求。
+      if (opts?.engine !== undefined) {
+        engineRef.current = opts.engine
+      }
+      if (opts?.targetLang !== undefined) {
+        langRef.current = opts.targetLang
+      }
+
       // 空串（如用户全选删除）同样要走完整的作废流程。
       // 旧实现在此直接 return，导致上一次按键留下的防抖定时器不会被清除、
       // 在途任务也不会被取消——输入框已清空，右侧却冒出了旧文本的译文。

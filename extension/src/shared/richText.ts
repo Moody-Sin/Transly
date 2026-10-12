@@ -98,8 +98,11 @@ export function restoreRichTextComposite(
     .replace(/⟦\s*\/T_(\d+)\s*⟧/g, '⟦/T_$1⟧')
 
   const tokens = extractPlaceholderTokens(normalized)
-  if (tokens.length !== placeholderToId.size) {
-    // 占位符数量不匹配，可能被翻译引擎吞掉或篡改，触发安全回退
+  // 双重校验：数量一致还不够。若大模型把 ⟦T_1⟧ 输出了两次而漏掉 ⟦T_3⟧，
+  // tokens.length 仍等于期望数量，却会造成某个节点漏翻、另一个节点被重复回填。
+  // 因此必须要求去重后的集合大小也一致 —— 即每个期望占位符恰好出现一次。
+  if (tokens.length !== placeholderToId.size || new Set(tokens).size !== placeholderToId.size) {
+    // 占位符数量不匹配或存在重复/缺失，可能被翻译引擎吞掉或篡改，触发安全回退
     return null
   }
 

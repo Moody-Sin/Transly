@@ -31,6 +31,14 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **代码块与数学公式占位符丢失安全保真 (`preserve.rs`)**: 当大模型偶发丢弃或改写生成的 `⟦TRANSLY_CODE_N⟧` 占位符时，`restore_code_blocks` 自动追踪未命中的 `stash` 索引并将其安全补回译文末尾，杜绝因模型格式幻觉静默删除用户的代码块或数学公式。
+- **Google 网页翻译长文本跨语种分片拼接空格保真 (`google.rs`)**: 修正长文本切片后的拼接分隔符逻辑，同时考察译文首尾字符（西文词尾/标点与西文词首）与原文末尾特征，彻底解决长段中文切块翻译为英文时分片粘连（`...worldThis...`）及段落末尾残留多余空格的问题。
+- **翻译缓存 L1 内存写入严格后置于 SQLite 事务提交 (`cache.rs`)**: 调整 `set` 与 `set_batch` 的写入时序，仅在 SQLite 写连接或事务 `commit()` 成功后才更新 L1 内存缓存，防止磁盘满或锁失败时 L1 产生未持久化的脏数据。
+- **悬浮迷你窗切换引擎与目标语言即时生效 (`FloatWindow.tsx` / `useTaskRunner.ts`)**: 为 `runner.run` 扩展 `RunOptions`（支持直接传入 `engine` 与 `targetLang` 并同步刷新内部 Ref），修复在 React 异步状态重渲染前立即触发重译仍沿用旧引擎或旧目标语言的问题。
+- **本地 HTTP 服务 CORS 扩展身份白名单固化 (`server/mod.rs` / `extension/manifest.json`)**: 为 Chrome 扩展 `manifest.json` 注入固定 RSA-2048 SPKI 公钥以锁定唯一扩展 ID（`ngfadgochghcplecgmdcjfancoikiihm`），并将服务端 `is_allowed_origin` 从宽泛的格式校验收紧为精确扩展 ID 白名单匹配，阻断第三方恶意扩展跨域调用 `/pair/request` 诱导配对。
+- **浏览器扩展富文本占位符去重校验 (`richText.ts`)**: 在 `restoreRichTextComposite` 中新增占位符集合唯一性校验（`new Set(tokens).size === placeholderToId.size`），拦截重复输出同一占位符顶替缺失占位符的异常情况并安全触发回退。
+- **SQLite 缓存与 WAL 旁路文件迁移失败原子回滚 (`storage.rs`)**: 在 `migrate_db_files` 中记录已移动文件列表，当 `-wal` 或 `-shm` 旁路文件移动失败时逆序回滚已搬移的主库文件，杜绝主库与旁路文件割裂导致的数据丢失。
+- **CI/Release 工作流与跨平台扩展 E2E 加固 (`ci.yml` / `release.yml` / `test-extension-e2e.mjs` / `proxy.rs`)**: 为 `security-scan` 补齐 `pull-requests: read` 权限解决 PR 触发 Gitleaks 403 报错；在 `release.yml` 中仅对 `refs/tags/v*` 注入扩展版本号以兼容 `workflow_dispatch` 手动构建；在 CI 与扩展 E2E 中编译并跨平台启动真实 `transly_test_server`，优先选用支持 `--load-extension` 的 Playwright Chromium 信道；移除 `proxy.rs` 单测对特定开发机代理端口的硬编码断言。
 - **浏览器扩展富文本占位符括线内空格容错归一化 (`richText.ts`)**: 针对大模型偶发在特殊占位符括线内插入空格（如 `⟦ T_1 ⟧` 或 `⟦/T_1 ⟧`）的现象，在 `extractPlaceholderTokens` 与 `restoreRichTextComposite` 中预先执行宽松正则归一化，避免占位符失配回退；补充对应单元测试。
 - **浏览器扩展划词悬浮图标视口右边界防溢出 (`selection/index.ts`)**: 对划词悬浮“译”图标的横向坐标执行视口右边界夹取，防止贴边选中文本时图标超出视口引发页面横向滚动条。
 - **扩展配对会话倒计时采用服务端权威 `expires_in`**: `transly://pairing-requested` 事件载荷新增 `expires_in` 字段，前端配对弹窗优先使用服务端下发的过期秒数，消除前后端双边硬编码潜在脱节。

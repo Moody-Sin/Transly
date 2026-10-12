@@ -39,6 +39,7 @@ const firefoxManifest = {
     scripts: ['background.js'],
   },
 }
+delete firefoxManifest.key
 
 fs.writeFileSync(
   path.join(firefoxDistDir, 'manifest.json'),

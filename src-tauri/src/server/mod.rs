@@ -106,26 +106,32 @@ impl ServerState {
     }
 }
 
+/// 官方受信任的 Chrome 扩展 ID 白名单。
+///
+/// 这些 ID 由 `extension/manifest.json` 中固定的 `"key"`
+/// （RSA-2048 SPKI 公钥，Base64）确定性派生：取 DER 的 SHA-256 前 16 字节，
+/// 每字节高 4 位与低 4 位分别映射到 `a`~`p`。
+///
+/// 为什么必须钉死 ID：仅校验「32 位 a-p 字符」只是**格式**校验，
+/// 任何第三方恶意扩展装上后都能满足该格式，从而跨域调用 `/pair/request`
+/// 弹出配对诱导窗口。CORS 白名单必须做**身份**隔离而非格式隔离。
+pub const ALLOWED_CHROME_EXT_IDS: &[&str] = &["ngfadgochghcplecgmdcjfancoikiihm"];
+
+/// 官方受信任的 Firefox 扩展 ID 白名单。
+///
+/// Firefox 不为临时加载的扩展生成稳定 UUID，因此这里同样只接受显式登记过的 ID，
+/// 不再对任意随机 UUID 放行。
+pub const ALLOWED_FIREFOX_EXT_IDS: &[&str] = &["d4e73b40-7988-4e89-a2e6-81525a74e2d3"];
+
 fn is_allowed_origin(origin_str: &str) -> bool {
-    // 1. Chrome 扩展校验：chrome-extension://<32位小写a-p字符扩展ID>
+    // 1. Chrome 扩展校验：必须是白名单内的确切扩展 ID（不做格式放行）
     if let Some(id) = origin_str.strip_prefix("chrome-extension://") {
-        if id.len() == 32 && id.bytes().all(|c| (b'a'..=b'p').contains(&c)) {
-            return true;
-        }
+        return ALLOWED_CHROME_EXT_IDS.contains(&id);
     }
 
-    // 2. Firefox 扩展校验：moz-extension://<标准UUID扩展ID>
+    // 2. Firefox 扩展校验：同样只接受白名单内的确切 UUID
     if let Some(id) = origin_str.strip_prefix("moz-extension://") {
-        let bytes = id.as_bytes();
-        if bytes.len() == 36
-            && [8, 13, 18, 23].into_iter().all(|i| bytes[i] == b'-')
-            && bytes
-                .iter()
-                .enumerate()
-                .all(|(i, &c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit())
-        {
-            return true;
-        }
+        return ALLOWED_FIREFOX_EXT_IDS.contains(&id);
     }
 
     // 3. 仅在开发调试环境下允许本地回环端口

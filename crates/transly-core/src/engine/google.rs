@@ -212,6 +212,61 @@ fn chunk_paragraph(paragraph: &str) -> Vec<String> {
     chunks
 }
 
+/// 判断在同一段落内拼接两个分片译文之间是否需要补一个空格。
+///
+/// 旧实现只看**原文**分片是否以 ASCII 结尾：长中文段落（非 ASCII 结尾）译成英文后，
+/// 两个英文分片会被直接粘连成 `...worldThis...`。译文的分片边界同样是词边界，
+/// 因此判定必须同时看**译文**首尾。
+///
+/// 判定条件（调用方保证 buf 与 next_chunk 均非空、且都不以空白起止）：
+/// 1) 原文分片以 ASCII 结尾，且下一分片译文以 ASCII 开头——原文此处本就有词边界；
+/// 2) 已拼接译文以 ASCII 字母/数字或英文常见标点结尾，且下一分片以 ASCII 字母/数字开头
+///    ——说明译文自身是空白分隔的西文语言，粘连同样需要补空格。
+///
+/// 注意：仅当**存在下一个分片**时才调用。段落末尾不再追加空格，
+/// 避免旧实现在行尾产生的多余空格。
+fn needs_chunk_space(
+    prev_translated: &str,
+    next_translated: &str,
+    prev_source_ascii_tail: bool,
+) -> bool {
+    let Some(next_first) = next_translated.chars().next() else {
+        return false;
+    };
+    // 任一侧已带空白，说明边界已由译文自身处理，不再重复插入
+    if next_first.is_whitespace() {
+        return false;
+    }
+    let Some(prev_last) = prev_translated.chars().next_back() else {
+        return false;
+    };
+    if prev_last.is_whitespace() {
+        return false;
+    }
+
+    // 条件 1：原文分片以 ASCII 结尾且下一译文以 ASCII 开头
+    if prev_source_ascii_tail && next_first.is_ascii() {
+        return true;
+    }
+
+    // 条件 2：译文自身是空白分隔的西文（前一字符为 ASCII 字母数字或英文常见标点，
+    // 且下一字符为 ASCII 字母数字）
+    let prev_is_word_or_punct =
+        prev_last.is_ascii_alphanumeric() || matches!(prev_last, '.' | ',' | '!' | '?' | ';' | ':');
+    prev_is_word_or_punct && next_first.is_ascii_alphanumeric()
+}
+
+/// 把一个分片译文追加到已拼接缓冲区，按 `needs_chunk_space` 决定是否补空格。
+fn append_translated_chunk(buf: &mut String, next_chunk: &str, prev_source_ascii_tail: bool) {
+    if next_chunk.is_empty() {
+        return;
+    }
+    if !buf.is_empty() && needs_chunk_space(buf, next_chunk, prev_source_ascii_tail) {
+        buf.push(' ');
+    }
+    buf.push_str(next_chunk);
+}
+
 impl Default for GoogleWebEngine {
     fn default() -> Self {
         Self::new()
@@ -301,16 +356,22 @@ impl TranslateEngine for GoogleWebEngine {
                         full_translated.push('\n');
                     }
                     ParagraphElement::Chunks(metas) => {
+                        // 记录前一分片的**原文**末尾是否为 ASCII，用于判定分片之间是否补空格。
+                        // 段落起点处 full_translated 必以 '\n' 结尾（或为空），
+                        // append_translated_chunk 的空白守卫会自动跳过，不会误插段间空格。
+                        let mut prev_source_ascii_tail = false;
                         for meta in metas {
                             if let Some(res) = resp_iter.next() {
                                 if detected_lang.is_none() {
                                     detected_lang = res.detected_source_lang;
                                 }
-                                full_translated.push_str(&res.text);
-                                if meta.ascii_tail && !res.text.ends_with(' ') {
-                                    full_translated.push(' ');
-                                }
+                                append_translated_chunk(
+                                    &mut full_translated,
+                                    &res.text,
+                                    prev_source_ascii_tail,
+                                );
                             }
+                            prev_source_ascii_tail = meta.ascii_tail;
                         }
                         full_translated.push('\n');
                     }
@@ -499,5 +560,82 @@ mod tests {
         let null_root: Value = serde_json::json!(null);
         let err2 = GoogleWebEngine::parse_gtx_response(&null_root, "google_web").unwrap_err();
         assert!(err2.to_string().contains("解析响应文本为空"));
+    }
+
+    /// 回归：旧实现只看**原文**分片是否以 ASCII 结尾。长中文段落（非 ASCII 结尾）
+    /// 译成英文后，两个英文分片会被直接粘连成 `...worldThis...`，整段译文不可读。
+    #[test]
+    fn test_needs_chunk_space_for_cjk_source_translated_to_english() {
+        // 中文原文分片以非 ASCII 结尾（ascii_tail = false），但译文是英文句子。
+        // 译文自身是空白分隔的西文，必须补空格。
+        assert!(
+            needs_chunk_space("Hello world", "This is the next part.", false),
+            "中文原文译成英文时，两个英文分片之间必须补空格"
+        );
+
+        // 与 append_translated_chunk 的端到端拼接结果
+        let mut buf = String::new();
+        append_translated_chunk(&mut buf, "Hello world", false);
+        append_translated_chunk(&mut buf, "This is the next part.", false);
+        assert_eq!(buf, "Hello world This is the next part.");
+        assert!(!buf.contains("worldThis"), "英文分片绝不允许粘连：{buf}");
+
+        // 原文分片以 ASCII 结尾且译文以 ASCII 开头（原文本身有词边界）同样补空格
+        assert!(needs_chunk_space("Hello", "world", true));
+    }
+
+    /// 反向：英文原文译成中文时，中文字符之间**不得**被塞入多余空格。
+    #[test]
+    fn test_append_translated_chunk_does_not_pad_chinese_output() {
+        let mut buf = String::new();
+        // 英文原文分片（ascii_tail = true），译文为中文
+        append_translated_chunk(&mut buf, "你好", true);
+        append_translated_chunk(&mut buf, "世界", true);
+        assert_eq!(buf, "你好世界", "中文译文之间不得插入空格：{buf}");
+
+        // 直接验证判定函数：中文首尾均不满足西文空白分隔条件
+        assert!(!needs_chunk_space("你好", "世界", true));
+        assert!(!needs_chunk_space("你好", "世界", false));
+
+        // 中文译文以中文标点结尾时同样不补空格
+        assert!(!needs_chunk_space("你好，", "世界。", true));
+    }
+
+    /// 边界：任一侧已带空白或为空时，不得重复插入空格。
+    #[test]
+    fn test_needs_chunk_space_respects_existing_whitespace_and_empty() {
+        // 译文自身已以空白分隔
+        assert!(!needs_chunk_space("Hello ", "world", true));
+        assert!(!needs_chunk_space("Hello", " world", true));
+        assert!(!needs_chunk_space("Hello", "\nworld", true));
+        // 空分片
+        assert!(!needs_chunk_space("Hello", "", true));
+        assert!(!needs_chunk_space("", "world", true));
+        // 缓冲区为空白（如段落起始的换行）时不得插入空格
+        assert!(!needs_chunk_space("\n", "world", false));
+
+        // 空分片被 append 直接忽略
+        let mut buf = String::from("Hello");
+        append_translated_chunk(&mut buf, "", true);
+        assert_eq!(buf, "Hello");
+
+        // 段落起始：缓冲区以 '\n' 结尾时，第一个分片必须原样追加，不得前置空格
+        let mut para = String::from("上一段\n");
+        append_translated_chunk(&mut para, "First chunk", false);
+        assert_eq!(para, "上一段\nFirst chunk");
+    }
+
+    /// 回归：旧实现会在段落**最后一个分片**之后、'\n' 之前推入一个空格，
+    /// 造成行尾多余空格。新逻辑只在存在下一个分片时判定，行尾不再补空格。
+    #[test]
+    fn test_append_translated_chunk_leaves_no_trailing_space_at_paragraph_end() {
+        // 模拟段落只有一个分片且原文以 ASCII 结尾（旧实现会补 ' ' 再补 '\n'）
+        let mut full = String::new();
+        append_translated_chunk(&mut full, "Only chunk", true);
+        full.push('\n');
+
+        assert_eq!(full, "Only chunk\n");
+        assert!(!full.contains(" \n"), "行尾不得残留多余空格：{full:?}");
+        assert_eq!(full.trim(), "Only chunk");
     }
 }

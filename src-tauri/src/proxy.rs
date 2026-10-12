@@ -264,13 +264,27 @@ mod tests {
         assert_eq!(url_inv, None);
     }
 
+    /// 系统代理探测的**契约测试**（环境无关）。
+    ///
+    /// 回归：该用例曾硬编码 `assert_eq!(sys, Some("http://127.0.0.1:7890"))`，
+    /// 假设当前机器一定开着 127.0.0.1:7890 代理，导致 GitHub Actions
+    /// `windows-latest` runner（无系统代理，返回 None）直接 panic 失败。
+    /// 未开启代理时返回 None 是完全合法的，这里只断言返回值的**形状**。
     #[test]
     fn test_detect_system_proxy_on_current_machine() {
-        // 当前测试机上已知配置了系统代理 127.0.0.1:7890
         #[cfg(target_os = "windows")]
         {
-            let sys = detect_windows_system_proxy();
-            assert_eq!(sys, Some("http://127.0.0.1:7890".to_string()));
+            // 未配置系统代理时返回 None 是合法结果（CI runner 即如此），
+            // 故只在 Some 分支断言返回值的形状。
+            if let Some(url) = detect_windows_system_proxy() {
+                assert!(!url.is_empty(), "探测到的代理地址不得为空字符串");
+                assert!(
+                    url.starts_with("http://")
+                        || url.starts_with("https://")
+                        || url.starts_with("socks5://"),
+                    "代理地址必须带受支持的协议前缀，实际 {url}"
+                );
+            }
         }
     }
 }

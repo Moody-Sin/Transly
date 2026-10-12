@@ -80,15 +80,36 @@ async fn test_dns_rebinding_host_guard_rejects_foreign_host() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+/// 官方受信任扩展的 Chrome Origin，供各用例复用。
+///
+/// ID 由 `extension/manifest.json` 中固定 `"key"`（RSA-2048 SPKI 公钥 Base64）
+/// 确定性派生：SHA-256(DER) 前 16 字节，每字节高/低 4 位映射到 `a`~`p`。
+const OFFICIAL_CHROME_ORIGIN: &str = "chrome-extension://ngfadgochghcplecgmdcjfancoikiihm";
+
 #[test]
 fn test_is_allowed_origin() {
-    // 合法的扩展 Origin 格式
-    assert!(is_allowed_origin(
-        "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
-    ));
+    // 仅**白名单内**的官方扩展 Origin 被接受（身份校验，而非格式校验）
+    assert!(is_allowed_origin(OFFICIAL_CHROME_ORIGIN));
     assert!(is_allowed_origin(
         "moz-extension://d4e73b40-7988-4e89-a2e6-81525a74e2d3"
     ));
+
+    // Codex Review 回归：任意满足 32 位 a-p 的第三方扩展 ID 必须被严格拒绝。
+    // 旧实现只做格式校验，任何恶意扩展都能跨域调用 /pair/request 弹窗诱导配对。
+    assert!(
+        !is_allowed_origin("chrome-extension://pppppppppppppppppppppppppppppppp"),
+        "任意第三方 32 位 a-p 扩展 ID 必须被拒绝"
+    );
+    assert!(
+        !is_allowed_origin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+        "格式合法但不在白名单内的扩展 ID 必须被拒绝"
+    );
+
+    // 任意随机 UUID 的 Firefox 扩展同样必须被拒绝
+    assert!(
+        !is_allowed_origin("moz-extension://11111111-2222-3333-4444-555555555555"),
+        "任意第三方 UUID 扩展必须被拒绝"
+    );
 
     // 拒绝格式不正确的扩展 ID、伪装前缀与外部网页
     assert!(!is_allowed_origin("chrome-extension://abcdefg"));
@@ -130,14 +151,11 @@ async fn test_cors_origin_policy() {
     let token = Arc::new(RwLock::new("test-token".to_string()));
     let app = create_router(token, Arc::new(cache), pool, glossary, cache_controller);
 
-    // 1. 允许扩展协议与本地开发
+    // 1. 允许官方受信任扩展
     let allowed_req = local_builder()
         .method("OPTIONS")
         .uri("/health")
-        .header(
-            header::ORIGIN,
-            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-        )
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
         .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
         .body(Body::empty())
         .unwrap();
@@ -147,7 +165,7 @@ async fn test_cors_origin_policy() {
             .headers()
             .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
             .map(|v| v.to_str().unwrap()),
-        Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop")
+        Some(OFFICIAL_CHROME_ORIGIN)
     );
 
     // 2. 拒绝普通不受信外部网页
@@ -158,11 +176,32 @@ async fn test_cors_origin_policy() {
         .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
         .body(Body::empty())
         .unwrap();
-    let denied_res = app.oneshot(denied_req).await.unwrap();
+    let denied_res = app.clone().oneshot(denied_req).await.unwrap();
     assert!(denied_res
         .headers()
         .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
         .is_none());
+
+    // 3. 回归：格式合法但不在白名单内的第三方扩展必须被拒绝。
+    //    旧实现只校验 32 位 a-p 字符格式，任意恶意扩展都能通过预检。
+    let third_party_req = local_builder()
+        .method("OPTIONS")
+        .uri("/health")
+        .header(
+            header::ORIGIN,
+            "chrome-extension://pppppppppppppppppppppppppppppppp",
+        )
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+        .body(Body::empty())
+        .unwrap();
+    let third_party_res = app.oneshot(third_party_req).await.unwrap();
+    assert!(
+        third_party_res
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none(),
+        "第三方扩展 Origin 绝不能被 CORS 放行"
+    );
 }
 
 #[tokio::test]
@@ -780,10 +819,7 @@ async fn test_pairing_http_endpoints_roundtrip() {
         .method("POST")
         .uri("/pair/request")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(
-            header::ORIGIN,
-            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-        )
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
         .body(Body::from(req_body.to_string()))
         .unwrap();
 
@@ -803,10 +839,7 @@ async fn test_pairing_http_endpoints_roundtrip() {
         .method("POST")
         .uri("/pair/poll")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(
-            header::ORIGIN,
-            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-        )
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
         .body(Body::from(poll_body.to_string()))
         .unwrap();
     let poll_res = app.clone().oneshot(poll_req).await.unwrap();
@@ -823,10 +856,7 @@ async fn test_pairing_http_endpoints_roundtrip() {
         .method("POST")
         .uri("/pair/poll")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(
-            header::ORIGIN,
-            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-        )
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
         .body(Body::from(poll_body.to_string()))
         .unwrap();
     let poll_res2 = app.clone().oneshot(poll_req2).await.unwrap();
@@ -868,10 +898,7 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer e2e-session-token")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(
-            header::ORIGIN,
-            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-        )
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
         .body(Body::from(batch_req_body.to_string()))
         .unwrap();
 
@@ -910,10 +937,7 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
         .uri("/translate")
         .header(header::AUTHORIZATION, "Bearer e2e-session-token")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(
-            header::ORIGIN,
-            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-        )
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
         .body(Body::from(batch_req_body.to_string()))
         .unwrap();
 
@@ -1064,7 +1088,7 @@ async fn test_real_tcp_server_e2e_lifecycle() {
 
     // 5. 携带正确 Token 发送批量翻译，验证跨进程真实 TCP 往返、术语库干预与结构化响应
     let req_auth = format!(
-        "POST /translate HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer real-tcp-secret-token\r\nOrigin: chrome-extension://abcdefghijklmnopabcdefghijklmnop\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST /translate HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer real-tcp-secret-token\r\nOrigin: {OFFICIAL_CHROME_ORIGIN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         trans_body.len(),
         trans_body
     );

@@ -353,15 +353,15 @@ impl TranslationCache {
         engine: &str,
     ) -> Result<()> {
         let key = Self::generate_key(text, source_lang, target_lang, engine);
-        if let Ok(mut guard) = self.l1.lock() {
-            guard.insert(key.clone(), translated.to_string());
-        }
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
+        // 必须先落库成功再更新 L1：若先写内存，SQLite 写入失败时
+        // L1 会残留一条永不持久化的脏数据，后续读取命中它而数据库里根本没有，
+        // 造成「重启后译文凭空消失」的诡异现象。
         self.with_writer(|conn| {
             conn.execute(
                 r#"
@@ -372,7 +372,13 @@ impl TranslationCache {
                 params![key, text, translated, source_lang, target_lang, engine, now],
             )?;
             Ok(())
-        })
+        })?;
+
+        if let Ok(mut guard) = self.l1.lock() {
+            guard.insert(key, translated.to_string());
+        }
+
+        Ok(())
     }
 
     /// 在单个显式事务中批量保存或更新翻译缓存，大幅降低磁盘 I/O 争用与锁开销
@@ -386,18 +392,13 @@ impl TranslationCache {
             return Ok(());
         }
 
-        if let Ok(mut guard) = self.l1.lock() {
-            for (text, translated, source_lang, target_lang, engine) in &items {
-                let key = Self::generate_key(text, source_lang, target_lang, engine);
-                guard.insert(key, translated.to_string());
-            }
-        }
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
+        // 事务提交成功之后才允许更新 L1（原因同 `set`）。
+        // 此处按引用遍历 items，以便事务成功后还能再遍历一次写入 L1。
         self.with_writer(|conn| {
             let tx = conn.transaction()?;
             {
@@ -409,7 +410,7 @@ impl TranslationCache {
                     "#,
                 )?;
 
-                for (text, translated, source_lang, target_lang, engine) in items {
+                for (text, translated, source_lang, target_lang, engine) in &items {
                     let key = Self::generate_key(text, source_lang, target_lang, engine);
                     stmt.execute(params![
                         key,
@@ -424,7 +425,16 @@ impl TranslationCache {
             }
             tx.commit()?;
             Ok(())
-        })
+        })?;
+
+        if let Ok(mut guard) = self.l1.lock() {
+            for (text, translated, source_lang, target_lang, engine) in &items {
+                let key = Self::generate_key(text, source_lang, target_lang, engine);
+                guard.insert(key, translated.to_string());
+            }
+        }
+
+        Ok(())
     }
 
     /// 清理超过指定天数的过期缓存
@@ -873,6 +883,36 @@ mod tests {
         assert_eq!(
             cache.get("three", "en", "zh-CN", "deepl").unwrap(),
             Some("三".to_string())
+        );
+    }
+
+    /// 回归：SQLite 写入失败时绝不允许污染 L1 内存缓存。
+    /// 旧实现先写 L1 再落库，事务失败后 L1 残留一条永不持久化的脏数据：
+    /// 进程内读取会命中它，而数据库里根本没有对应记录，重启后译文凭空消失。
+    #[test]
+    fn test_set_batch_does_not_pollute_l1_when_transaction_fails() {
+        let cache = TranslationCache::in_memory().unwrap();
+
+        // 破坏表结构，使后续写入事务必然失败
+        cache
+            .with_writer(|conn| {
+                conn.execute_batch("DROP TABLE translation_cache;")?;
+                Ok(())
+            })
+            .unwrap();
+
+        let entries = vec![
+            ("one", "一", "en", "zh-CN", "google"),
+            ("two", "二", "en", "zh-CN", "google"),
+        ];
+        assert!(
+            cache.set_batch(entries).is_err(),
+            "表被破坏后 set_batch 必须返回 Err，而不是静默成功"
+        );
+
+        assert!(
+            cache.l1.lock().unwrap().map.is_empty(),
+            "写入事务失败后 L1 内存缓存必须保持为空，不得残留脏数据"
         );
     }
 

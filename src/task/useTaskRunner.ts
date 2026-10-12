@@ -281,8 +281,6 @@ export function useTaskRunner(
       }
       run(payload.text, { source: payload.source })
     }
-    // 注册失败必须暴露：此处空 catch 曾让 ACL 拒绝静默数月，浮窗永远空白。
-    // 只降噪，不吞错。
     listen<FloatRequest>('float-translate', (event) => handle(event.payload))
       .then((fn) => {
         if (disposed) fn()

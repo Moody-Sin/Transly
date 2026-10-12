@@ -301,6 +301,26 @@ const failedItemsMap = new Map<string, TextNodeEntry & { errorKind?: string }>()
 const MAX_FAILED_ITEMS = 2_000
 let nodeSequenceId = 0
 
+/** 允许出现在叶子富文本段落内部的合法行内标签白名单 */
+const INLINE_TAGS = new Set([
+  'A',
+  'SPAN',
+  'STRONG',
+  'EM',
+  'B',
+  'I',
+  'CODE',
+  'MARK',
+  'SMALL',
+  'SUB',
+  'SUP',
+  'U',
+  'S',
+  'ABBR',
+  'CITE',
+  'TIME',
+])
+
 /**
  * 判断是否为叶子富文本容器（例如 <p>、<li> 等段落，包含行内标签子节点）
  */
@@ -309,11 +329,15 @@ export function isLeafRichTextContainer(el: Element): boolean {
   if (!['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TD', 'TH'].includes(tag)) {
     return false
   }
-  for (const child of Array.from(el.children)) {
-    const childTag = child.tagName.toUpperCase()
-    if (!['A', 'SPAN', 'STRONG', 'EM', 'B', 'I', 'CODE', 'MARK', 'SMALL'].includes(childTag)) {
-      return false
-    }
+  if (el.children.length === 0) return false
+
+  // 必须检查全部子孙元素：<p><strong><a>link</a></strong></p> 的一级子元素只有
+  // <strong>，只看 el.children 会把嵌套行内结构误判为叶子段落
+  for (const descendant of Array.from(el.querySelectorAll('*'))) {
+    if (!INLINE_TAGS.has(descendant.tagName.toUpperCase())) return false
+    if (descendant.hasAttribute('data-no-translate')) return false
+    if (descendant.classList.contains('notranslate')) return false
+    if ((descendant as HTMLElement).isContentEditable) return false
   }
   return true
 }
@@ -387,16 +411,19 @@ export function collectTextNodes(
           }
         } else if (child.nodeType === Node.ELEMENT_NODE) {
           const el = child as Element
-          // 行内元素取其内部未翻译文本节点
-          for (const sub of Array.from(el.childNodes)) {
-            if (sub.nodeType === Node.TEXT_NODE) {
-              const tNode = sub as Text
-              if (!translatedTextSet.has(tNode)) {
-                const val = tNode.nodeValue || ''
-                rawParts.push({ node: tNode, text: val, isInline: true })
-                validTextLen += val.trim().length
-              }
+          // 行内元素取其子树内所有未翻译文本节点（中序深度遍历）：
+          // <strong><a>text</a></strong> 这类嵌套结构下，只遍历一级 childNodes
+          // 拿到的是 <a> 元素而非 Text，深层文本会被整段漏掉
+          const inlineWalker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
+          let inlineNode = inlineWalker.nextNode()
+          while (inlineNode) {
+            const tNode = inlineNode as Text
+            if (!translatedTextSet.has(tNode)) {
+              const val = tNode.nodeValue || ''
+              rawParts.push({ node: tNode, text: val, isInline: true })
+              validTextLen += val.trim().length
             }
+            inlineNode = inlineWalker.nextNode()
           }
         }
       }
@@ -405,8 +432,9 @@ export function collectTextNodes(
       const hasInline = rawParts.some((p) => p.isInline)
       if (hasInline && rawParts.length >= 2 && validTextLen >= 2) {
         processedContainers.add(candidate)
-        for (const child of Array.from(candidate.children)) {
-          processedContainers.add(child)
+        // 子孙元素全部登记，防止主 TreeWalker 再次扫到嵌套行内子树里的文本节点
+        for (const descendant of Array.from(candidate.querySelectorAll('*'))) {
+          processedContainers.add(descendant)
         }
         for (const p of rawParts) {
           processedNodes.add(p.node)

@@ -4,6 +4,7 @@ import {
   extractPlaceholderTokens,
   buildRichTextComposite,
   restoreRichTextComposite,
+  type TextPart,
 } from './richText.ts'
 
 test('提取占位符 Token 数组', () => {
@@ -105,4 +106,31 @@ test('富文本段落以行内标签结尾且包含连续行内标签时准确�
   assert.equal(restored.get('t0'), '访问')
   assert.equal(restored.get('t1'), '网站')
   assert.equal(restored.get('t2'), '链接')
+})
+
+test('富文本段落包含多层嵌套行内标签时准确聚合与回填', () => {
+  const parts: TextPart[] = [
+    { id: 'p0', text: 'Please check ', isInline: false },
+    { id: 'p1', text: 'Important Doc', isInline: true },
+    { id: 'p2', text: ' and ', isInline: false },
+    { id: 'p3', text: 'Notice', isInline: true },
+    { id: 'p4', text: '.', isInline: false },
+  ]
+  const comp = buildRichTextComposite(parts, true)
+  assert.equal(comp.compositeText, 'Please check ⟦T_1⟧Important Doc⟦/T_1⟧ and ⟦T_3⟧Notice⟦/T_3⟧.')
+  const translated = '请查阅⟦T_1⟧重要文档⟦/T_1⟧与⟦T_3⟧须知⟦/T_3⟧。'
+  const restored = restoreRichTextComposite(
+    translated,
+    comp.baseSlots || [],
+    new Map([
+      ['⟦T_1⟧', 'p1'],
+      ['⟦T_3⟧', 'p3'],
+    ]),
+  )
+  assert.ok(restored)
+  assert.equal(restored.get('p0'), '请查阅')
+  assert.equal(restored.get('p1'), '重要文档')
+  assert.equal(restored.get('p2'), '与')
+  assert.equal(restored.get('p3'), '须知')
+  assert.equal(restored.get('p4'), '。')
 })

@@ -22,7 +22,8 @@
     "test:e2e": "pnpm run test:e2e:ui && pnpm run test:e2e:extension",
     "build:portable": "tauri build --no-bundle",
     "build:extension": "pnpm --filter transly-extension run build",
-    "build:extension:firefox": "pnpm --filter transly-extension run build && pnpm --filter transly-extension run build:firefox"
+    "build:extension:firefox": "pnpm --filter transly-extension run build && pnpm --filter transly-extension run build:firefox",
+    "lint:ui": "lintapple http://localhost:5173"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -41,6 +42,7 @@
     "eslint": "^10.12.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "lefthook": "^2.1.17",
+    "lintapple": "^0.1.17",
     "playwright": "^1.64.0",
     "postcss": "^8.5.1",
     "prettier": "^3.9.9",

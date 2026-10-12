@@ -3,6 +3,7 @@ pub mod clipboard_gate;
 pub mod commands;
 pub mod engine_pool;
 pub mod ocr;
+pub mod proxy;
 pub mod secrets;
 pub mod server;
 pub mod storage;
@@ -27,24 +28,46 @@ macro_rules! app_command_builder {
     () => {
         ::tauri_specta::Builder::<::tauri::Wry>::new().commands(::tauri_specta::collect_commands![
             $crate::commands::translate,
+            $crate::commands::translate_stream,
+            $crate::commands::cancel_stream_task,
             $crate::commands::get_engine_capabilities,
             $crate::commands::set_float_sticky,
             $crate::commands::take_pending_float_request,
             $crate::commands::get_server_token,
             $crate::commands::rotate_server_token,
+            $crate::commands::approve_pairing,
+            $crate::commands::reject_pairing,
             $crate::commands::save_api_key,
             $crate::commands::is_api_key_configured,
             $crate::commands::delete_api_key,
+            $crate::commands::save_llm_config,
+            $crate::commands::get_llm_config,
+            $crate::commands::save_llm_style,
+            $crate::commands::get_llm_style,
+            $crate::commands::get_shortcut,
+            $crate::commands::set_shortcut,
+            $crate::commands::get_replace_shortcut,
+            $crate::commands::set_replace_shortcut,
+            $crate::commands::detect_text_language,
             $crate::commands::add_glossary_term,
             $crate::commands::get_glossary_terms,
             $crate::commands::delete_glossary_term,
             $crate::commands::clear_cache,
+            $crate::commands::get_translation_history,
+            $crate::commands::search_translation_history,
+            $crate::commands::delete_history_entry,
+            $crate::commands::export_translation_history,
             $crate::commands::set_cache_enabled,
             $crate::commands::get_cache_enabled,
             $crate::commands::ocr_clipboard_image,
             $crate::commands::set_clipboard_monitor,
             $crate::commands::get_clipboard_monitor,
-            $crate::commands::get_server_status
+            $crate::commands::get_server_status,
+            $crate::commands::get_shortcut_status,
+            $crate::commands::get_preferred_replace_engine,
+            $crate::commands::save_preferred_replace_engine,
+            $crate::commands::get_proxy_config,
+            $crate::commands::save_proxy_config
         ])
     };
 }

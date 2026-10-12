@@ -1,6 +1,6 @@
 [package]
 name = "transly-core"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 authors = ["Transly Authors"]
 description = "Core logic for Transly translation engine, cache, validation, and glossary."
@@ -15,10 +15,11 @@ serde_json = "1.0"
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 tokio = { version = "1.43", features = ["sync", "macros", "rt"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 sha2 = "0.10"
 urlencoding = "2.1"
 regex = "1.11"
+aho-corasick = "1.1"
 futures = "0.3"
 
 [dev-dependencies]

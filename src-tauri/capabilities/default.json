@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "桌面端主窗口与浮窗的最小 IPC 权限。仅授予 core:event 事件通道：浮窗依赖 listen/unlisten 接收宿主广播的 float-translate 事件。除应用自有命令外，未在此声明的插件命令一律被 ACL 拒绝。",
+  "description": "桌面端主窗口与浮窗的最小 IPC 权限。授予 core:event 事件通道供浮窗与配对广播通信，授予 core:window 供配对唤起与焦点设置。除应用自有命令外，未在此声明的插件命令一律被 ACL 拒绝。",
   "windows": ["main", "float"],
-  "permissions": ["core:event:default"]
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus"
+  ]
 }

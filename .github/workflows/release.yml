@@ -46,7 +46,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring
 
       - name: 安装前端依赖
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: 生成强类型绑定
         run: pnpm run generate:bindings
@@ -61,6 +61,27 @@ jobs:
           releaseBody: '参见 CHANGELOG.md 获取完整发布说明。'
           releaseDraft: false
           prerelease: false
+
+      - name: 提取 Windows 单文件免安装便携版产物
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          if [ -f "target/release/transly.exe" ]; then
+            cp "target/release/transly.exe" "Transly-Portable-${{ matrix.platform }}.exe"
+          elif [ -f "src-tauri/target/release/transly.exe" ]; then
+            cp "src-tauri/target/release/transly.exe" "Transly-Portable-${{ matrix.platform }}.exe"
+          else
+            echo "未找到 release 二进制文件！"
+            exit 1
+          fi
+
+      - name: 上传 Windows 单文件便携版至 GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: Transly-Portable-${{ matrix.platform }}.exe
 
   build-extension:
     name: 打包浏览器扩展 (.zip)
@@ -79,13 +100,30 @@ jobs:
 
       - name: 构建扩展
         run: |
-          pnpm install
+          pnpm install --frozen-lockfile
+          # 从 git tag 注入版本号：manifest.json 里的硬编码版本会随 tag 变化而漂移，
+          # 导致 Chrome Web Store 以「版本号未递增」拒绝上传。
+          # tag 形如 v0.3.0，需剥离前缀 v 才是合法 manifest version。
+          # 注意：workflow_dispatch 在分支上触发时 GITHUB_REF_NAME 是分支名（如 main），
+          # 直接注入会把非法版本号写进 manifest.json，因此只有 tag 触发才覆盖版本号，
+          # 其余情况交由 postbuild.mjs 保留 extension/package.json 中的合法版本号。
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            export TRANSLY_EXT_VERSION="${GITHUB_REF_NAME#v}"
+            echo "扩展版本号（来自 tag）：$TRANSLY_EXT_VERSION"
+          else
+            echo "非 tag 触发，沿用 extension/package.json 版本号"
+          fi
           pnpm --filter transly-extension run build
+          pnpm --filter transly-extension run build:firefox
 
       - name: 压缩扩展产物
         run: |
           cd extension/dist
           zip -r ../../transly-extension-${{ github.ref_name }}.zip ./*
+          cd ../..
+          # Firefox 专属产物（gecko ID 与 background.scripts 兼容层）
+          cd extension/dist-firefox
+          zip -r ../../transly-extension-firefox-${{ github.ref_name }}.zip ./*
           cd ../..
 
       - name: 上传扩展发布产物至 GitHub Release
@@ -94,4 +132,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: transly-extension-${{ github.ref_name }}.zip
+          files: |
+            transly-extension-${{ github.ref_name }}.zip
+            transly-extension-firefox-${{ github.ref_name }}.zip

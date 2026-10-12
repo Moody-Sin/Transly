@@ -107,7 +107,8 @@ export default function FloatWindow() {
               const newEng = e.target.value
               setEngine(newEng)
               if (runner.snapshot.sourceText && !isTranslating) {
-                runner.run(runner.snapshot.sourceText)
+                // 同步传入新引擎：setEngine 是异步的，此刻 runner 内部 ref 仍是旧值
+                runner.run(runner.snapshot.sourceText, { engine: newEng })
               }
             }}
             className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
@@ -123,7 +124,8 @@ export default function FloatWindow() {
               const newLang = e.target.value
               setTargetLang(newLang)
               if (runner.snapshot.sourceText && !isTranslating) {
-                runner.run(runner.snapshot.sourceText)
+                // 同步传入新目标语言：setTargetLang 是异步的，此刻 runner 内部 ref 仍是旧值
+                runner.run(runner.snapshot.sourceText, { targetLang: newLang })
               }
             }}
             className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"

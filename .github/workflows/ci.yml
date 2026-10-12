@@ -80,7 +80,7 @@ jobs:
       - name: Rust 系统依赖（用于生成 bindings）
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
       - name: 校验 Specta 类型绑定同步
@@ -101,6 +101,8 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       - name: 运行桌面端 UI 全交互 E2E 测试
         run: pnpm run test:e2e:ui
+      - name: 编译真实本地测试服务 (transly_test_server)
+        run: cargo build --package src-tauri --bin transly_test_server
       - name: 运行浏览器插件真实端到端 E2E 测试
         run: pnpm run test:e2e:extension
 
@@ -134,6 +136,13 @@ jobs:
   security-scan:
     name: 安全密钥扫描 (Gitleaks)
     runs-on: ubuntu-latest
+    # gitleaks-action 在 pull_request 触发时会调用
+    # GET /repos/{owner}/{repo}/pulls/{pull_number}/commits 枚举本次 PR 的全部提交，
+    # 默认 GITHUB_TOKEN 缺少 pull-requests: read 会报
+    # 403 Resource not accessible by integration，必须显式授予。
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:

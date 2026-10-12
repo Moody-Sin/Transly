@@ -104,8 +104,15 @@ jobs:
           # 从 git tag 注入版本号：manifest.json 里的硬编码版本会随 tag 变化而漂移，
           # 导致 Chrome Web Store 以「版本号未递增」拒绝上传。
           # tag 形如 v0.3.0，需剥离前缀 v 才是合法 manifest version。
-          export TRANSLY_EXT_VERSION="${GITHUB_REF_NAME#v}"
-          echo "扩展版本号：$TRANSLY_EXT_VERSION"
+          # 注意：workflow_dispatch 在分支上触发时 GITHUB_REF_NAME 是分支名（如 main），
+          # 直接注入会把非法版本号写进 manifest.json，因此只有 tag 触发才覆盖版本号，
+          # 其余情况交由 postbuild.mjs 保留 extension/package.json 中的合法版本号。
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            export TRANSLY_EXT_VERSION="${GITHUB_REF_NAME#v}"
+            echo "扩展版本号（来自 tag）：$TRANSLY_EXT_VERSION"
+          else
+            echo "非 tag 触发，沿用 extension/package.json 版本号"
+          fi
           pnpm --filter transly-extension run build
           pnpm --filter transly-extension run build:firefox
 

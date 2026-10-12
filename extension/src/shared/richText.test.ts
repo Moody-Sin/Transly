@@ -156,3 +156,29 @@ test('富文本容错：大模型在占位符括线内插入空格时仍可准�
   assert.equal(restored.get('t1'), ' 译思 ')
   assert.equal(restored.get('t2'), ' 。')
 })
+
+test('富文本占位重复校验：重复 Token 顶替缺失占位符时严格返回 null', () => {
+  // 原文结构：'Please check ⟨T_1⟩Important Doc⟨/T_1⟩ and ⟨T_3⟩Notice⟨/T_3⟩.'
+  // 大模型误把 ⟦T_3⟧ 输出成了第二个 ⟦T_1⟧：
+  // tokens.length 仍是 2，与 placeholderToId.size 相等，
+  // 若只校验数量就会绕过校验、导致 p3 漏翻且 p1 被重复回填。
+  const parts: TextPart[] = [
+    { id: 'p0', text: 'Please check ', isInline: false },
+    { id: 'p1', text: 'Important Doc', isInline: true },
+    { id: 'p2', text: ' and ', isInline: false },
+    { id: 'p3', text: 'Notice', isInline: true },
+    { id: 'p4', text: '.', isInline: false },
+  ]
+  const comp = buildRichTextComposite(parts, true)
+
+  const mangled = '请查阅⟦T_1⟧重要文档⟦/T_1⟧与⟦T_1⟧须知⟦/T_1⟧。'
+  const restored = restoreRichTextComposite(
+    mangled,
+    comp.baseSlots || [],
+    new Map([
+      ['⟦T_1⟧', 'p1'],
+      ['⟦T_3⟧', 'p3'],
+    ]),
+  )
+  assert.equal(restored, null, '存在重复占位符时必须严格返回 null 触发安全回退')
+})

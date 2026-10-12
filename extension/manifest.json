@@ -3,6 +3,7 @@
   "name": "__MSG_extName__",
   "default_locale": "zh_CN",
   "version": "0.3.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2e07KIdlnYstBy/OFGty/iKCSkbxilCU2ArVEHYoMdNBwv1YyCl+5A6ID46kOUgMFEPcR7JIShLzhyjLKmyNnCtxsql6eCJaCserl2GRgLgPFskkeF/OiLNP8Q7bQxvRv2JTQKJgocoHqLAU9nGu6XFGa2+uN6kzS5DkqWVF30jerUHLrRWT9Ey13qwViEdpAOjdkZt65IP2qFjXwsf6vVb+2nQaziyhXwRPrACxEtEGIrTgwLOiM/liUfg5zXdajs0RsFzynBXD5qDUZd8Cfx0KTwCYdiGfRSabyaZpO2Y8d1ODaebQMHRxJ2Pcjeaq5+MIy97G7VNPKHrlVDxu0QIDAQAB",
   "description": "__MSG_extDescription__",
   "permissions": ["activeTab", "scripting", "storage", "contextMenus", "tabs"],
   "host_permissions": ["http://127.0.0.1/*"],

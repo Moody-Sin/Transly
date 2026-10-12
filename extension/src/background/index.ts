@@ -146,7 +146,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       })
     } catch (err) {
       // 受限页面（chrome://、应用商店等）无法注入，属正常路径；
-      // 但不能静默吞掉（Lessons Learned 第 8 条）。
+      // 但不能静默吞掉。
       console.warn('[Transly Extension] 划词翻译气泡注入失败:', err)
     }
   })()

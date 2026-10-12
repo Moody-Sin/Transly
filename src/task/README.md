@@ -32,8 +32,6 @@ idle ──submit──> running ──resolve──> succeeded
 - `cancel` 只作废在途响应，已应用的译文保持（取消 ≠ 还原）。
 - 组件卸载时递增代际，作废全部在途请求。
 
-跨进程（桌面端 vs 扩展端）为什么不合并状态机，见 [docs/architecture-state-machines.md](../../docs/architecture-state-machines.md)。
-
 ## 测试
 
 ```sh

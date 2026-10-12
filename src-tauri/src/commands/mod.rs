@@ -815,34 +815,6 @@ pub fn trigger_selection_replacement(
 
                 match active_engine.translate(&req).await {
                     Ok(res) => {
-                        // 防御性校验：若仍为降级结果，坚决不静默覆盖选区
-                        if res.engine.ends_with("(fallback)") {
-                            let e_msg = format!(
-                                "所选引擎 {} 暂时不可用，已拦截静默降级",
-                                active_engine.id()
-                            );
-                            eprintln!("[Selection Replacement Blocked] {e_msg}");
-                            let _ = handle.emit(
-                                "transly://replacement-failed",
-                                ReplacementFailedPayload {
-                                    engine: active_engine.id().to_string(),
-                                    message: e_msg,
-                                },
-                            );
-                            if let Some(float_win) = handle.get_webview_window("float") {
-                                place_float_near_cursor(&float_win);
-                                let _ = float_win.show();
-                            }
-                            let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
-                            let current = handle.clipboard().read_text().ok();
-                            if current.as_deref() == Some(clean) {
-                                if let Some(old) = old_clipboard {
-                                    let _ = handle.clipboard().write_text(old);
-                                }
-                            }
-                            return;
-                        }
-
                         let restored =
                             transly_core::restore_code_blocks(&res.text, &preserved.stash);
                         let cache_target_engine = res.actual_engine().to_string();

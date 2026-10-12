@@ -236,7 +236,6 @@ impl TranslateEngine for GoogleWebEngine {
             supports_batch: false,
             requires_api_key: false,
             supports_streaming: false,
-            fallback_engine: None,
         }
     }
 

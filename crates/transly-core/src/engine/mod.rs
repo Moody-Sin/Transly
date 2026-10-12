@@ -2,11 +2,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub mod deepl;
-pub mod fallback;
 pub mod google;
 pub mod openai;
 pub use deepl::DeepLEngine;
-pub use fallback::FallbackEngine;
 pub use google::GoogleWebEngine;
 pub use openai::OpenAIEngine;
 
@@ -135,8 +133,6 @@ pub struct EngineCapabilities {
     pub requires_api_key: bool,
     #[serde(default)]
     pub supports_streaming: bool,
-    #[serde(default)]
-    pub fallback_engine: Option<String>,
 }
 
 #[async_trait]
@@ -152,7 +148,6 @@ pub trait TranslateEngine: Send + Sync {
             supports_batch: true,
             requires_api_key: false,
             supports_streaming: false,
-            fallback_engine: None,
         }
     }
 
@@ -303,7 +298,7 @@ where
     }
 }
 
-/// 统一的带 Fallback 降级感知的缓存查询纯函数（杜绝在 IPC 与 HTTP Server 两处重复造轮子与字符串嗅探）
+/// 统一的缓存查询纯函数（仅查询请求引擎专属缓存，杜绝跨引擎静默降级）
 pub fn lookup_cache_with_fallback(
     cache: &crate::TranslationCache,
     engine: &dyn TranslateEngine,
@@ -316,18 +311,10 @@ pub fn lookup_cache_with_fallback(
         return Some((cached_text, engine_id.to_string()));
     }
 
-    if let Some(ref fallback_id) = engine.capabilities().fallback_engine {
-        if fallback_id != engine_id {
-            if let Ok(Some(cached_text)) = cache.get(text, source_lang, target_lang, fallback_id) {
-                return Some((cached_text, format!("{fallback_id}(fallback)")));
-            }
-        }
-    }
-
     None
 }
 
-/// 统一的带 Fallback 降级感知的批量缓存查询纯函数（结合 L1 内存直出与 L2 批量 SQL，杜绝循环单行查询）
+/// 统一的批量缓存查询纯函数（结合 L1 内存直出与 L2 批量 SQL，仅查询请求引擎专属缓存）
 pub fn lookup_batch_with_fallback(
     cache: &crate::TranslationCache,
     engine: &dyn TranslateEngine,
@@ -355,38 +342,9 @@ pub fn lookup_batch_with_fallback(
     let primary_hits = cache.get_by_keys(&primary_keys).unwrap_or_default();
 
     let mut results = vec![None; items.len()];
-    let mut missing_fallback_indices = Vec::new();
-    let mut missing_fallback_keys = Vec::new();
-
-    let fallback_engine_id = engine
-        .capabilities()
-        .fallback_engine
-        .filter(|f| f != engine_id);
-
     for (idx, key) in primary_keys.into_iter().enumerate() {
         if let Some(text) = primary_hits.get(&key) {
             results[idx] = Some((text.clone(), engine_id.to_string()));
-        } else if let Some(ref fb_id) = fallback_engine_id {
-            let fb_key = crate::cache::TranslationCache::generate_key(
-                &items[idx].text,
-                source_lang,
-                target_lang,
-                fb_id,
-            );
-            missing_fallback_indices.push(idx);
-            missing_fallback_keys.push(fb_key);
-        }
-    }
-
-    if let (Some(fb_id), false) = (fallback_engine_id, missing_fallback_keys.is_empty()) {
-        let fallback_hits = cache
-            .get_by_keys(&missing_fallback_keys)
-            .unwrap_or_default();
-        for (pos, key) in missing_fallback_keys.into_iter().enumerate() {
-            let original_idx = missing_fallback_indices[pos];
-            if let Some(text) = fallback_hits.get(&key) {
-                results[original_idx] = Some((text.clone(), format!("{fb_id}(fallback)")));
-            }
         }
     }
 
@@ -518,5 +476,32 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0], Some(("你好".into(), "google_web".into())));
         assert_eq!(hits[1], None);
+    }
+
+    #[test]
+    fn test_lookup_cache_isolates_engines_without_fallback() {
+        let cache = crate::TranslationCache::in_memory().unwrap();
+        let google = GoogleWebEngine::new();
+        let deepl = DeepLEngine::new("dummy-key");
+
+        // 仅写入 google_web 缓存
+        cache
+            .set("hi", "你好", "en", "zh-CN", "google_web")
+            .unwrap();
+
+        // google_web 命中
+        let hit_google = lookup_cache_with_fallback(&cache, &google, "hi", "en", "zh-CN");
+        assert_eq!(hit_google, Some(("你好".into(), "google_web".into())));
+
+        // deepl 不再具备自动降级嗅探，严格隔离返回 None
+        let hit_deepl = lookup_cache_with_fallback(&cache, &deepl, "hi", "en", "zh-CN");
+        assert_eq!(hit_deepl, None);
+
+        let items = vec![BatchItemRequest {
+            id: "1".into(),
+            text: "hi".into(),
+        }];
+        let batch_deepl = lookup_batch_with_fallback(&cache, &deepl, &items, "en", "zh-CN");
+        assert_eq!(batch_deepl, vec![None]);
     }
 }

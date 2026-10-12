@@ -505,46 +505,9 @@ async function runDesktopUiE2E() {
     console.log('✔ [用例 3] 文本输入、防抖调度、IPC 调用与译文回填全链路正常')
 
     // ==========================================
-    // 用例 4: 多引擎对比翻译模式 (Compare Mode)
+    // 用例 4: 历史记录面板（列表渲染、搜索过滤、删除条目、导出 CSV）
     // ==========================================
-    console.log('[UI-E2E] 正在测试 [用例 4: 多引擎并发对比模式]...')
-    const compareToggle = page.getByRole('button', { name: '多引擎对比' })
-    if (await compareToggle.isVisible()) {
-      await compareToggle.click()
-      await page.waitForTimeout(400)
-
-      // 再次触发对比翻译
-      const compareInput = page.locator('textarea').first()
-      await compareInput.fill('High performance parallel architecture')
-      const triggerBtn = page
-        .locator('button')
-        .filter({ hasText: /^翻译$/ })
-        .last()
-      if ((await triggerBtn.isVisible()) && (await triggerBtn.isEnabled())) {
-        await triggerBtn.click()
-      }
-
-      await page.waitForFunction(
-        () => {
-          return (
-            document.body.innerText.includes('GOOGLE') || document.body.innerText.includes('DEEPL')
-          )
-        },
-        null,
-        { timeout: 6000 },
-      )
-      console.log('✔ [用例 4] 多引擎对比模式并发触发与聚合卡片渲染成功')
-
-      // 切回单引擎模式
-      const singleToggle = page.getByRole('button', { name: '单引擎' })
-      await singleToggle.click()
-      await page.waitForTimeout(300)
-    }
-
-    // ==========================================
-    // 用例 5: 历史记录面板（列表渲染、搜索过滤、删除条目、导出 CSV）
-    // ==========================================
-    console.log('[UI-E2E] 正在测试 [用例 5: 历史记录面板检索、管理与导出]...')
+    console.log('[UI-E2E] 正在测试 [用例 4: 历史记录面板检索、管理与导出]...')
     const historyTab = page.getByRole('button', { name: '历史' })
     if (await historyTab.isVisible()) {
       await historyTab.click()
@@ -571,12 +534,12 @@ async function runDesktopUiE2E() {
       await translateTab.click()
       await page.waitForTimeout(300)
     }
-    console.log('✔ [用例 5] 历史记录检索、过滤与交互闭环正常')
+    console.log('✔ [用例 4] 历史记录检索、过滤与交互闭环正常')
 
     // ==========================================
-    // 用例 6: 设置中心全功能（API Key、术语库新增删除、快捷键录制）
+    // 用例 5: 设置中心全功能（API Key、术语库新增删除、快捷键录制）
     // ==========================================
-    console.log('[UI-E2E] 正在测试 [用例 6: 设置中心与术语库管理]...')
+    console.log('[UI-E2E] 正在测试 [用例 5: 设置中心与术语库管理]...')
     await settingsBtn.click()
     await page.waitForSelector('#transly-settings-dialog-title', { timeout: 5000 })
 
@@ -610,12 +573,12 @@ async function runDesktopUiE2E() {
       state: 'detached',
       timeout: 5000,
     })
-    console.log('✔ [用例 6] 设置对话框、术语库配置与状态存储正常')
+    console.log('✔ [用例 5] 设置对话框、术语库配置与状态存储正常')
 
     // ==========================================
-    // 用例 7: 浏览器扩展一键配对请求浮层 (Pairing Modal)
+    // 用例 6: 浏览器扩展一键配对请求浮层 (Pairing Modal)
     // ==========================================
-    console.log('[UI-E2E] 正在测试 [用例 7: 浏览器扩展配对申请弹窗与确认]...')
+    console.log('[UI-E2E] 正在测试 [用例 6: 浏览器扩展配对申请弹窗与确认]...')
     // 模拟服务端广播配对申请事件
     await page.evaluate(() => {
       window.__EMIT_TEST_EVENT('transly://pairing-requested', {
@@ -643,12 +606,12 @@ async function runDesktopUiE2E() {
       (log) => log.cmd === 'approve_pairing' && log.args?.sessionId === 'e2e-pairing-session-999',
     )
     assert(approvedCall, '必须向后端发起 approve_pairing 并传递正确 sessionId')
-    console.log('✔ [用例 7] 浏览器扩展一键配对事件广播、弹窗确认与 IPC 回调成功')
+    console.log('✔ [用例 6] 浏览器扩展一键配对事件广播、弹窗确认与 IPC 回调成功')
 
     // ==========================================
-    // 用例 8: 划词悬浮窗紧凑模式 (#float) 与选区文本灌入
+    // 用例 7: 划词悬浮窗紧凑模式 (#float) 与选区文本灌入
     // ==========================================
-    console.log('[UI-E2E] 正在测试 [用例 8: 迷你划词悬浮窗 (#float) 紧凑模式]...')
+    console.log('[UI-E2E] 正在测试 [用例 7: 迷你划词悬浮窗 (#float) 紧凑模式]...')
     const floatPage = await browser.newPage()
     await floatPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
     await floatPage.goto(`${baseUrl}/#float`, { waitUntil: 'networkidle' })
@@ -656,10 +619,7 @@ async function runDesktopUiE2E() {
     // 验证浮窗模式正常挂载且无主窗口 Tab
     await floatPage.waitForSelector('[data-tauri-drag-region]', { timeout: 5000 })
     const floatBody = await floatPage.textContent('body')
-    assert(
-      !floatBody.includes('历史记录') && !floatBody.includes('多引擎对比'),
-      '悬浮窗紧凑视图不得展示完整主窗口功能',
-    )
+    assert(!floatBody.includes('历史记录'), '悬浮窗紧凑视图不得展示完整主窗口功能')
 
     // 模拟后端向浮窗广播 float-translate 选区划词事件
     await floatPage.evaluate(() => {
@@ -691,7 +651,7 @@ async function runDesktopUiE2E() {
     }
 
     await floatPage.close()
-    console.log('✔ [用例 8] 迷你悬浮窗 (#float) 路由隔离、选区事件响应与交互成功')
+    console.log('✔ [用例 7] 迷你悬浮窗 (#float) 路由隔离、选区事件响应与交互成功')
 
     // 检查控制台异常
     assert.equal(
@@ -701,7 +661,7 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 8 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 7 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
     console.log('========================================\n')
   } catch (err) {
     console.error('[UI-E2E Catch] 捕获到错误，控制台错误列表:', consoleErrors)

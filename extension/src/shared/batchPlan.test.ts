@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { planBatchRanges, type BatchLimits } from './batchPlan.ts'
+import { planBatchRanges, splitByViewport, countChars, type BatchLimits } from './batchPlan.ts'
 
 const LIMITS: BatchLimits = {
   maxBatchItems: 30,
@@ -8,12 +8,37 @@ const LIMITS: BatchLimits = {
   maxItemChars: 10_000,
 }
 
-/** 复算每个区间的字符总量，供断言复用 */
+/** 复算每个区间的字符总量，供断言复用（口径须与服务端一致：码点数） */
 function totalOf(texts: string[], start: number, end: number): number {
   let sum = 0
-  for (let i = start; i < end; i += 1) sum += texts[i].length
+  for (let i = start; i < end; i += 1) sum += countChars(texts[i])
   return sum
 }
+
+test('countChars 按码点计数，与 Rust 的 chars().count() 口径一致', () => {
+  // ASCII：一个 code point
+  assert.equal(countChars('hello'), 5)
+  // 中文：一个 code point = 一个 UTF-16 code unit
+  assert.equal(countChars('机器学习'), 4)
+  // emoji：占 2 个 UTF-16 code unit，但只有 1 个码点
+  assert.equal('😀'.length, 2)
+  assert.equal(countChars('😀'), 1)
+  assert.equal(countChars('😀😀😀'), 3)
+  // 星平面字符（如 𠀀）同样只算 1
+  assert.equal('𠀀'.length, 2)
+  assert.equal(countChars('𠀀'), 1)
+  assert.equal(countChars(''), 0)
+})
+
+test('码点口径下长 emoji 文本不会被误判超长（回归：6000 个 emoji 曾被前端拒绝）', () => {
+  const emoji = '😀'.repeat(6000)
+  // UTF-16 长度 12000 > 10000，但码点数 6000 < 10000，服务端可以正常翻译
+  assert.ok(emoji.length > LIMITS.maxItemChars)
+  assert.ok(countChars(emoji) < LIMITS.maxItemChars)
+
+  const ranges = planBatchRanges([emoji], LIMITS)
+  assert.deepEqual(ranges, [[0, 1]], '合法长选区不得被切批逻辑误处理')
+})
 
 test('字符总量超限时切成多批（回归：30 项 × 2000 字曾被整批 413 拒绝）', () => {
   const texts = Array.from({ length: 30 }, () => 'a'.repeat(2000))
@@ -70,5 +95,25 @@ test('上限为 0 或负数时退化为每项一批，不产出空区间', () =>
       [1, 2],
       [2, 3],
     ],
+  )
+})
+
+test('分流视口批次：首屏优先置顶，离屏保序延后，总集合不漏不重', () => {
+  // 模拟待翻译节点项
+  const items = [
+    { id: '1', inViewport: false, text: 'header offscreen' },
+    { id: '2', inViewport: true, text: 'hero title' },
+    { id: '3', inViewport: true, text: 'hero subtitle' },
+    { id: '4', inViewport: false, text: 'footer offscreen' },
+  ]
+  const { prioritized, inViewportCount, offscreenCount } = splitByViewport(items)
+
+  assert.equal(inViewportCount, 2)
+  assert.equal(offscreenCount, 2)
+  assert.equal(prioritized.length, 4)
+  assert.deepEqual(
+    prioritized.map((i) => i.id),
+    ['2', '3', '1', '4'],
+    '视口内项目必须排在前部且各自保持原有相对顺序',
   )
 })

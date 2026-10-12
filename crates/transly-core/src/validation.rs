@@ -34,7 +34,16 @@ pub fn validate_language_code(lang: &str) -> bool {
     )
 }
 
-/// 验证翻译引擎标识是否合法
+/// 验证翻译引擎标识是否合法。
+///
+/// 注意区分两套 ID 空间，勿混为一谈：
+/// - **别名**：调用方（前端下拉框、HTTP 请求 `engine` 字段）传入的引擎选择，
+///   取值为 `google` / `google_web` / `deepl` / `openai` / `deepseek`，即此处的白名单。
+/// - **实例 ID**：引擎池为具体实例生成的标识，LLM 引擎形如 `openai:gpt-4o-mini`
+///   （见 `OpenAIEngine`），会出现在响应 `engine` 字段与缓存 key 中。
+///
+/// 两者都不该流经本函数的校验：校验只针对**外部可控的入参**，实例 ID 是内部
+/// 派生值且含用户自定义模型名，放进白名单只会凭空扩大注入面而无收益。
 pub fn validate_engine_id(engine: &str) -> bool {
     let clean = engine.trim().to_lowercase();
     if clean.is_empty() {

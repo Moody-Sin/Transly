@@ -76,6 +76,18 @@ pub async fn recognize_clipboard_image(
             return Err(OcrErrorDto::no_image());
         }
 
+        // 1.5 尺寸上限校验必须在任何全量拷贝**之前**。
+        //
+        // 剪贴板位图的尺寸完全由放入它的程序决定。下面的 `img.rgba().to_vec()`
+        // 会无条件复制一份 `width * height * 4` 字节，再叠加 RgbaImage 与 resize
+        // 的中间缓冲：一张 20000×20000 的位图即 1.6 GB，足以打爆进程内存。
+        // `clamp_dimensions` 只约束**输出**尺寸，拦不住这个前置拷贝。
+        if !transly_core::is_within_ocr_pixel_budget(width, height) {
+            return Err(OcrErrorDto::internal(format!(
+                "剪贴板图片过大（{width}×{height}），超出可处理范围，请先裁剪后再试"
+            )));
+        }
+
         // 2. 尺寸安全下采样（规避 Windows OCR MaxImageDimension 上限抛错）
         let max_dim = windows::Media::Ocr::OcrEngine::MaxImageDimension().unwrap_or(2600);
         let (nw, nh) = clamp_dimensions(width, height, max_dim);

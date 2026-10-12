@@ -14,13 +14,27 @@ export interface RunnerSnapshot {
   error: TaskError | null
   source: 'input' | 'selection' | 'clipboard' | null
   sourceText: string
+  detectedLang?: string | null
+  effectiveTargetLang?: string | null
+}
+
+// run() 的可选参数：source/debounceMs 控制投递方式，
+// engine/targetLang 用于「切换引擎或目标语言后立刻重跑」——
+// React state 更新是异步的，此时 engineRef/langRef 仍是旧值，
+// 必须把新值随调用同步传入，否则重跑会沿用旧引擎/旧语言。
+export interface RunOptions {
+  source?: RunnerSnapshot['source']
+  debounceMs?: number
+  engine?: string
+  targetLang?: string
 }
 
 export interface TaskRunner {
   snapshot: RunnerSnapshot
-  run: (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => void
+  run: (text: string, opts?: RunOptions) => void
   cancel: () => void
   retry: () => void
+  reset: () => void
 }
 
 interface FloatRequest {
@@ -36,9 +50,19 @@ const EMPTY: RunnerSnapshot = {
   error: null,
   source: null,
   sourceText: '',
+  detectedLang: null,
+  effectiveTargetLang: null,
 }
 
-export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
+export interface UseTaskRunnerOptions {
+  isPinned?: boolean
+}
+
+export function useTaskRunner(
+  engine: string,
+  targetLang: string,
+  options?: UseTaskRunnerOptions,
+): TaskRunner {
   const [snapshot, setSnapshot] = useState<RunnerSnapshot>(EMPTY)
   // 供回调读取最新快照而不重建回调（retry 需同步判定当前是否允许重试）
   const snapshotRef = useRef(snapshot)
@@ -66,46 +90,125 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     }
   }, [])
 
-  const execute = useCallback(async (text: string, source: RunnerSnapshot['source']) => {
-    const gen = ++genRef.current
-    lastRunRef.current = { text, source }
-    setSnapshot((s) => ({ ...s, state: nextState(s.state, 'submit'), error: null }))
-
-    // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
-    // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
-    const res = await commands
-      .translate(text, 'auto', langRef.current, engineRef.current)
-      .catch(toFailureOutcome)
-    // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
-    if (applyIfCurrent(gen, genRef.current, true) !== true) return
-
-    if (res.status === 'ok') {
-      setSnapshot({
-        state: nextState('running', 'resolve'),
-        text: res.data.text,
-        engine: res.data.engine,
+  const execute = useCallback(
+    async (text: string, source: RunnerSnapshot['source']) => {
+      const gen = ++genRef.current
+      lastRunRef.current = { text, source }
+      setSnapshot((s) => ({
+        ...s,
+        state: nextState(s.state, 'submit'),
+        text: '', // 新一轮运行重置译文
         error: null,
-        source,
-        sourceText: text,
-      })
-    } else {
-      setSnapshot({
-        state: nextState('running', 'reject'),
-        text: '',
-        engine: null,
-        error: { kind: res.error.kind, message: res.error.message, retryable: res.error.retryable },
-        source,
-        sourceText: text,
-      })
-    }
-  }, [])
+      }))
+
+      // 探测源语言并在中英智能双向对转时自适应目标语言
+      let effectiveTarget = langRef.current
+      let detected: string | null = null
+      try {
+        const detectRes = await commands.detectTextLanguage(text)
+
+        // 代际闸门必须同时覆盖「请求投递」，不能只挡响应回流。
+        // detectTextLanguage 是一次 IPC 往返，其间用户可能已继续输入并触发
+        // run()/cancel()：代际被作废、后端 cancelStreamTask 因任务尚未注册而
+        // 是 no-op。若此处不复查就继续投递请求，后端会完整跑一次 LLM——
+        // 用户看不到任何结果，但 API 已计费，且这条译文还会被写进缓存与历史。
+        if (gen !== genRef.current) return
+
+        if (detectRes.status === 'ok' && detectRes.data) {
+          detected = detectRes.data
+          const isTargetChinese =
+            effectiveTarget === 'zh' ||
+            effectiveTarget === 'zh-CN' ||
+            effectiveTarget === 'zh-Hans' ||
+            effectiveTarget === 'zh-TW'
+          const isTargetEnglish =
+            effectiveTarget === 'en' || effectiveTarget === 'en-US' || effectiveTarget === 'en-GB'
+
+          if (isTargetChinese && detected === 'zh-CN') {
+            effectiveTarget = 'en'
+          } else if (isTargetEnglish && detected === 'en') {
+            effectiveTarget = 'zh-CN'
+          }
+        }
+      } catch {
+        // 探测失败时静默回退默认目标语言
+      }
+
+      // 主窗口如果使用 LLM 引擎（OpenAI/DeepSeek），优先使用 translateStream 实现流式打字机效果
+      const currentEng = engineRef.current
+      const isLlm = currentEng === 'openai' || currentEng === 'deepseek'
+
+      // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
+      // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
+      const reqPromise =
+        isLlm && !isFloatWindow
+          ? commands
+              .translateStream(gen, text, 'auto', effectiveTarget, currentEng)
+              .catch(toFailureOutcome)
+          : commands.translate(text, 'auto', effectiveTarget, currentEng).catch(toFailureOutcome)
+
+      const res = await reqPromise
+      // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
+      if (applyIfCurrent(gen, genRef.current, true) !== true) return
+
+      if (res.status === 'ok') {
+        setSnapshot({
+          state: nextState('running', 'resolve'),
+          text: res.data.text,
+          engine: res.data.engine,
+          error: null,
+          source,
+          sourceText: text,
+          detectedLang: detected,
+          effectiveTargetLang: effectiveTarget,
+        })
+      } else {
+        setSnapshot({
+          state: nextState('running', 'reject'),
+          text: '',
+          engine: null,
+          error: {
+            kind: res.error.kind,
+            message: res.error.message,
+            retryable: res.error.retryable,
+          },
+          source,
+          sourceText: text,
+          detectedLang: detected,
+          effectiveTargetLang: effectiveTarget,
+        })
+      }
+    },
+    [isFloatWindow],
+  )
 
   const run = useCallback(
-    (text: string, opts?: { source?: RunnerSnapshot['source']; debounceMs?: number }) => {
-      if (!text.trim()) return
-      // 新输入立即作废上一代：清掉待触发的防抖，并让在途响应失效
+    (text: string, opts?: RunOptions) => {
+      // 切换引擎/目标语言后立刻重跑时，React state 尚未重渲染，
+      // 此处的 ref 还是旧值。调用方通过 opts 传入的新值必须同步写入，
+      // 否则紧接着的 execute() 会用旧引擎/旧语言发出请求。
+      if (opts?.engine !== undefined) {
+        engineRef.current = opts.engine
+      }
+      if (opts?.targetLang !== undefined) {
+        langRef.current = opts.targetLang
+      }
+
+      // 空串（如用户全选删除）同样要走完整的作废流程。
+      // 旧实现在此直接 return，导致上一次按键留下的防抖定时器不会被清除、
+      // 在途任务也不会被取消——输入框已清空，右侧却冒出了旧文本的译文。
+      // 注意取消/清防抖必须排在空串守卫之前，且空串时必须重置 UI 快照。
       clearDebounce()
+      const oldTaskId = genRef.current
       genRef.current += 1
+      commands.cancelStreamTask(oldTaskId).catch(() => {})
+
+      if (!text.trim()) {
+        setSnapshot(EMPTY)
+        lastRunRef.current = null
+        return
+      }
+
       const source = opts?.source ?? 'input'
       const delay = opts?.debounceMs ?? 0
       if (delay > 0) {
@@ -123,9 +226,21 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
 
   const cancel = useCallback(() => {
     clearDebounce()
+    const activeTaskId = genRef.current
     // 递增代际使全部在途响应失效；已应用的译文保持（取消 ≠ 还原）
     genRef.current += 1
+    // 向后端发送物理取消信号，中断底层 LLM 流式连接与 Token 消耗
+    commands.cancelStreamTask(activeTaskId).catch(() => {})
     setSnapshot((s) => (s.state === 'running' ? { ...s, state: nextState(s.state, 'cancel') } : s))
+  }, [clearDebounce])
+
+  const reset = useCallback(() => {
+    clearDebounce()
+    const activeTaskId = genRef.current
+    genRef.current += 1
+    commands.cancelStreamTask(activeTaskId).catch(() => {})
+    setSnapshot(EMPTY)
+    lastRunRef.current = null
   }, [clearDebounce])
 
   const retry = useCallback(() => {
@@ -140,12 +255,43 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     void execute(last.text, last.source)
   }, [execute])
 
+  // 订阅流式分块事件 (translate-stream-chunk)，实现打字机式实时逐字累加
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    listen<{ task_id: number; chunk: string }>('translate-stream-chunk', (event) => {
+      const payload = event.payload
+      if (!payload || payload.task_id !== genRef.current) return
+      // 代际一致时将 chunk 追加到当前 snapshot
+      setSnapshot((s) => {
+        if (s.state !== 'running') return s
+        return {
+          ...s,
+          text: s.text + payload.chunk,
+        }
+      })
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlisten = fn
+      })
+      .catch((err) => {
+        console.warn('[Transly] translate-stream-chunk 事件订阅失败：', err)
+      })
+
+    return () => {
+      disposed = true
+      if (unlisten) unlisten()
+    }
+  }, [])
+
   // 订阅划词 / 剪贴板事件：按 request_id 去重，同一段文本只翻译一次。
   // 浮窗首次显示前页面 JS 尚未就绪，emit 的事件会永久丢失；
   // 因此宿主会暂存最近一次请求，浮窗就绪后主动拉取一次兜底。
   useEffect(() => {
     if (!isFloatWindow) return
     let unlisten: (() => void) | undefined
+    let disposed = false
     const handle = (payload: FloatRequest | null) => {
       if (!payload?.text?.trim()) return
       if (seenFloatIdsRef.current.has(payload.request_id)) return
@@ -156,11 +302,10 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       }
       run(payload.text, { source: payload.source })
     }
-    // 注册失败必须暴露：此处空 catch 曾让 ACL 拒绝静默数月，浮窗永远空白
-    // （见 Lessons Learned 第 8 条）。只降噪，不吞错。
     listen<FloatRequest>('float-translate', (event) => handle(event.payload))
       .then((fn) => {
-        unlisten = fn
+        if (disposed) fn()
+        else unlisten = fn
       })
       .catch((err) => {
         console.warn('[Transly] float-translate 事件订阅失败：', err)
@@ -183,6 +328,7 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
       }
     })()
     return () => {
+      disposed = true
       if (unlisten) unlisten()
     }
   }, [run, isFloatWindow])
@@ -195,9 +341,11 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     [],
   )
 
-  // 翻译中/错误态时粘滞浮窗（不失焦隐藏），终态恢复自动收起。
+  // 翻译中/错误态或用户手动钉住时粘滞浮窗（不失焦隐藏），终态且未钉住时恢复自动收起。
   // 仅浮窗窗口需要：主窗口失焦不隐藏，误调会把浮窗永久钉住。
-  const needsSticky = isFloatWindow && (snapshot.state === 'running' || snapshot.error !== null)
+  const isPinned = Boolean(options?.isPinned)
+  const needsSticky =
+    isFloatWindow && (isPinned || snapshot.state === 'running' || snapshot.error !== null)
   useEffect(() => {
     if (!isFloatWindow) return
     commands.setFloatSticky(needsSticky).catch((err) => {
@@ -205,5 +353,5 @@ export function useTaskRunner(engine: string, targetLang: string): TaskRunner {
     })
   }, [needsSticky, isFloatWindow])
 
-  return { snapshot, run, cancel, retry }
+  return { snapshot, run, cancel, retry, reset }
 }

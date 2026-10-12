@@ -6,11 +6,13 @@ export default tseslint.config(
   {
     ignores: [
       '**/dist/**',
+      '**/dist-firefox/**',
       '**/target/**',
       '**/node_modules/**',
       'src/bindings.ts',
       'src-tauri/**',
       'extension/scripts/**',
+      'scripts/**',
     ],
   },
   js.configs.recommended,

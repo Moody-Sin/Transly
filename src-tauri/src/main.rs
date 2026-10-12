@@ -1,7 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use src_tauri::{commands, engine_pool::EnginePool, secrets, server};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -15,41 +14,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::RwLock;
 use transly_core::{AppConfig, Glossary, TranslationCache};
 
-/// 将浮窗移动到光标附近，并夹取到光标所在显示器的可视范围内。
-///
-/// 划词与剪贴板翻译的交互预期是「译文出现在选区附近」，不能沿用系统默认坐标；
-/// 光标或显示器信息不可用时保持系统默认位置，不阻断浮窗展示。
-fn place_float_near_cursor(win: &tauri::WebviewWindow) {
-    let (Ok(cursor), Ok(size)) = (win.cursor_position(), win.outer_size()) else {
-        return;
-    };
-    let monitor = win
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| win.primary_monitor().ok().flatten());
-
-    let (min_x, min_y, max_x, max_y) = match monitor {
-        Some(m) => {
-            let pos = m.position();
-            let monitor_size = m.size();
-            (
-                pos.x as f64,
-                pos.y as f64,
-                pos.x as f64 + monitor_size.width as f64,
-                pos.y as f64 + monitor_size.height as f64,
-            )
-        }
-        None => (0.0, 0.0, f64::MAX, f64::MAX),
-    };
-
-    let width = size.width as f64;
-    let height = size.height as f64;
-    // 水平居中对齐光标，垂直放在光标下方，避开正在阅读的选区
-    let x = (cursor.x - width / 2.0).clamp(min_x, (max_x - width).max(min_x));
-    let y = (cursor.y + 20.0).clamp(min_y, (max_y - height).max(min_y));
-    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-}
+use src_tauri::commands::place_float_near_cursor;
 
 /// 解析应用数据目录，并一次性把旧版缓存迁移过来。
 ///
@@ -60,12 +25,23 @@ fn place_float_near_cursor(win: &tauri::WebviewWindow) {
 /// 迁移是必须的：术语库与翻译缓存在同一个 SQLite 文件中，
 /// 不迁移就等于直接丢掉用户自建的术语。
 fn resolve_data_dir(identifier: &str) -> std::path::PathBuf {
-    let dir = src_tauri::storage::app_data_dir(identifier);
+    let (dir, is_portable) = src_tauri::storage::resolve_data_dir(identifier);
     let _ = std::fs::create_dir_all(&dir);
+    if is_portable {
+        println!("已启用单文件便携模式，数据隔离保存在: {dir:?}");
+        return dir;
+    }
+    // 先迁移最老版本的目录（<父目录>/Transly），再迁移漫游目录（%APPDATA%）。
+    // 顺序有讲究：两者都存在时以更早的历史数据为准，且迁移本身不覆盖已有新库。
     match src_tauri::storage::migrate_legacy_cache(&dir) {
         Ok(true) => println!("已将旧版缓存迁移至 {dir:?}"),
         Ok(false) => {}
         Err(e) => eprintln!("旧版缓存迁移失败（不影响启动）: {e}"),
+    }
+    match src_tauri::storage::migrate_roaming_cache(&dir) {
+        Ok(true) => println!("已将漫游目录缓存迁移至本机目录 {dir:?}"),
+        Ok(false) => {}
+        Err(e) => eprintln!("漫游目录缓存迁移失败（不影响启动）: {e}"),
     }
     dir
 }
@@ -83,21 +59,29 @@ fn main() {
     // 初始化持久化翻译缓存（目录见 resolve_data_dir）
     let cache = TranslationCache::open_default(resolve_data_dir(&context.config().identifier));
 
-    // 启动时自动做轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）
-    let _ = cache.cleanup_older_than_days(90);
-    let _ = cache.trim_to_max_items(100_000);
+    // 执行一次性从系统 Keyring 迁移非敏感配置到 SQLite app_settings
+    // 全新安装或已完成迁移后，app_settings 包含 __migrated_from_keyring 标记，
+    // 后续启动彻底为 0 次系统凭据管理器调用，彻底消除主线程阻塞！
+    src_tauri::storage::migrate_keyring_settings_to_db(&cache);
+
+    // 启动时将轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）投递至后台线程，避免阻塞主线程冷启动
+    let startup_cache = cache.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = startup_cache.cleanup_older_than_days(90);
+        let _ = startup_cache.trim_to_max_items(100_000);
+    });
 
     // 初始化全局术语库并从 SQLite 加载持久化规则
     let mut initial_glossary = Glossary::new();
     if let Ok(terms) = cache.get_all_glossary_terms() {
-        for (src, tgt) in terms {
-            initial_glossary.insert(src, tgt);
+        for (src, tgt, match_case) in terms {
+            initial_glossary.insert_with_options(src, tgt, match_case);
         }
     }
     let glossary = Arc::new(RwLock::new(initial_glossary));
 
-    // 初始化全局共享引擎池（长连接复用）
-    let pool = Arc::new(EnginePool::new());
+    // 初始化全局共享引擎池（关联本地 SQLite 缓存管理器以秒级快速加载非敏感设置）
+    let pool = Arc::new(EnginePool::with_cache(cache.clone()));
     // 获取或生成用于本地扩展通信的 Bearer Token（失败则不启动服务，杜绝固定 Token 降级）
     let token = match secrets::get_or_create_server_token() {
         Ok(t) => Some(Arc::new(RwLock::new(t))),
@@ -114,8 +98,11 @@ fn main() {
     // 从仓库根执行 `cargo test` / `cargo run` 时会在仓库外凭空生成文件）。
     #[cfg(debug_assertions)]
     src_tauri::export_bindings().expect("Failed to export typescript bindings");
-    // 剪贴板监听开关（从持久化凭据库加载状态，默认关闭）
-    let initial_monitor = secrets::get_secret("clipboard_monitor_enabled")
+    // 剪贴板监听开关（从本地 SQLite 设置表加载，零系统凭据库查询开销）
+    let initial_monitor = cache
+        .get_setting("clipboard_monitor_enabled")
+        .ok()
+        .flatten()
         .map(|v| v == "true")
         .unwrap_or(false);
     let clipboard_monitor_enabled = Arc::new(AtomicBool::new(initial_monitor));
@@ -128,13 +115,18 @@ fn main() {
     let selection_flag = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
 
-    // 缓存状态协调器（从系统凭据读取初始开关，纳入 generation 版本控制）
-    let initial_cache_enabled = secrets::get_secret("cache_enabled")
+    // 缓存状态协调器（从本地 SQLite 设置表读取初始开关，纳入 generation 版本控制）
+    let initial_cache_enabled = cache
+        .get_setting("cache_enabled")
+        .ok()
+        .flatten()
         .map(|v| v != "false")
         .unwrap_or(true);
     let cache_controller = Arc::new(src_tauri::cache_controller::CacheController::new(
         initial_cache_enabled,
     ));
+
+    let pairing_manager = Arc::new(src_tauri::server::pairing::PairingManager::new());
 
     // 克隆传递给 setup 内部异步启动
     let server_token = token.clone();
@@ -142,18 +134,40 @@ fn main() {
     let server_pool = pool.clone();
     let server_glossary = glossary.clone();
     let server_cache_controller = cache_controller.clone();
+    let server_pairing_manager = pairing_manager.clone();
+
+    let sel_flag_shared = selection_flag.clone();
+    let counter_shared = request_counter.clone();
+
+    let stream_task_registry = Arc::new(commands::StreamTaskRegistry::default());
+    let shortcut_status_slot = Arc::new(commands::ShortcutStatusSlot::default());
+    let translation_deps = Arc::new(commands::TranslationDependencies {
+        cache: cache.clone(),
+        pool: pool.clone(),
+        glossary: glossary.clone(),
+        cache_controller: cache_controller.clone(),
+        stream_registry: stream_task_registry.clone(),
+    });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .manage(cache)
+        .manage(cache.clone())
         .manage(pool)
         .manage(glossary)
         .manage(clipboard_monitor_enabled)
         .manage(cache_controller)
+        .manage(pairing_manager)
+        .manage(translation_deps)
         .manage(Arc::new(commands::FloatSticky::default()))
+        .manage(stream_task_registry)
+        .manage(Arc::clone(&shortcut_status_slot))
         .manage(Arc::new(commands::PendingFloatRequests::default()))
         .manage(Arc::new(commands::ServerStatusSlot::default()))
+        .manage(Arc::new(commands::SelectionContext {
+            sel_flag: sel_flag_shared,
+            counter: counter_shared,
+        }))
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
@@ -165,6 +179,26 @@ fn main() {
                 .state::<Arc<commands::ServerStatusSlot>>()
                 .inner()
                 .clone();
+            let app_handle_for_server = app.handle().clone();
+            let pairing_notify_hook: src_tauri::server::PairingNotifyHook = Arc::new(
+                move |session_id: &str, expires_in: u64, browser_hint: Option<&str>| {
+                    #[derive(serde::Serialize, Clone)]
+                    struct PairingRequestedPayload {
+                        session_id: String,
+                        expires_in: u64,
+                        browser_hint: Option<String>,
+                    }
+                    let _ = app_handle_for_server.emit(
+                        "transly://pairing-requested",
+                        PairingRequestedPayload {
+                            session_id: session_id.to_string(),
+                            expires_in,
+                            browser_hint: browser_hint.map(ToString::to_string),
+                        },
+                    );
+                },
+            );
+
             // 在正确的 Tauri async_runtime 上下文中启动本地 HTTP 服务（仅在成功生成安全 Token 时启动）
             match server_token {
                 Some(token_val) => {
@@ -178,6 +212,8 @@ fn main() {
                             server_pool,
                             server_glossary,
                             server_cache_controller,
+                            server_pairing_manager,
+                            Some(pairing_notify_hook),
                             move || listening_slot.set(commands::ServerStatus::Running),
                         )
                         .await;
@@ -198,73 +234,84 @@ fn main() {
                 }
             }
 
-            // 注册全局快捷键 (Alt+Shift+D)，自动模拟复制当前屏幕选区文本并唤起轻量悬浮窗
+            // 注册全局快捷键（直接从本地 SQLite 设置读取，零凭据库阻塞）
+            let active_shortcut = cache
+                .get_setting("custom_shortcut")
+                .ok()
+                .flatten()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| commands::DEFAULT_SHORTCUT.to_string());
+
+            let active_replace_shortcut = cache
+                .get_setting("custom_replace_shortcut")
+                .ok()
+                .flatten()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| commands::DEFAULT_REPLACE_SHORTCUT.to_string());
+
             let app_handle = app.handle().clone();
             let sel_flag = selection_flag.clone();
             let counter = request_counter.clone();
-            let _ =
-                app.global_shortcut()
-                    .on_shortcut("Alt+Shift+D", move |_app, _shortcut, event| {
-                        if event.state() == ShortcutState::Pressed {
-                            let handle = app_handle.clone();
-                            let sel_flag = sel_flag.clone();
-                            let counter = counter.clone();
-                            let pending_slot = pending_slot.clone();
-                            tauri::async_runtime::spawn(async move {
-                                // 0. 备份旧剪贴板内容
-                                let old_clipboard = handle.clipboard().read_text().ok();
+            let selection_slot = shortcut_status_slot.clone();
+            let selection_accel = active_shortcut.clone();
+            // 注册失败必须可见：`Alt+Shift+D` 极易被其他软件占用，
+            // 静默丢弃会让用户看到「划词功能莫名其妙不工作」且毫无线索。
+            let selection_reg = app.global_shortcut().on_shortcut(
+                active_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        commands::trigger_selection_translation(
+                            app_handle.clone(),
+                            sel_flag.clone(),
+                            counter.clone(),
+                            pending_slot.clone(),
+                        );
+                    }
+                },
+            );
+            match selection_reg {
+                Ok(()) => {
+                    selection_slot.set_translate_ok();
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[Shortcut Warning] 划词浮窗快捷键 {selection_accel} 注册失败：{err}"
+                    );
+                    selection_slot.set_translate_failed(format!("{selection_accel}: {err}"));
+                }
+            }
 
-                                // 模拟复制期间置抑制标志，防止剪贴板监听对同一次复制自触发翻译
-                                sel_flag.store(true, Ordering::SeqCst);
-
-                                // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
-                                if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
-                                    #[cfg(target_os = "macos")]
-                                    let modifier = Key::Meta;
-                                    #[cfg(not(target_os = "macos"))]
-                                    let modifier = Key::Control;
-
-                                    let _ = enigo.key(modifier, Direction::Press);
-                                    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-                                    let _ = enigo.key(modifier, Direction::Release);
-                                }
-
-                                // 2. 稍微等待系统剪贴板更新
-                                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
-                                // 3. 提取剪贴板文本并唤起轻量悬浮窗
-                                let text = handle.clipboard().read_text().unwrap_or_default();
-                                if !text.trim().is_empty() {
-                                    let rid = counter.fetch_add(1, Ordering::SeqCst);
-                                    let req = commands::FloatRequest {
-                                        text,
-                                        source: "selection",
-                                        request_id: rid,
-                                    };
-                                    // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
-                                    if pending_slot.push(req.clone()) {
-                                        eprintln!("浮窗请求队列已满，丢弃最旧请求");
-                                    }
-                                    if let Some(float_win) = handle.get_webview_window("float") {
-                                        place_float_near_cursor(&float_win);
-                                        let _ = float_win.show();
-                                        let _ = float_win.set_focus();
-                                        // 必须 emit_to：Emitter::emit 会广播给所有窗口，
-                                        // 主窗口连带翻译一次并将划词结果写进主窗口输出区
-                                        let _ = float_win.emit_to("float", "float-translate", req);
-                                    }
-                                }
-
-                                // 4. 恢复原剪贴板内容，避免污染用户复制历史
-                                if let Some(old_clipboard) = old_clipboard {
-                                    let _ = handle.clipboard().write_text(old_clipboard);
-                                }
-
-                                // 无论成败均释放抑制标志，避免剪贴板监听被永久抑制
-                                sel_flag.store(false, Ordering::SeqCst);
-                            });
-                        }
-                    });
+            let replace_app_handle = app.handle().clone();
+            let replace_sel_flag = selection_flag.clone();
+            let replace_deps = app
+                .state::<Arc<commands::TranslationDependencies>>()
+                .inner()
+                .clone();
+            let replace_accel = active_replace_shortcut.clone();
+            let replace_slot = shortcut_status_slot.clone();
+            let replace_reg = app.global_shortcut().on_shortcut(
+                active_replace_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        commands::trigger_selection_replacement(
+                            replace_app_handle.clone(),
+                            replace_sel_flag.clone(),
+                            replace_deps.clone(),
+                        );
+                    }
+                },
+            );
+            match replace_reg {
+                Ok(()) => {
+                    replace_slot.set_replace_ok();
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[Shortcut Warning] 划词原地替换快捷键 {replace_accel} 注册失败：{err}"
+                    );
+                    replace_slot.set_replace_failed(format!("{replace_accel}: {err}"));
+                }
+            }
 
             // 启动后台剪贴板变动监听任务
             let clip_handle = app.handle().clone();
@@ -278,10 +325,12 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 let last_clipboard = std::sync::Mutex::new(String::new());
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     if !flag.load(Ordering::Relaxed) {
+                        // 禁用监听时降频休眠，避免持续产生无意义的空唤醒与 CPU 消耗
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                         continue;
                     }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     // 划词模拟复制期间不自触发，防止同一段文本翻译两次、浮窗弹两次
                     if src_tauri::clipboard_gate::is_selection_in_progress(&clip_sel_flag) {
                         continue;

@@ -35,6 +35,54 @@
   "btnRestore": {
     "message": "还原原文"
   },
+  "btnAutoPair": {
+    "message": "一键配对桌面端"
+  },
+  "pairingWaitingDesktop": {
+    "message": "请在桌面端点击“允许”..."
+  },
+  "pairingSuccess": {
+    "message": "配对成功 ✓"
+  },
+  "pairingRejected": {
+    "message": "桌面端已拒绝配对请求"
+  },
+  "pairingTimeout": {
+    "message": "配对超时，请重试"
+  },
+  "pairingDesktopUnreachable": {
+    "message": "无法连接桌面端，请确认 Transly 正在运行"
+  },
+  "pairingVerifyFailed": {
+    "message": "桌面端响应异常，请重启 Transly 后重试"
+  },
+  "pairingFailedGeneric": {
+    "message": "配对失败，请重试"
+  },
+  "extTitle": {
+    "message": "Transly 沉浸式翻译"
+  },
+  "langNameZh": {
+    "message": "简体中文"
+  },
+  "langNameEn": {
+    "message": "English"
+  },
+  "langNameJa": {
+    "message": "日本語"
+  },
+  "langNameKo": {
+    "message": "한국어"
+  },
+  "langNameFr": {
+    "message": "Français"
+  },
+  "langNameDe": {
+    "message": "Deutsch"
+  },
+  "tokenManualToggle": {
+    "message": "手动输入 Token"
+  },
   "tokenPlaceholder": {
     "message": "粘贴桌面端配对 Token"
   },
@@ -88,5 +136,44 @@
   },
   "cannotAccessPage": {
     "message": "无法访问当前页面，请改用普通网页重试"
+  },
+  "ctxMenuTranslateSelection": {
+    "message": "Transly 翻译选中文本"
+  },
+  "bubbleTranslating": {
+    "message": "翻译中..."
+  },
+  "bubbleFailed": {
+    "message": "翻译失败，请稍后重试"
+  },
+  "bubbleFailedGoogleNetwork": {
+    "message": "Google 翻译网络不可达，请在桌面端设置配置 DeepL / DeepSeek 后切换引擎"
+  },
+  "progressFailedGoogleNetwork": {
+    "message": "Google 翻译网络不可达，请在桌面端配置 DeepL / DeepSeek"
+  },
+  "bubbleEmptySelection": {
+    "message": "未选中任何文本"
+  },
+  "bubbleTextTooLong": {
+    "message": "选中文本过长，请缩短选区后重试"
+  },
+  "bubbleCopy": {
+    "message": "复制"
+  },
+  "bubbleCopied": {
+    "message": "已复制 ✓"
+  },
+  "bubbleClose": {
+    "message": "关闭"
+  },
+  "modeReplace": {
+    "message": "仅译文"
+  },
+  "modeBilingual": {
+    "message": "双语对照"
+  },
+  "siteRuleAuto": {
+    "message": "为此站点记住自动翻译"
   }
 }

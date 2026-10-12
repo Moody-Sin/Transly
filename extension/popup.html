@@ -90,17 +90,25 @@
         <option value="openai">OpenAI</option>
       </select>
       <select id="select-lang" class="token-input" style="margin-bottom: 0; flex: 1">
-        <option value="zh-CN">简体中文</option>
-        <option value="en">English</option>
-        <option value="ja">日本語</option>
-        <option value="ko">한국어</option>
-        <option value="fr">Français</option>
-        <option value="de">Deutsch</option>
+        <option value="zh-CN" data-i18n="langNameZh">简体中文</option>
+        <option value="en" data-i18n="langNameEn">English</option>
+        <option value="ja" data-i18n="langNameJa">日本語</option>
+        <option value="ko" data-i18n="langNameKo">한국어</option>
+        <option value="fr" data-i18n="langNameFr">Français</option>
+        <option value="de" data-i18n="langNameDe">Deutsch</option>
       </select>
     </div>
-    <button id="btn-translate" class="btn btn-primary" data-i18n="btnTranslate">
-      翻译此网页 (仅译文)
-    </button>
+    <div style="display: flex; gap: 8px; margin-bottom: 8px; font-size: 11px; color: #475569">
+      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer">
+        <input type="radio" name="transly_mode" value="replace" checked />
+        <span data-i18n="modeReplace">仅译文</span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer">
+        <input type="radio" name="transly_mode" value="bilingual" />
+        <span data-i18n="modeBilingual">双语对照</span>
+      </label>
+    </div>
+    <button id="btn-translate" class="btn btn-primary" data-i18n="btnTranslate">翻译此网页</button>
     <button id="btn-cancel" class="btn btn-secondary" style="display: none" data-i18n="btnCancel">
       取消翻译
     </button>
@@ -135,17 +143,53 @@
       </div>
     </div>
 
+    <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #f1f5f9">
+      <label
+        style="
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          color: #475569;
+          cursor: pointer;
+        "
+      >
+        <input type="checkbox" id="check-site-auto" />
+        <span data-i18n="siteRuleAuto">为此站点记住自动翻译</span>
+      </label>
+    </div>
+
     <div class="token-box">
-      <input
-        type="password"
-        id="input-token"
-        class="token-input"
-        placeholder="粘贴桌面端配对 Token"
-        data-i18n-placeholder="tokenPlaceholder"
-      />
-      <button id="btn-save-token" class="btn btn-secondary btn-sm" data-i18n="btnSaveToken">
-        保存配对 Token
+      <button
+        id="btn-auto-pair"
+        class="btn btn-primary"
+        style="display: none; margin-bottom: 6px; background: #4f46e5; color: #fff"
+        data-i18n="btnAutoPair"
+      >
+        一键配对桌面端
       </button>
+      <div
+        id="pairing-message"
+        style="
+          display: none;
+          font-size: 11px;
+          margin-bottom: 6px;
+          text-align: center;
+          color: #4f46e5;
+        "
+      ></div>
+      <div id="manual-token-section">
+        <input
+          type="password"
+          id="input-token"
+          class="token-input"
+          placeholder="粘贴桌面端配对 Token"
+          data-i18n-placeholder="tokenPlaceholder"
+        />
+        <button id="btn-save-token" class="btn btn-secondary btn-sm" data-i18n="btnSaveToken">
+          保存配对 Token
+        </button>
+      </div>
     </div>
 
     <script src="popup.js"></script>

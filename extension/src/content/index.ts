@@ -9,6 +9,13 @@
 
 console.log('[Transly Content Script] 沉浸式翻译引擎已就绪')
 
+import {
+  iterateElementsDeep,
+  iterateTextNodesDeep,
+  ELEMENT_NODE,
+  DOCUMENT_FRAGMENT_NODE,
+} from '../shared/domTraversal'
+
 // 使用 WeakMap 严格基于 Text 节点维护原始内容，杜绝父节点多 Text 节点互相覆盖
 const originalTextMap = new WeakMap<Text, string>()
 const translatedTextSet = new WeakSet<Text>()
@@ -49,43 +56,290 @@ export function shouldTranslateElement(element: Element): boolean {
   return true
 }
 
-export function replaceTextNode(node: Text, translatedText: string) {
+export function replaceTextNode(node: Text, translatedText: string, mode: string = 'replace') {
   if (!originalTextMap.has(node)) {
     originalTextMap.set(node, node.nodeValue || '')
   }
   translatedTextSet.add(node)
-  node.nodeValue = translatedText
-}
 
-export function restoreOriginalText(container: Node = document.body) {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
-  let curr = walker.nextNode()
-  while (curr) {
-    const textNode = curr as Text
-    if (originalTextMap.has(textNode)) {
-      const orig = originalTextMap.get(textNode)
-      if (orig !== undefined) {
-        textNode.nodeValue = orig
-        originalTextMap.delete(textNode)
-        translatedTextSet.delete(textNode)
+  if (mode === 'bilingual') {
+    // 双语对照模式：保留原文节点不变，紧随其后追加译文兄弟节点
+    const parent = node.parentElement
+    if (parent) {
+      const transEl = document.createElement('span')
+      transEl.className = 'transly-bilingual-trans'
+      transEl.setAttribute('data-no-translate', 'true')
+      transEl.style.display = 'inline-block'
+      transEl.style.marginLeft = '4px'
+      transEl.style.color = '#4f46e5'
+      transEl.style.opacity = '0.9'
+      transEl.textContent = ` (${translatedText})`
+
+      // 插入到当前 textNode 之后
+      if (node.nextSibling) {
+        parent.insertBefore(transEl, node.nextSibling)
+      } else {
+        parent.appendChild(transEl)
       }
     }
-    curr = walker.nextNode()
+  } else {
+    // 仅译文模式：原地替换文本内容
+    node.nodeValue = translatedText
+  }
+
+  // 若父节点是元素，挂载 data-transly-original 标记（若尚未挂载或为空）
+  // 方便快捷悬浮查看原文（按下 Alt 键悬停查看）
+  const parent = node.parentElement
+  if (parent && !parent.hasAttribute('data-transly-has-translation')) {
+    parent.setAttribute('data-transly-has-translation', 'true')
   }
 }
 
-interface TextNodeEntry {
+export function restoreOriginalText(container: Node = document.body) {
+  // 1. 深度遍历元素：单趟同时移除双语译文节点与清除父标记（避免两次全量 DOM 扫描）
+  for (const el of iterateElementsDeep(container)) {
+    if (el.classList.contains('transly-bilingual-trans')) {
+      el.remove()
+    }
+    if (el.hasAttribute('data-transly-has-translation')) {
+      el.removeAttribute('data-transly-has-translation')
+    }
+  }
+
+  // 2. 还原文本节点内容
+  for (const textNode of iterateTextNodesDeep(container)) {
+    const orig = originalTextMap.get(textNode)
+    if (orig !== undefined) {
+      textNode.nodeValue = orig
+      originalTextMap.delete(textNode)
+      translatedTextSet.delete(textNode)
+    }
+  }
+
+  hideOriginalTooltip()
+}
+
+// ==========================================
+// 悬浮查看原文 Tooltip 交互（Shadow DOM 隔离）
+// 按住 Alt 键（或直接悬停已翻译段落）时，在鼠标附近浮现对应节点的原文，
+// 既维持整页翻译仅译文的纯净版面，又提供随时对照原文的能力。
+// ==========================================
+const TOOLTIP_HOST_ID = 'transly-original-tooltip-host'
+let tooltipHost: HTMLElement | null = null
+let tooltipShadow: ShadowRoot | null = null
+let tooltipContainer: HTMLElement | null = null
+
+function ensureTooltipHost(): HTMLElement {
+  if (tooltipHost && tooltipHost.isConnected) return tooltipHost
+  tooltipHost = document.createElement('div')
+  tooltipHost.id = TOOLTIP_HOST_ID
+  tooltipHost.setAttribute('data-no-translate', 'true')
+  tooltipHost.style.cssText =
+    'position: fixed; z-index: 2147483647; top: 0; left: 0; width: 0; height: 0; pointer-events: none;'
+  tooltipShadow = tooltipHost.attachShadow({ mode: 'closed' })
+
+  const style = document.createElement('style')
+  style.textContent = `
+    :host { all: initial; }
+    .tooltip {
+      position: fixed;
+      display: none;
+      max-width: 480px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 8px 12px;
+      background: #1e293b;
+      color: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      pointer-events: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+      transition: opacity 0.15s ease;
+      opacity: 0;
+      border: 1px solid #334155;
+    }
+    .tooltip.visible {
+      display: block;
+      opacity: 1;
+    }
+    .badge {
+      display: inline-block;
+      margin-bottom: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+    }
+  `
+  tooltipContainer = document.createElement('div')
+  tooltipContainer.className = 'tooltip'
+  tooltipShadow.appendChild(style)
+  tooltipShadow.appendChild(tooltipContainer)
+
+  document.documentElement.appendChild(tooltipHost)
+  return tooltipHost
+}
+
+export function hideOriginalTooltip() {
+  if (tooltipContainer) {
+    tooltipContainer.classList.remove('visible')
+  }
+}
+
+function showOriginalTooltip(originalText: string, clientX: number, clientY: number) {
+  if (!originalText.trim()) return
+  ensureTooltipHost()
+  if (!tooltipContainer) return
+
+  tooltipContainer.innerHTML = `<div class="badge">Original / 原文</div><div>${escapeHtml(originalText)}</div>`
+  tooltipContainer.classList.add('visible')
+
+  const pad = 12
+  const rect = tooltipContainer.getBoundingClientRect()
+  let left = clientX + 16
+  let top = clientY + 16
+
+  if (left + rect.width > window.innerWidth - pad) {
+    left = Math.max(pad, clientX - rect.width - 16)
+  }
+  if (top + rect.height > window.innerHeight - pad) {
+    top = Math.max(pad, clientY - rect.height - 16)
+  }
+
+  tooltipContainer.style.left = `${left}px`
+  tooltipContainer.style.top = `${top}px`
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// 监听鼠标在网页上的移动，当目标为已翻译节点且用户悬停（或按住 Alt）时显示原文 Tooltip
+document.addEventListener('mouseover', (e) => {
+  const target = e.target
+  if (!(target instanceof Element)) return
+  if (!target.hasAttribute('data-transly-has-translation')) return
+
+  // 提取该元素或其子文本节点中缓存的原文
+  let origText = ''
+  for (const child of Array.from(target.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE && originalTextMap.has(child as Text)) {
+      origText += (originalTextMap.get(child as Text) || '') + ' '
+    }
+  }
+
+  if (origText.trim()) {
+    showOriginalTooltip(origText.trim(), e.clientX, e.clientY)
+  }
+})
+
+document.addEventListener('mouseout', (e) => {
+  const target = e.target
+  if (target instanceof Element && target.hasAttribute('data-transly-has-translation')) {
+    hideOriginalTooltip()
+  }
+})
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    hideOriginalTooltip()
+  }
+})
+
+export interface TextNodeEntry {
   id: string
   node: Text
   text: string
+  inViewport?: boolean
+  compositeInfo?: {
+    parts: Array<{ id: string; node: Text }>
+    baseIds: (string | null)[]
+    placeholderToId: Map<string, string>
+  }
+}
+
+export function isElementInViewport(el: Element, cache?: WeakMap<Element, boolean>): boolean {
+  if (cache && cache.has(el)) {
+    return cache.get(el)!
+  }
+  try {
+    const rect = el.getBoundingClientRect()
+    const inVp =
+      rect.bottom > 0 &&
+      rect.top < (window.innerHeight || document.documentElement.clientHeight) &&
+      rect.right > 0 &&
+      rect.left < (window.innerWidth || document.documentElement.clientWidth) &&
+      rect.width > 0 &&
+      rect.height > 0
+    if (cache) {
+      cache.set(el, inVp)
+    }
+    return inVp
+  } catch {
+    return false
+  }
+}
+
+export function isNodeInViewport(node: Text, cache?: WeakMap<Element, boolean>): boolean {
+  const parent = node.parentElement
+  if (!parent) return false
+  return isElementInViewport(parent, cache)
 }
 
 // 维护失败文本节点映射，供局部重试与状态报告。
-// 强引用 Map 会随 SPA 导航与多次还原无限增长，并钉住已脱离文档的 Text 节点，
-// 因此容量必须封顶：超出时丢弃最旧项（其重试机会让位于近期失败）。
 const failedItemsMap = new Map<string, TextNodeEntry & { errorKind?: string }>()
 const MAX_FAILED_ITEMS = 2_000
 let nodeSequenceId = 0
+
+/** 允许出现在叶子富文本段落内部的合法行内标签白名单 */
+const INLINE_TAGS = new Set([
+  'A',
+  'SPAN',
+  'STRONG',
+  'EM',
+  'B',
+  'I',
+  'CODE',
+  'MARK',
+  'SMALL',
+  'SUB',
+  'SUP',
+  'U',
+  'S',
+  'ABBR',
+  'CITE',
+  'TIME',
+])
+
+/**
+ * 判断是否为叶子富文本容器（例如 <p>、<li> 等段落，包含行内标签子节点）
+ */
+export function isLeafRichTextContainer(el: Element): boolean {
+  const tag = el.tagName.toUpperCase()
+  if (!['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TD', 'TH'].includes(tag)) {
+    return false
+  }
+  if (el.children.length === 0) return false
+
+  // 必须检查全部子孙元素：<p><strong><a>link</a></strong></p> 的一级子元素只有
+  // <strong>，只看 el.children 会把嵌套行内结构误判为叶子段落
+  for (const descendant of Array.from(el.querySelectorAll('*'))) {
+    if (!INLINE_TAGS.has(descendant.tagName.toUpperCase())) return false
+    if (descendant.hasAttribute('data-no-translate')) return false
+    if (descendant.classList.contains('notranslate')) return false
+    if ((descendant as HTMLElement).isContentEditable) return false
+  }
+  return true
+}
 
 function rememberFailed(entry: TextNodeEntry & { errorKind?: string }) {
   failedItemsMap.delete(entry.id)
@@ -98,9 +352,13 @@ function rememberFailed(entry: TextNodeEntry & { errorKind?: string }) {
 }
 
 /**
- * 递归收集容器内所有有效的正文文本节点
+ * 递归收集容器内所有有效的正文文本节点，支持叶子富文本段落占位聚合
  */
-export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
+export function collectTextNodes(
+  root: Node = document.body,
+  viewportCache?: WeakMap<Element, boolean>,
+): TextNodeEntry[] {
+  const vpCache = viewportCache || new WeakMap<Element, boolean>()
   const entries: TextNodeEntry[] = []
 
   // 如果 root 自身即是文本节点且尚未翻译
@@ -111,18 +369,116 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
       const text = textNode.nodeValue?.trim()
       if (text && text.length >= 2 && !/^[\d\s.,/#!$%^&*;:{}=\-_`~()]+$/.test(text)) {
         nodeSequenceId += 1
-        return [{ id: `node_${nodeSequenceId}`, node: textNode, text: textNode.nodeValue || '' }]
+        return [
+          {
+            id: `node_${nodeSequenceId}`,
+            node: textNode,
+            text: textNode.nodeValue || '',
+            inViewport: isNodeInViewport(textNode, vpCache),
+          },
+        ]
       }
     }
     return []
   }
 
+  // 1. 先检测并收集叶子富文本容器（例如段落 <p>、<li> 等内部含行内 <a>、<span>、<strong> 的节点）
+  const processedContainers = new WeakSet<Element>()
+  const processedNodes = new WeakSet<Text>()
+
+  if (root.nodeType === ELEMENT_NODE || root.nodeType === DOCUMENT_FRAGMENT_NODE) {
+    const rootEl = root as Element | DocumentFragment
+    const leafCandidates = rootEl.querySelectorAll(
+      'p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th',
+    )
+    leafCandidates.forEach((candidate) => {
+      if (!shouldTranslateElement(candidate)) return
+      if (!isLeafRichTextContainer(candidate)) return
+      if (candidate.children.length === 0) return
+
+      // 提取容器内所有的连续 text parts
+      const rawParts: Array<{ node: Text; text: string; isInline: boolean }> = []
+      let validTextLen = 0
+
+      for (const child of Array.from(candidate.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const tNode = child as Text
+          if (!translatedTextSet.has(tNode)) {
+            const val = tNode.nodeValue || ''
+            rawParts.push({ node: tNode, text: val, isInline: false })
+            validTextLen += val.trim().length
+          }
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          const el = child as Element
+          // 行内元素取其子树内所有未翻译文本节点（中序深度遍历）：
+          // <strong><a>text</a></strong> 这类嵌套结构下，只遍历一级 childNodes
+          // 拿到的是 <a> 元素而非 Text，深层文本会被整段漏掉
+          const inlineWalker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
+          let inlineNode = inlineWalker.nextNode()
+          while (inlineNode) {
+            const tNode = inlineNode as Text
+            if (!translatedTextSet.has(tNode)) {
+              const val = tNode.nodeValue || ''
+              rawParts.push({ node: tNode, text: val, isInline: true })
+              validTextLen += val.trim().length
+            }
+            inlineNode = inlineWalker.nextNode()
+          }
+        }
+      }
+
+      // 如果包含行内文本且存在有效内容，组装为整句富文本复合项
+      const hasInline = rawParts.some((p) => p.isInline)
+      if (hasInline && rawParts.length >= 2 && validTextLen >= 2) {
+        processedContainers.add(candidate)
+        // 子孙元素全部登记，防止主 TreeWalker 再次扫到嵌套行内子树里的文本节点
+        for (const descendant of Array.from(candidate.querySelectorAll('*'))) {
+          processedContainers.add(descendant)
+        }
+        for (const p of rawParts) {
+          processedNodes.add(p.node)
+        }
+
+        nodeSequenceId += 1
+        const compId = `node_${nodeSequenceId}`
+        const textParts: TextPart[] = rawParts.map((p, idx) => ({
+          id: `${compId}_p${idx}`,
+          text: p.text,
+          isInline: p.isInline,
+        }))
+
+        const composite = buildRichTextComposite(textParts, true)
+        const baseIds = composite.baseSlots || []
+        const placeholderToId = new Map<string, string>()
+        for (const [id, ph] of composite.idToPlaceholder) {
+          placeholderToId.set(ph, id)
+        }
+
+        entries.push({
+          id: compId,
+          node: rawParts[0].node,
+          text: composite.compositeText,
+          inViewport: isElementInViewport(candidate, vpCache),
+          compositeInfo: {
+            parts: rawParts.map((p, idx) => ({ id: `${compId}_p${idx}`, node: p.node })),
+            baseIds,
+            placeholderToId,
+          },
+        })
+      }
+    })
+  }
+
+  // 2. 遍历其余常规 Text 节点
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement
       if (!parent) return NodeFilter.FILTER_REJECT
       if (!shouldTranslateElement(parent)) return NodeFilter.FILTER_REJECT
       if (translatedTextSet.has(node as Text)) return NodeFilter.FILTER_REJECT
+      if (processedNodes.has(node as Text) || processedContainers.has(parent)) {
+        return NodeFilter.FILTER_REJECT
+      }
 
       const text = node.nodeValue?.trim()
       if (!text || text.length < 2) return NodeFilter.FILTER_SKIP
@@ -136,12 +492,39 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
   let currentNode = walker.nextNode()
   while (currentNode) {
     nodeSequenceId += 1
+    const textNode = currentNode as Text
     entries.push({
       id: `node_${nodeSequenceId}`,
-      node: currentNode as Text,
-      text: currentNode.nodeValue || '',
+      node: textNode,
+      text: textNode.nodeValue || '',
+      inViewport: isNodeInViewport(textNode, vpCache),
     })
     currentNode = walker.nextNode()
+  }
+
+  // 3. 递归穿透开放模式 Shadow DOM（Web Components 现代前端组件树，采用流式 TreeWalker 消除 querySelectorAll('*') 大数组分配）
+  if (root.nodeType === ELEMENT_NODE || root.nodeType === DOCUMENT_FRAGMENT_NODE) {
+    const elWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(elNode) {
+        const elem = elNode as Element
+        if (!shouldTranslateElement(elem)) {
+          return NodeFilter.FILTER_REJECT
+        }
+        if (elem.shadowRoot && elem.shadowRoot.mode === 'open') {
+          return NodeFilter.FILTER_ACCEPT
+        }
+        return NodeFilter.FILTER_SKIP
+      },
+    })
+
+    let shadowHost = elWalker.nextNode()
+    while (shadowHost) {
+      const subEl = shadowHost as Element
+      if (subEl.shadowRoot) {
+        entries.push(...collectTextNodes(subEl.shadowRoot, vpCache))
+      }
+      shadowHost = elWalker.nextNode()
+    }
   }
 
   return entries
@@ -149,6 +532,38 @@ export function collectTextNodes(root: Node = document.body): TextNodeEntry[] {
 
 let isObserving = false
 let currentObserver: MutationObserver | null = null
+let observerDebounceTimer: number | null = null
+let observerFirstPendingAt = 0
+const observerPendingNodes = new Set<Node>()
+
+/** 增量翻译的静默期：最后一次 DOM 变更后等待这么久就 flush。 */
+const OBSERVER_DEBOUNCE_MS = 500
+/** 增量翻译的最大等待：无论变更多频繁，最多这么久也必须 flush 一次。 */
+const OBSERVER_MAX_WAIT_MS = 2000
+
+/**
+ * 节点是否仍挂在文档树上。
+ *
+ * 不能直接用 `document.body.contains(node)`：对 Shadow DOM 内部的节点它恒为
+ * false，会让增量监听路径永远跳过 shadow 内新增的内容。
+ */
+function isNodeAttached(node: Node): boolean {
+  if (node.isConnected) return true
+  const el = node.nodeType === ELEMENT_NODE ? (node as Element) : node.parentElement
+  if (!el) return false
+  let current: Element | null = el
+  while (current) {
+    const root = current.getRootNode()
+    if (root instanceof ShadowRoot) {
+      if (root.host.isConnected) return true
+      current = root.host.parentElement
+    } else {
+      return root === document
+    }
+  }
+  return false
+}
+
 let currentTargetLang = 'zh-CN'
 let currentEngine = 'google'
 
@@ -173,33 +588,51 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
   if (isObserving && currentObserver) return
   isObserving = true
 
-  const pendingNodes = new Set<Node>()
-  let debounceTimer: number | null = null
+  observerPendingNodes.clear()
+  observerFirstPendingAt = 0
+  if (observerDebounceTimer) {
+    clearTimeout(observerDebounceTimer)
+    observerDebounceTimer = null
+  }
 
   currentObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
         mutation.addedNodes.forEach((node) => {
           if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-            pendingNodes.add(node)
+            observerPendingNodes.add(node)
           }
         })
       } else if (mutation.type === 'characterData') {
         if (mutation.target.nodeType === Node.TEXT_NODE) {
           const textNode = mutation.target as Text
           if (!translatedTextSet.has(textNode)) {
-            pendingNodes.add(textNode)
+            observerPendingNodes.add(textNode)
           }
         }
       }
     }
 
-    if (pendingNodes.size > 0) {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = window.setTimeout(async () => {
+    if (observerPendingNodes.size > 0) {
+      // 防抖 + 最大等待兜底。
+      //
+      // 纯防抖在「持续有 DOM 变更」的页面（实时聊天、比分跳动、动画计数器、
+      // 高频轮询组件）上会被无限重置，回调**永不执行**，SPA 增量翻译彻底停摆。
+      // 因此无论变更多频繁，最多间隔 MAX_WAIT 也必须 flush 一次。
+      const now = Date.now()
+      if (observerFirstPendingAt === 0) {
+        observerFirstPendingAt = now
+      }
+      const elapsed = now - observerFirstPendingAt
+      const delay = elapsed >= OBSERVER_MAX_WAIT_MS ? 0 : OBSERVER_DEBOUNCE_MS
+
+      if (observerDebounceTimer) clearTimeout(observerDebounceTimer)
+      observerDebounceTimer = window.setTimeout(async () => {
         const generation = currentGeneration
-        const nodesToProcess = Array.from(pendingNodes)
-        pendingNodes.clear()
+        const nodesToProcess = Array.from(observerPendingNodes)
+        observerPendingNodes.clear()
+        observerDebounceTimer = null
+        observerFirstPendingAt = 0
 
         // 增量批次是独立任务：重置计数基准，否则进度百分比与失败判定会被
         // 首屏任务的累计值污染（total 只增不减 → 永不收敛；
@@ -207,7 +640,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
         const batchEntries: TextNodeEntry[] = []
         for (const root of nodesToProcess) {
           if (generation !== currentGeneration) break
-          if (document.body.contains(root)) {
+          if (isNodeAttached(root)) {
             batchEntries.push(...collectTextNodes(root))
           }
         }
@@ -215,10 +648,10 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
 
         // 增量批次是独立任务：用当前批次整体替换而不是追加。
         // 追加会让无限滚动页面持续增长该数组，并强引用已脱离文档的 Text 节点。
+        // 注意：不得清空 failedItemsMap，否则先前全页或上一批次失败的节点会被全部抹除。
         currentTaskEntries = batchEntries
         currentTaskTotal = batchEntries.length
         currentTaskCompleted = 0
-        failedItemsMap.clear()
 
         const failedBatches = await translateEntries(
           batchEntries,
@@ -229,7 +662,7 @@ export function startDynamicObserver(targetLang: string = 'zh-CN', engine: strin
         if (generation === currentGeneration) {
           broadcastTerminalState(generation, failedBatches)
         }
-      }, 500)
+      }, delay)
     }
   })
 
@@ -245,6 +678,12 @@ export function stopDynamicObserver() {
     currentObserver.disconnect()
     currentObserver = null
   }
+  if (observerDebounceTimer) {
+    clearTimeout(observerDebounceTimer)
+    observerDebounceTimer = null
+  }
+  observerPendingNodes.clear()
+  observerFirstPendingAt = 0
   isObserving = false
 }
 
@@ -259,7 +698,22 @@ interface BatchResponsePayload {
   }>
 }
 
-import { planBatchRanges, type BatchLimits } from '../shared/batchPlan'
+import { planBatchRanges, splitByViewport, type BatchLimits } from '../shared/batchPlan'
+import { buildRichTextComposite, restoreRichTextComposite, type TextPart } from '../shared/richText'
+
+// 供单元测试与段落保真翻译调用的富文本装箱与拆箱包装
+export function processRichTextParagraph(
+  parts: TextPart[],
+  translated: string,
+): Map<string, string> | null {
+  const composite = buildRichTextComposite(parts)
+  const baseIds = composite.baseSlots || []
+  const placeholderToId = new Map<string, string>()
+  for (const [id, ph] of composite.idToPlaceholder) {
+    placeholderToId.set(ph, id)
+  }
+  return restoreRichTextComposite(translated, baseIds, placeholderToId)
+}
 
 /**
  * 当前任务使用的批量上限。
@@ -292,16 +746,34 @@ async function sendBatch(
   engine: string,
 ): Promise<{ ok: boolean; data?: BatchResponsePayload; error?: string; status?: number }> {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      {
-        type: 'TRANSLATE_BATCH',
-        items,
-        source_lang: 'auto',
-        target_lang: targetLang,
-        engine,
-      },
-      resolve,
-    )
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: 'TRANSLATE_BATCH',
+          items,
+          source_lang: 'auto',
+          target_lang: targetLang,
+          engine,
+        },
+        (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve({
+              ok: false,
+              error: chrome.runtime.lastError?.message || '扩展后台通信中断或未响应',
+              status: 503,
+            })
+          } else {
+            resolve(res)
+          }
+        },
+      )
+    } catch (err) {
+      resolve({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        status: 503,
+      })
+    }
   })
 }
 
@@ -323,6 +795,12 @@ function splitEntries(entries: TextNodeEntry[]): [TextNodeEntry[], TextNodeEntry
  * 对半拆分能自适应收敛到服务端接受的粒度，而不必要求两端同时升级。
  * 拆到单项仍被拒即停止，避免无限递归。
  */
+/** 瞬态可重试状态码：并发令牌耗尽（429）与服务端内部错误。 */
+const TRANSIENT_RETRY_STATUSES = new Set([429, 500, 502, 503])
+/** 瞬态重试的退避序列（毫秒），最多重试 2 次。 */
+const RETRY_BACKOFF_MS = [300, 900]
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 async function sendBatchWithSplit(
   batch: TextNodeEntry[],
   targetLang: string,
@@ -331,15 +809,33 @@ async function sendBatchWithSplit(
 ): Promise<{ failedBatches: number }> {
   if (batch.length === 0) return { failedBatches: 0 }
 
-  const response = await sendBatch(
+  let response = await sendBatch(
     batch.map((item) => ({ id: item.id, text: item.text })),
     targetLang,
     engine,
   )
 
+  // 瞬态故障退避重试：服务端并发信号量打满会返回 429，内部故障返回 500。
+  // 不重试意味着一次瞬时限流就永久损失整批（最多 30 个节点）的译文，
+  // 用户只能手动点「重试失败项」。Rust 侧对同一类状态码已有指数退避先例。
+  // 401/403/400 与 413 不重试：前者是配置问题，后者已有专门的拆批分支。
+  for (let attempt = 0; attempt < RETRY_BACKOFF_MS.length; attempt += 1) {
+    const status = response.status
+    if (status === undefined || !TRANSIENT_RETRY_STATUSES.has(status)) break
+    // 代际已变更（用户取消或重新翻译）时立即放弃，避免在废弃批次上空转
+    if (expectedGen !== currentGeneration) return { failedBatches: 0 }
+    await sleep(RETRY_BACKOFF_MS[attempt])
+    if (expectedGen !== currentGeneration) return { failedBatches: 0 }
+    response = await sendBatch(
+      batch.map((item) => ({ id: item.id, text: item.text })),
+      targetLang,
+      engine,
+    )
+  }
+
   if (response.ok && response.data) {
-    applyBatchResponse(response.data, batch, expectedGen)
-    return { failedBatches: 0 }
+    const { succeeded } = applyBatchResponse(response.data, batch, expectedGen)
+    return { failedBatches: succeeded === 0 && batch.length > 0 ? 1 : 0 }
   }
 
   // 413：批次超限，对半拆开重试
@@ -358,12 +854,34 @@ async function sendBatchWithSplit(
     return { failedBatches: 1 }
   }
 
-  if (expectedGen === currentGeneration) markBatchFailed(batch, 'network')
+  // 按状态码区分失败性质：服务端有四种语义完全不同的 400，统一归为 'network'
+  // 会把「语言对不支持」「引擎名非法」这类配置问题误导成网络不可达，
+  // 让用户去查网络而查不到真因。
+  if (expectedGen === currentGeneration) {
+    markBatchFailed(batch, classifyFailure(response.status))
+  }
   return { failedBatches: 1 }
 }
 
+/** 把 HTTP 状态码映射为对用户有意义的失败类别。undefined 表示未拿到响应（网络层失败）。 */
+export function classifyFailure(status: number | undefined): string {
+  if (status === undefined) return 'network'
+  if (TRANSIENT_RETRY_STATUSES.has(status)) return 'network'
+  switch (status) {
+    case 401:
+    case 403:
+      return 'unauthorized'
+    case 413:
+      return 'payload_too_large'
+    case 400:
+      return 'bad_request'
+    default:
+      return 'internal'
+  }
+}
+
 /**
- * 翻译一批文本节点并原地写回 DOM。
+ * 翻译一批文本节点并原地写回 DOM（视口首批先行 + 受控并发流水线）。
  *
  * 返回本批次的失败批次数；**不广播任务终态**（由调用方在任务级广播一次），
  * 仅广播中途进度。
@@ -374,43 +892,31 @@ async function translateEntries(
   engine: string = 'google',
   expectedGen: number = currentGeneration,
 ): Promise<number> {
-  let failedBatches = 0
   const texts = entries.map((e) => e.text)
   const ranges = planBatchRanges(texts, currentLimits)
+  if (ranges.length === 0) return 0
 
-  for (const [rangeStart, rangeEnd] of ranges) {
-    // 发送前检查：如果用户已经点击“取消”、“还原原文”或发起了新任务，直接阻断
-    if (expectedGen !== currentGeneration) {
-      console.log(
-        `[Transly] 批次发送前拦截：任务版本已过期 (当前=${currentGeneration}, 批次=${expectedGen})`,
-      )
-      chrome.runtime
-        .sendMessage({
-          type: 'TRANSLATION_CANCELLED',
-          generation: expectedGen,
-        })
-        .catch(() => {})
-      return failedBatches
+  let failedBatches = 0
+  let isAborted = false
+
+  // 执行单批次翻译、DOM 写回与进度广播
+  const processBatch = async (batch: TextNodeEntry[]): Promise<boolean> => {
+    if (isAborted || expectedGen !== currentGeneration) {
+      return false
     }
-
-    const batch = entries.slice(rangeStart, rangeEnd)
 
     try {
       const response = await sendBatchWithSplit(batch, targetLang, engine, expectedGen)
       failedBatches += response.failedBatches
 
-      // 响应后强校验：如果请求在途期间用户触发了取消、还原或新任务，彻底丢弃响应，严禁写入 DOM
       if (expectedGen !== currentGeneration) {
-        console.log(
-          `[Transly] 响应写回前安全拦截：任务版本已过期，丢弃译文 (当前=${currentGeneration}, 批次=${expectedGen})`,
-        )
         chrome.runtime
           .sendMessage({
             type: 'TRANSLATION_CANCELLED',
             generation: expectedGen,
           })
           .catch(() => {})
-        return failedBatches
+        return false
       }
     } catch (err) {
       failedBatches += 1
@@ -418,7 +924,6 @@ async function translateEntries(
       console.warn('[Transly] 批量翻译出错:', err)
     }
 
-    // 广播进度给 Popup 与扩展徽标
     if (expectedGen === currentGeneration) {
       chrome.runtime
         .sendMessage({
@@ -431,7 +936,44 @@ async function translateEntries(
         })
         .catch(() => {})
     }
+
+    // 快速熔断防假死：若连续 2 批全部失败且累计成功数为 0，中断后续批次
+    if (failedBatches >= 2 && currentTaskCompleted === 0) {
+      console.warn(`[Transly] 连续 ${failedBatches} 批全部失败且成功数为 0，触发快速熔断保护`)
+      isAborted = true
+      return false
+    }
+
+    return true
   }
+
+  // 1. 首屏视口第一批（Fast Path）：以最高优先级立即发出并等待，确保首屏最低延迟且快速验证网络
+  const firstBatch = entries.slice(ranges[0][0], ranges[0][1])
+  const firstOk = await processBatch(firstBatch)
+  if (!firstOk || isAborted || expectedGen !== currentGeneration || ranges.length === 1) {
+    return failedBatches
+  }
+
+  // 2. 视口外其余批次（Pipelining）：受控并发流水线（并发度 3），打满吞吐同时防止本地与网络过载
+  const CONCURRENCY = 3
+  const remainingRanges = ranges.slice(1)
+  let nextBatchIdx = 0
+
+  const worker = async () => {
+    while (
+      nextBatchIdx < remainingRanges.length &&
+      !isAborted &&
+      expectedGen === currentGeneration
+    ) {
+      const [start, end] = remainingRanges[nextBatchIdx++]
+      const batch = entries.slice(start, end)
+      const ok = await processBatch(batch)
+      if (!ok) break
+    }
+  }
+
+  const workerCount = Math.min(CONCURRENCY, remainingRanges.length)
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
 
   return failedBatches
 }
@@ -443,18 +985,20 @@ function markBatchFailed(batch: TextNodeEntry[], errorKind: string) {
   }
 }
 
-/** 按 ID 将服务端响应写回 DOM，逐项记录失败 */
+let currentTranslateMode = 'replace'
+
+/** 按 ID 将服务端响应写回 DOM，逐项记录失败，返回本批次成功与失败项计数 */
 function applyBatchResponse(
   resData: BatchResponsePayload | undefined,
   batch: TextNodeEntry[],
   expectedGen: number,
-) {
-  if (!resData) return
+): { succeeded: number; failed: number } {
+  if (!resData || expectedGen !== currentGeneration) {
+    return { succeeded: 0, failed: batch.length }
+  }
 
-  // 代际闸门：还原原文 / 取消 / 新任务后到达的响应一律丢弃，严禁写回 DOM。
-  // `items` 主契约分支此前没有这道判定（只有旧版 `translations` 分支有），
-  // 导致「还原原文」后仍在途的批次把译文重新写回页面 —— 用户看到的是还原失败。
-  if (expectedGen !== currentGeneration) return
+  let succeeded = 0
+  let failed = 0
 
   if (resData.items && resData.items.length > 0) {
     // 优先消费结构化 items 契约：精准映射 ID
@@ -462,15 +1006,43 @@ function applyBatchResponse(
     for (const entry of batch) {
       const itemRes = itemMap.get(entry.id)
       if (itemRes && itemRes.status === 'success' && itemRes.text) {
-        replaceTextNode(entry.node, itemRes.text)
+        if (entry.compositeInfo) {
+          const restored = restoreRichTextComposite(
+            itemRes.text,
+            entry.compositeInfo.baseIds,
+            entry.compositeInfo.placeholderToId,
+          )
+          if (restored) {
+            for (const part of entry.compositeInfo.parts) {
+              const partText = restored.get(part.id)
+              if (partText !== undefined) {
+                replaceTextNode(part.node, partText, currentTranslateMode)
+              }
+            }
+            failedItemsMap.delete(entry.id)
+            currentTaskCompleted += 1
+            succeeded += 1
+          } else {
+            // 占位符丢失或语序损坏：保持原文 DOM 结构完整，记录失败项供后续重试
+            rememberFailed({
+              ...entry,
+              errorKind: 'rich_text_mismatch',
+            })
+            failed += 1
+          }
+          continue
+        }
+        replaceTextNode(entry.node, itemRes.text, currentTranslateMode)
         failedItemsMap.delete(entry.id)
         currentTaskCompleted += 1
+        succeeded += 1
       } else {
         // 失败项：保留当前 TextNode 原文不变，记录至 failedItemsMap
         rememberFailed({
           ...entry,
           errorKind: itemRes?.error_kind || 'internal',
         })
+        failed += 1
       }
     }
   } else if (resData.translations) {
@@ -478,15 +1050,44 @@ function applyBatchResponse(
     resData.translations.forEach((translated, idx) => {
       if (batch[idx]) {
         if (translated && translated !== batch[idx].text) {
-          replaceTextNode(batch[idx].node, translated)
+          if (batch[idx].compositeInfo) {
+            const restored = restoreRichTextComposite(
+              translated,
+              batch[idx].compositeInfo.baseIds,
+              batch[idx].compositeInfo.placeholderToId,
+            )
+            if (restored) {
+              for (const part of batch[idx].compositeInfo.parts) {
+                const partText = restored.get(part.id)
+                if (partText !== undefined) {
+                  replaceTextNode(part.node, partText, currentTranslateMode)
+                }
+              }
+              failedItemsMap.delete(batch[idx].id)
+              currentTaskCompleted += 1
+              succeeded += 1
+            } else {
+              rememberFailed({
+                ...batch[idx],
+                errorKind: 'rich_text_mismatch',
+              })
+              failed += 1
+            }
+            return
+          }
+          replaceTextNode(batch[idx].node, translated, currentTranslateMode)
           failedItemsMap.delete(batch[idx].id)
           currentTaskCompleted += 1
+          succeeded += 1
         } else {
           rememberFailed({ ...batch[idx] })
+          failed += 1
         }
       }
     })
   }
+
+  return { succeeded, failed }
 }
 
 /**
@@ -568,7 +1169,12 @@ function cancelTranslation() {
 /**
  * 执行整页沉浸式翻译（分批次打包请求，原地替换）
  */
-export async function translateFullPage(targetLang: string = 'zh-CN', engine: string = 'google') {
+export async function translateFullPage(
+  targetLang: string = 'zh-CN',
+  engine: string = 'google',
+  mode: string = 'replace',
+) {
+  currentTranslateMode = mode
   // 递增任务代际版本号，立即使所有历史在途异步批次响应失效
   currentGeneration += 1
   const taskGeneration = currentGeneration
@@ -580,7 +1186,11 @@ export async function translateFullPage(targetLang: string = 'zh-CN', engine: st
   await refreshBatchLimits()
   if (taskGeneration !== currentGeneration) return
 
-  const entries = currentTaskEntries
+  // 视口感知调度（首屏优先 Viewport-First）：
+  // 将当前视口内可见文本优先置顶先发请求，极速呈现首屏译文；离屏内容平滑后置处理
+  const { prioritized } = splitByViewport(currentTaskEntries)
+  currentTaskEntries = prioritized
+  const entries = prioritized
   currentTaskTotal = entries.length
   currentTaskCompleted = 0
 
@@ -622,7 +1232,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'START_PAGE_TRANSLATION') {
-    translateFullPage(message.target_lang || 'zh-CN', message.engine || 'google')
+    translateFullPage(
+      message.target_lang || 'zh-CN',
+      message.engine || 'google',
+      message.mode || 'replace',
+    )
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: String(err) }))
     return true

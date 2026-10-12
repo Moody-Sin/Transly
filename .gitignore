@@ -11,6 +11,7 @@ build/
 .wxt/
 *.local
 extension/dist/
+extension/dist-firefox/
 
 # Tauri
 src-tauri/target/
@@ -43,3 +44,4 @@ lerna-debug.log*
 .DS_Store
 Thumbs.db
 .superpowers/
+/docs/superpowers/

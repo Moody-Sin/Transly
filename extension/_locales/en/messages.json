@@ -35,6 +35,54 @@
   "btnRestore": {
     "message": "Restore original"
   },
+  "btnAutoPair": {
+    "message": "Auto-pair with Desktop"
+  },
+  "pairingWaitingDesktop": {
+    "message": "Please click 'Allow' on desktop..."
+  },
+  "pairingSuccess": {
+    "message": "Paired successfully ✓"
+  },
+  "pairingRejected": {
+    "message": "Pairing request rejected on desktop"
+  },
+  "pairingTimeout": {
+    "message": "Pairing timed out, please retry"
+  },
+  "pairingDesktopUnreachable": {
+    "message": "Cannot reach the desktop app. Make sure Transly is running."
+  },
+  "pairingVerifyFailed": {
+    "message": "The desktop app responded unexpectedly. Restart Transly and retry."
+  },
+  "pairingFailedGeneric": {
+    "message": "Pairing failed, please retry"
+  },
+  "extTitle": {
+    "message": "Transly Immersive Translation"
+  },
+  "langNameZh": {
+    "message": "简体中文"
+  },
+  "langNameEn": {
+    "message": "English"
+  },
+  "langNameJa": {
+    "message": "日本語"
+  },
+  "langNameKo": {
+    "message": "한국어"
+  },
+  "langNameFr": {
+    "message": "Français"
+  },
+  "langNameDe": {
+    "message": "Deutsch"
+  },
+  "tokenManualToggle": {
+    "message": "Enter Token manually"
+  },
   "tokenPlaceholder": {
     "message": "Paste the desktop pairing token"
   },
@@ -88,5 +136,44 @@
   },
   "cannotAccessPage": {
     "message": "Cannot access this page; try a regular web page"
+  },
+  "ctxMenuTranslateSelection": {
+    "message": "Translate selection with Transly"
+  },
+  "bubbleTranslating": {
+    "message": "Translating..."
+  },
+  "bubbleFailed": {
+    "message": "Translation failed; please try again"
+  },
+  "bubbleFailedGoogleNetwork": {
+    "message": "Google Translation network unreachable. Configure DeepL / DeepSeek in desktop settings and switch engine."
+  },
+  "progressFailedGoogleNetwork": {
+    "message": "Google Translation unreachable. Configure DeepL / DeepSeek in desktop app."
+  },
+  "bubbleEmptySelection": {
+    "message": "No text selected"
+  },
+  "bubbleTextTooLong": {
+    "message": "Selected text is too long; shorten the selection and retry"
+  },
+  "bubbleCopy": {
+    "message": "Copy"
+  },
+  "bubbleCopied": {
+    "message": "Copied ✓"
+  },
+  "bubbleClose": {
+    "message": "Close"
+  },
+  "modeReplace": {
+    "message": "Translation only"
+  },
+  "modeBilingual": {
+    "message": "Bilingual"
+  },
+  "siteRuleAuto": {
+    "message": "Auto-translate this site"
   }
 }

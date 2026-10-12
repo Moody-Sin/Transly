@@ -5,6 +5,8 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	translate: (text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate", { text, sourceLang, targetLang, engineName })),
+	translateStream: (taskId: number, text: string, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<TranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_stream", { taskId, text, sourceLang, targetLang, engineName })),
+	cancelStreamTask: (taskId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_stream_task", { taskId })),
 	getEngineCapabilities: (engine: string) => typedError<EngineCapabilitiesDto, string>(__TAURI_INVOKE("get_engine_capabilities", { engine })),
 	/**
 	 *  设置浮窗粘滞：翻译中/错误态时为 true，浮窗不失焦自动隐藏，
@@ -18,28 +20,64 @@ export const commands = {
 	takePendingFloatRequest: () => typedError<PendingFloatResponse, string>(__TAURI_INVOKE("take_pending_float_request")),
 	getServerToken: () => typedError<string, string>(__TAURI_INVOKE("get_server_token")),
 	rotateServerToken: () => typedError<string, string>(__TAURI_INVOKE("rotate_server_token")),
+	approvePairing: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("approve_pairing", { sessionId })),
+	rejectPairing: (sessionId: string) => typedError<null, string>(__TAURI_INVOKE("reject_pairing", { sessionId })),
 	saveApiKey: (engine: string, key: string) => typedError<null, string>(__TAURI_INVOKE("save_api_key", { engine, key })),
 	isApiKeyConfigured: (engine: string) => __TAURI_INVOKE<boolean>("is_api_key_configured", { engine }),
 	deleteApiKey: (engine: string) => typedError<null, string>(__TAURI_INVOKE("delete_api_key", { engine })),
-	addGlossaryTerm: (source: string, target: string) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target })),
-	getGlossaryTerms: () => typedError<([string, string])[], string>(__TAURI_INVOKE("get_glossary_terms")),
+	saveLlmConfig: (engine: string, baseUrl: string | null, model: string | null) => typedError<null, string>(__TAURI_INVOKE("save_llm_config", { engine, baseUrl, model })),
+	getLlmConfig: (engine: string) => typedError<LlmConfigDto, string>(__TAURI_INVOKE("get_llm_config", { engine })),
+	saveLlmStyle: (style: string) => typedError<null, string>(__TAURI_INVOKE("save_llm_style", { style })),
+	getLlmStyle: () => typedError<string, string>(__TAURI_INVOKE("get_llm_style")),
+	getShortcut: () => typedError<string, string>(__TAURI_INVOKE("get_shortcut")),
+	setShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_shortcut", { shortcut })),
+	getReplaceShortcut: () => typedError<string, string>(__TAURI_INVOKE("get_replace_shortcut")),
+	setReplaceShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_replace_shortcut", { shortcut })),
+	detectTextLanguage: (text: string) => typedError<string | null, string>(__TAURI_INVOKE("detect_text_language", { text })),
+	addGlossaryTerm: (source: string, target: string, matchCase: boolean | null) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target, matchCase })),
+	getGlossaryTerms: () => typedError<GlossaryTermDto[], string>(__TAURI_INVOKE("get_glossary_terms")),
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
 	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
+	/**  分页读取翻译历史（最近优先）。`limit` / `offset` 由前端控制。 */
+	getTranslationHistory: (limit: number, offset: number) => typedError<CacheEntry[], string>(__TAURI_INVOKE("get_translation_history", { limit, offset })),
+	/**  根据关键词检索翻译历史（支持模糊匹配原文与译文） */
+	searchTranslationHistory: (keyword: string, limit: number, offset: number) => typedError<CacheEntry[], string>(__TAURI_INVOKE("search_translation_history", { keyword, limit, offset })),
+	/**  按 `cache_key` 删除单条翻译历史。 */
+	deleteHistoryEntry: (cacheKey: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_history_entry", { cacheKey })),
+	/**  流式将翻译历史记录导出为本地文件（写入用户 Downloads 目录），零大内存 IPC 传输与 UI 阻塞 */
+	exportTranslationHistory: (format: string, keyword: string | null) => typedError<ExportHistoryOutcome, string>(__TAURI_INVOKE("export_translation_history", { format, keyword })),
 	setCacheEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_cache_enabled", { enabled })),
 	getCacheEnabled: () => __TAURI_INVOKE<boolean>("get_cache_enabled"),
 	ocrClipboardImage: (targetLang: string) => typedError<string, OcrErrorDto>(__TAURI_INVOKE("ocr_clipboard_image", { targetLang })),
 	setClipboardMonitor: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_clipboard_monitor", { enabled })),
 	getClipboardMonitor: () => __TAURI_INVOKE<boolean>("get_clipboard_monitor"),
 	getServerStatus: () => __TAURI_INVOKE<ServerStatus>("get_server_status"),
+	getShortcutStatus: () => __TAURI_INVOKE<ShortcutStatusDto>("get_shortcut_status"),
+	getPreferredReplaceEngine: () => typedError<string, string>(__TAURI_INVOKE("get_preferred_replace_engine")),
+	savePreferredReplaceEngine: (engine: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_replace_engine", { engine })),
+	getProxyConfig: () => typedError<ProxyConfig, string>(__TAURI_INVOKE("get_proxy_config")),
+	saveProxyConfig: (config: ProxyConfig) => typedError<null, string>(__TAURI_INVOKE("save_proxy_config", { config })),
 };
 
 /* Types */
+/**  翻译历史单条记录（对外暴露给 UI 的只读视图）。 */
+export type CacheEntry = {
+	cache_key: string,
+	source_text: string,
+	translated_text: string,
+	source_lang: string,
+	target_lang: string,
+	engine: string,
+	created_at: number,
+};
+
 export type EngineCapabilitiesDto = {
 	id: string,
 	name: string,
 	max_batch_size: number,
 	supports_batch: boolean,
 	requires_api_key: boolean,
+	supports_streaming: boolean,
 };
 
 /**
@@ -49,6 +87,22 @@ export type EngineCapabilitiesDto = {
  *  每个变体都必须有真实构造路径，否则应随构造方一并删除。
  */
 export type ErrorKind = "input" | "auth" | "network" | "engine" | "internal";
+
+export type ExportHistoryOutcome = {
+	count: number,
+	file_path: string,
+};
+
+export type GlossaryTermDto = {
+	source: string,
+	target: string,
+	match_case: boolean,
+};
+
+export type LlmConfigDto = {
+	base_url: string | null,
+	model: string | null,
+};
 
 export type OcrErrorDto = {
 	kind: OcrErrorKind,
@@ -65,6 +119,23 @@ export type PendingFloatResponse = {
 	request_id: number,
 };
 
+/**  代理配置 */
+export type ProxyConfig = {
+	mode: ProxyMode,
+	url?: string | null,
+};
+
+/**  代理模式 */
+export type ProxyMode = 
+/**  默认自动：优先读取环境代理，若无则嗅探系统代理，否则直连 */
+"auto" | 
+/**  系统代理：强制使用操作系统系统代理配置（若无则直连） */
+"system" | 
+/**  手动配置：使用指定的代理地址 */
+"manual" | 
+/**  不使用代理：强制直连，忽略环境与系统代理 */
+"none";
+
 /**
  *  本地 HTTP 服务（供浏览器插件调用）的运行状态。
  * 
@@ -78,6 +149,20 @@ export type ServerStatus =
 { state: "running" } | 
 /**  未能启动，附原因（如端口被占用、系统凭据不可用） */
 { state: "failed"; reason: string };
+
+/**
+ *  全局快捷键的注册状态。
+ * 
+ *  `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
+ *  格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
+ *  莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+ */
+export type ShortcutStatusDto = {
+	/**  两个快捷键是否都注册成功 */
+	ok: boolean,
+	/**  失败原因（注册成功时为 None） */
+	reason: string | null,
+};
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */
 export type TranslateErrorDto = {

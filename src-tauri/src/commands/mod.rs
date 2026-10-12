@@ -2,7 +2,10 @@ use crate::engine_pool::EnginePool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::task::classify_error;
-use transly_core::{Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
+use transly_core::{
+    CacheEntry, Error, ErrorKind, Glossary, ProxyConfig, ProxyMode, TranslationCache,
+    TranslationRequest,
+};
 
 /// 翻译成功结果：携带实际执行引擎，供 UI 展示与降级识别
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
@@ -100,24 +103,36 @@ pub async fn translate(
     }
 
     // 2. 缓存未命中或未开启，调用引擎翻译
+    // 在翻译前提取代码块与行内代码进行占位保护，防止代码和特殊标识符被篡改
+    let preserved = transly_core::stash_code_blocks(&text);
     let req = TranslationRequest {
-        text: text.clone(),
+        text: preserved.text.clone(),
         source_lang: sl.clone(),
         target_lang: target_lang.clone(),
     };
 
     match active_engine.translate(&req).await {
         Ok(res) => {
+            let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
-            let cache_target_engine = res.actual_engine();
-            if let Err(e) = cache_controller.set_if_current(start_gen, || {
-                cache.set(&text, &res.text, &sl, &target_lang, cache_target_engine)
-            }) {
-                eprintln!("[Cache Write Warning] 桌面端翻译缓存写入失败: {e}");
-            }
+            let cache_target_engine = res.actual_engine().to_string();
+            let cache_arc = cache.inner().clone();
+            let controller = cache_controller.inner().clone();
+            // 译文在闭包后仍要交给术语库，故入闭包前先克隆一份
+            let restored_for_cache = restored.clone();
+            crate::cache_controller::write_cache_offloaded(controller, start_gen, move || {
+                cache_arc.set(
+                    &text,
+                    &restored_for_cache,
+                    &sl,
+                    &target_lang,
+                    &cache_target_engine,
+                )
+            })
+            .await;
             let g = glossary.read().await;
             Ok(TranslateOutcomeDto {
-                text: g.apply(&res.text),
+                text: g.apply(&restored),
                 engine: res.engine,
             })
         }
@@ -125,23 +140,244 @@ pub async fn translate(
     }
 }
 
+/// 流式分块传输载荷（通过 Tauri Event 广播至指定窗口）
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct StreamChunkPayload {
+    pub task_id: u32,
+    pub chunk: String,
+}
+
+#[derive(Clone)]
+pub struct TranslationDependencies {
+    pub cache: Arc<TranslationCache>,
+    pub pool: Arc<EnginePool>,
+    pub glossary: Arc<RwLock<Glossary>>,
+    pub cache_controller: Arc<crate::cache_controller::CacheController>,
+    pub stream_registry: Arc<StreamTaskRegistry>,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+#[specta::specta]
+pub async fn translate_stream(
+    task_id: u32,
+    text: String,
+    source_lang: Option<String>,
+    target_lang: String,
+    engine_name: Option<String>,
+    window: tauri::Window,
+    deps: tauri::State<'_, Arc<TranslationDependencies>>,
+) -> Result<TranslateOutcomeDto, TranslateErrorDto> {
+    use tauri::Emitter;
+
+    let sl = source_lang.unwrap_or_else(|| "auto".to_string());
+
+    transly_core::validate_translation_input(&text, &sl, &target_lang)
+        .map_err(|e| TranslateErrorDto::from_error(&e))?;
+
+    if let Some(ref eng) = engine_name {
+        if !transly_core::validate_engine_id(eng) {
+            return Err(TranslateErrorDto::from_error(&Error::Input(format!(
+                "不支持或未知的翻译引擎: {eng}"
+            ))));
+        }
+    }
+
+    let active_engine = if let Some(ref name) = engine_name {
+        deps.pool.get_engine(name).await
+    } else {
+        deps.pool.default_engine()
+    };
+
+    let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
+
+    // 1. 若开启缓存，优先查缓存
+    if cache_enabled {
+        let cached_res = {
+            let cache_ref = deps.cache.clone();
+            let engine_clone = active_engine.clone();
+            let t = text.clone();
+            let s = sl.clone();
+            let tl = target_lang.clone();
+            tokio::task::spawn_blocking(move || {
+                transly_core::lookup_cache_with_fallback(
+                    &cache_ref,
+                    engine_clone.as_ref(),
+                    &t,
+                    &s,
+                    &tl,
+                )
+            })
+            .await
+            .unwrap_or(None)
+        };
+
+        if let Some((cached_text, used_engine)) = cached_res {
+            let g = deps.glossary.read().await;
+            let applied = g.apply(&cached_text);
+            // 命中缓存时直接分发完整 chunk，让打字机视图立即就绪
+            let _ = window.emit(
+                "translate-stream-chunk",
+                StreamChunkPayload {
+                    task_id,
+                    chunk: applied.clone(),
+                },
+            );
+            return Ok(TranslateOutcomeDto {
+                text: applied,
+                engine: used_engine,
+            });
+        }
+    }
+
+    // 2. 缓存未命中或未开启，调用流式引擎翻译
+    let preserved = transly_core::stash_code_blocks(&text);
+    let req = TranslationRequest {
+        text: preserved.text.clone(),
+        source_lang: sl.clone(),
+        target_lang: target_lang.clone(),
+    };
+
+    let win_clone = window.clone();
+    let on_chunk: transly_core::engine::StreamCallback = Box::new(move |chunk_str| {
+        let _ = win_clone.emit(
+            "translate-stream-chunk",
+            StreamChunkPayload {
+                task_id,
+                chunk: chunk_str.to_string(),
+            },
+        );
+    });
+
+    // 注册任务取消信号。
+    //
+    // 键必须带上窗口标签：task_id 只是前端每窗口各自从 0 开始的局部计数
+    // （`useTaskRunner` 里是 `useRef(0)`），而主窗口与划词浮窗是两个独立窗口。
+    // 早期实现用全局 `HashMap<u32, _>`，浮窗发起取消时会直接杀掉主窗口
+    // 正在运行的同名任务，表现为毫无线索的「内部错误」。
+    let registry_key = (window.label().to_string(), task_id);
+
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    if let Ok(mut map) = deps.stream_registry.0.lock() {
+        map.insert(registry_key.clone(), cancel_tx);
+    }
+
+    let stream_fut = active_engine.translate_stream(&req, on_chunk);
+
+    let res = tokio::select! {
+        outcome = stream_fut => {
+            if let Ok(mut map) = deps.stream_registry.0.lock() {
+                map.remove(&registry_key);
+            }
+            outcome
+        }
+        // 必须只匹配 Ok(())：模式 `_ = cancel_rx` 会连 Err(RecvError) 一起吞掉，
+        // 而 Err 恰好在「同键 sender 被覆盖/丢弃」时发生——那属于注册表内部事件，
+        // 不该被当成用户主动取消，更不该因此把旧任务静默中止。
+        result = cancel_rx => {
+            if let Ok(mut map) = deps.stream_registry.0.lock() {
+                map.remove(&registry_key);
+            }
+            match result {
+                Ok(()) => return Err(TranslateErrorDto::from_error(&Error::Internal(
+                    "流式任务已被前端主动取消".into(),
+                ))),
+                // sender 因重复注册被覆盖而析构：按引擎结果继续等待即可，
+                // 但继续等待一个已无人持有的取消源没有意义，直接透传原始错误。
+                Err(_) => {
+                    return Err(TranslateErrorDto::from_error(&Error::Internal(
+                        "流式任务的取消通道已失效".into(),
+                    )))
+                }
+            }
+        }
+    };
+
+    match res {
+        Ok(res) => {
+            let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
+            let cache_target_engine = res.actual_engine().to_string();
+            let cache_arc = Arc::clone(&deps.cache);
+            let controller = Arc::clone(&deps.cache_controller);
+            // 译文在闭包后仍要交给术语库，故入闭包前先克隆一份
+            let restored_for_cache = restored.clone();
+            crate::cache_controller::write_cache_offloaded(controller, start_gen, move || {
+                cache_arc.set(
+                    &text,
+                    &restored_for_cache,
+                    &sl,
+                    &target_lang,
+                    &cache_target_engine,
+                )
+            })
+            .await;
+            let g = deps.glossary.read().await;
+            Ok(TranslateOutcomeDto {
+                text: g.apply(&restored),
+                engine: res.engine,
+            })
+        }
+        Err(e) => Err(TranslateErrorDto::from_error(&e)),
+    }
+}
+
+/// 流式任务的注册键：`(窗口标签, 窗口内序号)`。
+type StreamTaskKey = (String, u32);
+type StreamTaskSender = tokio::sync::oneshot::Sender<()>;
+
+/// 全局并发流式翻译任务取消注册表。
+///
+/// 键为 `(窗口标签, task_id)`：前端每个窗口的 `task_id` 都是各自从 0 开始的
+/// 局部计数，不带窗口维度会让一个窗口的取消请求误杀另一个窗口的任务。
+/// `tauri::Window` 属注入参数，不会出现在 specta 生成的前端签名中。
+#[derive(Clone, Default)]
+pub struct StreamTaskRegistry(
+    pub Arc<std::sync::Mutex<std::collections::HashMap<StreamTaskKey, StreamTaskSender>>>,
+);
+
+#[tauri::command]
+#[specta::specta]
+pub async fn cancel_stream_task(
+    task_id: u32,
+    window: tauri::Window,
+    registry: tauri::State<'_, Arc<StreamTaskRegistry>>,
+) -> Result<(), String> {
+    if let Ok(mut map) = registry.0.lock() {
+        if let Some(tx) = map.remove(&(window.label().to_string(), task_id)) {
+            let _ = tx.send(());
+        }
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct GlossaryTermDto {
+    pub source: String,
+    pub target: String,
+    pub match_case: bool,
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn add_glossary_term(
     source: String,
     target: String,
+    match_case: Option<bool>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
     // SQLite 写入为同步阻塞 I/O，禁止占用 async 运行时工作线程
+    let is_match_case = match_case.unwrap_or(true);
     let cache_ref = cache.inner().clone();
     let (write_source, write_target) = (source.clone(), target.clone());
-    tokio::task::spawn_blocking(move || cache_ref.set_glossary_term(&write_source, &write_target))
-        .await
-        .map_err(|e| format!("术语写入任务调度异常: {e}"))?
-        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        cache_ref.set_glossary_term(&write_source, &write_target, is_match_case)
+    })
+    .await
+    .map_err(|e| format!("术语写入任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
     let mut g = glossary.write().await;
-    g.insert(source, target);
+    g.insert_with_options(source, target, is_match_case);
     Ok(())
 }
 
@@ -149,12 +385,22 @@ pub async fn add_glossary_term(
 #[specta::specta]
 pub async fn get_glossary_terms(
     cache: tauri::State<'_, Arc<TranslationCache>>,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<GlossaryTermDto>, String> {
     // SQLite 同步 I/O 必须移出主线程：全表查询在缓存膨胀时可达数十毫秒
     let cache_ref = cache.inner().clone();
     tokio::task::spawn_blocking(move || {
         cache_ref
             .get_all_glossary_terms()
+            .map(|terms| {
+                terms
+                    .into_iter()
+                    .map(|(source, target, match_case)| GlossaryTermDto {
+                        source,
+                        target,
+                        match_case,
+                    })
+                    .collect()
+            })
             .map_err(|e| e.to_string())
     })
     .await
@@ -168,42 +414,163 @@ pub async fn delete_glossary_term(
     cache: tauri::State<'_, Arc<TranslationCache>>,
     glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
 ) -> Result<(), String> {
-    // SQLite 删除与全表回读均为同步阻塞 I/O，统一下沉到阻塞线程池
     let cache_ref = cache.inner().clone();
     let deleted_key = source.clone();
-    let terms = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>, String> {
+    tokio::task::spawn_blocking(move || {
         cache_ref
             .delete_glossary_term(&deleted_key)
-            .map_err(|e| e.to_string())?;
-        cache_ref
-            .get_all_glossary_terms()
             .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("术语删除任务调度异常: {e}"))??;
+    .map_err(|e| format!("术语删除任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
 
-    // 重新构建内存术语库
+    // 增量从内存术语库中移除该词条（自动标记 dirty 并使已编译缓存失效，杜绝全量查库与全量重建）
     let mut g = glossary.write().await;
-    *g = Glossary::new();
-    for (src, tgt) in terms {
-        g.insert(src, tgt);
-    }
+    g.remove(&source);
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clear_cache(cache: tauri::State<'_, Arc<TranslationCache>>) -> Result<u32, String> {
+pub async fn clear_cache(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    cache_controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
+) -> Result<u32, String> {
+    // 必须走 CacheController 以递增 generation：否则在途请求会把刚清掉的记录写回。
     // DELETE 全表在 10 万条缓存下是长事务，必须移出主线程避免 UI 硬卡
     let cache_ref = cache.inner().clone();
+    let controller = cache_controller.inner().clone();
     tokio::task::spawn_blocking(move || {
-        cache_ref
-            .clear_all_cache()
+        controller
+            .clear_only(&cache_ref)
             .map(|n| n as u32)
             .map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("缓存清理任务调度异常: {e}")))
+}
+
+/// 分页读取翻译历史（最近优先）。`limit` / `offset` 由前端控制。
+#[tauri::command]
+#[specta::specta]
+pub async fn get_translation_history(
+    limit: u32,
+    offset: u32,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<Vec<CacheEntry>, String> {
+    // SQLite 同步 I/O 禁止占用 async 工作线程
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .list_recent(limit, offset)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("翻译历史读取任务调度异常: {e}")))
+}
+
+/// 根据关键词检索翻译历史（支持模糊匹配原文与译文）
+#[tauri::command]
+#[specta::specta]
+pub async fn search_translation_history(
+    keyword: String,
+    limit: u32,
+    offset: u32,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<Vec<CacheEntry>, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .search(&keyword, limit, offset)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("翻译历史搜索任务调度异常: {e}")))
+}
+
+/// 按 `cache_key` 删除单条翻译历史。
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_history_entry(
+    cache_key: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<bool, String> {
+    // SQLite 同步 I/O 禁止占用 async 工作线程
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .delete_entry(&cache_key)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("翻译历史删除任务调度异常: {e}")))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ExportHistoryOutcome {
+    pub count: u32,
+    pub file_path: String,
+}
+
+fn resolve_downloads_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(user) = std::env::var_os("USERPROFILE") {
+            let p = std::path::PathBuf::from(user).join("Downloads");
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let p = std::path::PathBuf::from(home).join("Downloads");
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// 流式将翻译历史记录导出为本地文件（写入用户 Downloads 目录），零大内存 IPC 传输与 UI 阻塞
+#[tauri::command]
+#[specta::specta]
+pub async fn export_translation_history(
+    format: String,
+    keyword: Option<String>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<ExportHistoryOutcome, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<ExportHistoryOutcome, String> {
+        let downloads_dir = resolve_downloads_dir();
+        let ext = if format.eq_ignore_ascii_case("csv") {
+            "csv"
+        } else {
+            "json"
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let filename = format!("transly-history-{now}.{ext}");
+        let file_path = downloads_dir.join(&filename);
+        let file = std::fs::File::create(&file_path)
+            .map_err(|e| format!("创建导出文件失败 ({file_path:?}): {e}"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        let count = cache_ref
+            .export_history_to_writer(&mut writer, ext, keyword.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(ExportHistoryOutcome {
+            count: count as u32,
+            file_path: file_path.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("导出任务调度异常: {e}"))?
 }
 
 #[tauri::command]
@@ -213,13 +580,18 @@ pub async fn set_cache_enabled(
     controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
-    // keyring 写入为同步阻塞 I/O，禁止占用主线程
-    tokio::task::spawn_blocking(move || {
-        crate::secrets::set_secret("cache_enabled", if enabled { "true" } else { "false" })
+    let cache_setting_ref = cache.inner().clone();
+    let val = if enabled { "true" } else { "false" };
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_setting_ref
+            .set_setting("cache_enabled", val)
+            .map_err(|e| anyhow::anyhow!("配置保存失败: {e}"))?;
+        let _ = crate::secrets::delete_secret("cache_enabled");
+        Ok(())
     })
     .await
     .map_err(|e| format!("配置写入任务调度异常: {e}"))?
-    .map_err(|e| format!("写入系统配置失败: {e}"))?;
+    .map_err(|e| e.to_string())?;
 
     if enabled {
         controller.enable();
@@ -250,29 +622,42 @@ pub fn get_cache_enabled(
 pub async fn set_clipboard_monitor(
     enabled: bool,
     flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<(), String> {
-    // keyring 写入为同步阻塞 I/O，禁止占用主线程
-    tokio::task::spawn_blocking(move || {
-        crate::secrets::set_secret(
-            "clipboard_monitor_enabled",
-            if enabled { "true" } else { "false" },
-        )
+    let cache_ref = cache.inner().clone();
+    let val = if enabled { "true" } else { "false" };
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_ref
+            .set_setting("clipboard_monitor_enabled", val)
+            .map_err(|e| anyhow::anyhow!("配置保存失败: {e}"))?;
+        let _ = crate::secrets::delete_secret("clipboard_monitor_enabled");
+        Ok(())
     })
     .await
-    .map_err(|e| format!("凭据写入任务调度异常: {e}"))?
-    .map_err(|e| format!("写入系统安全凭据失败: {e}"))?;
+    .map_err(|e| format!("配置保存调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
     flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_clipboard_monitor() -> bool {
-    // keyring 读取为同步阻塞 I/O，禁止占用主线程
-    tokio::task::spawn_blocking(|| crate::secrets::get_secret("clipboard_monitor_enabled"))
-        .await
-        .map(|res| res.map(|v| v == "true").unwrap_or(false))
-        .unwrap_or(false)
+pub async fn get_clipboard_monitor(app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let cache_ref = match app.try_state::<Arc<TranslationCache>>() {
+        Some(c) => c.inner().clone(),
+        None => return false,
+    };
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("clipboard_monitor_enabled")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("clipboard_monitor_enabled").ok())
+    })
+    .await
+    .map(|res| res.map(|v| v == "true").unwrap_or(false))
+    .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -283,6 +668,661 @@ pub async fn ocr_clipboard_image(
 ) -> Result<String, transly_core::OcrErrorDto> {
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
 }
+
+pub const DEFAULT_SHORTCUT: &str = "Alt+Shift+D";
+pub const DEFAULT_REPLACE_SHORTCUT: &str = "Alt+Shift+R";
+
+/// 全局剪贴板自动化互斥锁，确保划词悬浮呼出与原地替换模拟流程不发生并发抢占
+static CLIPBOARD_SIMULATION_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub struct SelectionContext {
+    pub sel_flag: Arc<std::sync::atomic::AtomicBool>,
+    pub counter: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// 划词原地替换失败事件载荷（通过 Tauri 事件广播至前端显示 Toast 告警）
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ReplacementFailedPayload {
+    pub engine: String,
+    pub message: String,
+}
+
+/// 触发划词原地翻译并替换工作流：
+/// 1. 模拟复制 (Ctrl+C / Cmd+C) 获取当前选区文本
+/// 2. 使用离线检测推断智能目标语言并执行翻译
+/// 3. 将译文写入剪贴板并模拟粘贴 (Ctrl+V / Cmd+V) 覆盖原选区
+/// 4. 延迟后恢复用户原有剪贴板，全程置 `sel_flag` 抑制剪贴板监听器自触发
+pub fn trigger_selection_replacement(
+    handle: tauri::AppHandle,
+    sel_flag: Arc<std::sync::atomic::AtomicBool>,
+    deps: Arc<TranslationDependencies>,
+) {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
+    use std::sync::atomic::Ordering;
+    use tauri::{Emitter, Manager};
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    tauri::async_runtime::spawn(async move {
+        // 抑制标志必须覆盖**整个**流程（含第二阶段数秒的网络翻译）。
+        // 早期实现在一阶段结束（读到选区原文）就置回 false，而译文要到三阶段才写入，
+        // 中间这段窗口里剪贴板监听器会把选区原文当成用户新复制的内容再触发一次
+        // 浮窗翻译，同一段文本被翻译两次；更糟的是那次误触发会把去重缓存
+        // `last_clipboard` 改写成选区原文，导致用户随后手动复制同一段文本时不再触发。
+        //
+        // 用 RAII guard 保证任何提前 return 的路径都能正确复位，
+        // 否则翻译失败一次就会把剪贴板监听永久抑制。
+        struct SelFlagGuard(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for SelFlagGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _sel_guard = SelFlagGuard(Arc::clone(&sel_flag));
+
+        // 第一阶段：原子获取模拟复制，读取所选文本并立即释放全局剪贴板锁
+        let (detected_text, old_clipboard) = {
+            let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+            sel_flag.store(true, Ordering::SeqCst);
+
+            // 0. 备份原剪贴板
+            let old_clipboard = handle.clipboard().read_text().ok();
+
+            // 1. 模拟 Ctrl+C
+            if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                #[cfg(target_os = "macos")]
+                let modifier = Key::Meta;
+                #[cfg(not(target_os = "macos"))]
+                let modifier = Key::Control;
+
+                let _ = enigo.key(modifier, Direction::Press);
+                let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+                let _ = enigo.key(modifier, Direction::Release);
+            }
+
+            // 2. 自适应轮询读取选中文本（单次 15ms，长文本自适应上限放宽至 300ms，内容变化立即放行）
+            let clipboard_reader = {
+                let h = handle.clone();
+                move || h.clipboard().read_text().ok()
+            };
+            let detected = crate::clipboard_gate::poll_clipboard_change(
+                old_clipboard.as_deref(),
+                clipboard_reader,
+                std::time::Duration::from_millis(15),
+                std::time::Duration::from_millis(300),
+            )
+            .await;
+            // 离开本作用域自动释放 _guard 锁
+            (detected, old_clipboard)
+        };
+
+        let Some(text) = detected_text else {
+            return;
+        };
+        let clean = text.trim();
+        if clean.is_empty() || clean.chars().count() > transly_core::MAX_ITEM_CHARS {
+            return;
+        }
+
+        // 第二阶段：无锁执行网络翻译与术语库处理（网络耗时不阻塞其他快捷键与剪贴板监听）
+        let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
+        let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
+
+        let preferred_engine = {
+            let cache_ref = deps.cache.clone();
+            tokio::task::spawn_blocking(move || {
+                cache_ref
+                    .get_setting("preferred_replace_engine")
+                    .ok()
+                    .flatten()
+                    .or_else(|| crate::secrets::get_secret("preferred_replace_engine").ok())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "google".to_string())
+            })
+            .await
+            .unwrap_or_else(|_| "google".to_string())
+        };
+
+        let active_engine = deps.pool.get_raw_engine(&preferred_engine).await;
+
+        // 优先查缓存（仅查询首选引擎专属缓存，绝不跨引擎命中 Google 降级缓存）
+        let mut final_text = None;
+        if cache_enabled {
+            let cache_ref = deps.cache.clone();
+            let eng_id = active_engine.id().to_string();
+            let t = clean.to_string();
+            let tl = target_lang.clone();
+            let hit = tokio::task::spawn_blocking(move || {
+                cache_ref.get(&t, "auto", &tl, &eng_id).unwrap_or(None)
+            })
+            .await
+            .unwrap_or(None);
+
+            if let Some(cached_text) = hit {
+                let g = deps.glossary.read().await;
+                final_text = Some(g.apply(&cached_text));
+            }
+        }
+
+        let final_text = match final_text {
+            Some(cached) => cached,
+            None => {
+                let preserved = transly_core::stash_code_blocks(clean);
+                let req = TranslationRequest {
+                    text: preserved.text.clone(),
+                    source_lang: "auto".to_string(),
+                    target_lang: target_lang.clone(),
+                };
+
+                match active_engine.translate(&req).await {
+                    Ok(res) => {
+                        let restored =
+                            transly_core::restore_code_blocks(&res.text, &preserved.stash);
+                        let cache_target_engine = res.actual_engine().to_string();
+                        let owned_text = clean.to_string();
+                        let owned_restored = restored.clone();
+                        let owned_target = target_lang.clone();
+                        let cache_arc = Arc::clone(&deps.cache);
+                        let controller = Arc::clone(&deps.cache_controller);
+                        crate::cache_controller::write_cache_offloaded(
+                            controller,
+                            start_gen,
+                            move || {
+                                cache_arc.set(
+                                    &owned_text,
+                                    &owned_restored,
+                                    "auto",
+                                    &owned_target,
+                                    &cache_target_engine,
+                                )
+                            },
+                        )
+                        .await;
+                        let g = deps.glossary.read().await;
+                        g.apply(&restored)
+                    }
+                    Err(e) => {
+                        eprintln!("[Selection Replacement Warning] 划词原地替换翻译失败: {e}");
+                        let _ = handle.emit(
+                            "transly://replacement-failed",
+                            ReplacementFailedPayload {
+                                engine: active_engine.id().to_string(),
+                                message: e.to_string(),
+                            },
+                        );
+                        if let Some(float_win) = handle.get_webview_window("float") {
+                            place_float_near_cursor(&float_win);
+                            let _ = float_win.show();
+                        }
+                        // 校验当前剪贴板是否仍为第一阶段模拟复制的选区原文：
+                        // 若网络请求耗时期间用户在其它应用复制了新内容，则放弃还原，杜绝将用户的新复制内容冲掉。
+                        let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+                        let current = handle.clipboard().read_text().ok();
+                        if current.as_deref() == Some(clean) {
+                            if let Some(old) = old_clipboard {
+                                let _ = handle.clipboard().write_text(old);
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        };
+
+        // 第三阶段：重新获取剪贴板锁，写入译文并模拟粘贴覆盖原选区
+        {
+            let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+            sel_flag.store(true, Ordering::SeqCst);
+
+            if handle.clipboard().write_text(&final_text).is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                    #[cfg(target_os = "macos")]
+                    let modifier = Key::Meta;
+                    #[cfg(not(target_os = "macos"))]
+                    let modifier = Key::Control;
+
+                    let _ = enigo.key(modifier, Direction::Press);
+                    let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+                    let _ = enigo.key(modifier, Direction::Release);
+                }
+                // 留出应用接收粘贴事件的窗口时间（放宽至 350ms，确保异步应用如 VSCode/Slack 成功消费）
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            }
+
+            // 恢复用户原有剪贴板内容。
+            //
+            // 翻译阶段可能长达数秒，期间用户完全可能已在别的应用复制了新内容。
+            // 无条件写回 old_clipboard 会把那份新内容**彻底销毁**。
+            // 判据是「当前剪贴板是否仍等于本流程写入的译文」：
+            //   - 相等 → 期间无人干预，安全还原；
+            //   - 不等 → 已被外部改写，必须放弃还原，保留用户的新内容。
+            let current = handle.clipboard().read_text().ok();
+            if current.as_deref() == Some(final_text.as_str()) {
+                if let Some(old) = old_clipboard {
+                    if let Err(e) = handle.clipboard().write_text(old) {
+                        eprintln!("[Clipboard Warning] 原地替换后恢复原剪贴板失败: {e}");
+                    }
+                }
+            }
+
+            sel_flag.store(false, Ordering::SeqCst);
+        }
+    });
+}
+
+/// 将浮窗移动到光标附近，并夹取到光标所在显示器的可视范围内。
+///
+/// 划词与剪贴板翻译的交互预期是「译文出现在选区附近」，不能沿用系统默认坐标；
+/// 光标或显示器信息不可用时保持系统默认位置，不阻断浮窗展示。
+pub fn place_float_near_cursor(win: &tauri::WebviewWindow) {
+    let (Ok(cursor), Ok(size)) = (win.cursor_position(), win.outer_size()) else {
+        return;
+    };
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+
+    let (min_x, min_y, max_x, max_y) = match monitor {
+        Some(m) => {
+            let pos = m.position();
+            let monitor_size = m.size();
+            (
+                pos.x as f64,
+                pos.y as f64,
+                pos.x as f64 + monitor_size.width as f64,
+                pos.y as f64 + monitor_size.height as f64,
+            )
+        }
+        None => (0.0, 0.0, f64::MAX, f64::MAX),
+    };
+
+    let width = size.width as f64;
+    let height = size.height as f64;
+    // 水平居中对齐光标，垂直放在光标下方，避开正在阅读的选区
+    let x = (cursor.x - width / 2.0).clamp(min_x, (max_x - width).max(min_x));
+    let y = (cursor.y + 20.0).clamp(min_y, (max_y - height).max(min_y));
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+pub fn trigger_selection_translation(
+    handle: tauri::AppHandle,
+    sel_flag: Arc<std::sync::atomic::AtomicBool>,
+    counter: Arc<std::sync::atomic::AtomicU64>,
+    pending_slot: Arc<PendingFloatRequests>,
+) {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
+    use std::sync::atomic::Ordering;
+    use tauri::{Emitter, Manager};
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    tauri::async_runtime::spawn(async move {
+        // 使用 RAII Guard 确保任何提前返回或 panic 都能可靠复位抑制标志，
+        // 杜绝划词异常导致系统剪贴板监听被永久抑制
+        struct SelFlagGuard(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for SelFlagGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _sel_guard = SelFlagGuard(Arc::clone(&sel_flag));
+
+        // 获取互斥锁排队，避免划词悬浮与原地替换同时模拟读写剪贴板发生数据竞态
+        let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
+
+        // 0. 备份旧剪贴板内容
+        let old_clipboard = handle.clipboard().read_text().ok();
+
+        // 模拟复制期间置抑制标志，防止剪贴板监听对同一次复制自触发翻译
+        sel_flag.store(true, Ordering::SeqCst);
+
+        // 1. 模拟按键发送 Ctrl+C (Windows/Linux) 或 Cmd+C (macOS)
+        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+            #[cfg(target_os = "macos")]
+            let modifier = Key::Meta;
+            #[cfg(not(target_os = "macos"))]
+            let modifier = Key::Control;
+
+            let _ = enigo.key(modifier, Direction::Press);
+            let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+            let _ = enigo.key(modifier, Direction::Release);
+        }
+
+        // 2. 自适应短轮询检测系统剪贴板更新（单次 15ms，最多等 180ms，内容变化立即放行）
+        let clipboard_reader = {
+            let h = handle.clone();
+            move || h.clipboard().read_text().ok()
+        };
+        let detected_text = crate::clipboard_gate::poll_clipboard_change(
+            old_clipboard.as_deref(),
+            clipboard_reader,
+            std::time::Duration::from_millis(15),
+            std::time::Duration::from_millis(180),
+        )
+        .await;
+
+        // 3. 提取剪贴板文本并唤起轻量悬浮窗
+        if let Some(text) = detected_text {
+            if !text.trim().is_empty() {
+                let rid = counter.fetch_add(1, Ordering::SeqCst);
+                let req = FloatRequest {
+                    text,
+                    source: "selection",
+                    request_id: rid,
+                };
+                // 先暂存再广播：浮窗未就绪时靠主动拉取兜底
+                if pending_slot.push(req.clone()) {
+                    eprintln!("浮窗请求队列已满，丢弃最旧请求");
+                }
+                if let Some(float_win) = handle.get_webview_window("float") {
+                    place_float_near_cursor(&float_win);
+                    let _ = float_win.show();
+                    let _ = float_win.set_focus();
+                    let _ = float_win.emit_to("float", "float-translate", req);
+                }
+            }
+        }
+
+        // 4. 恢复原剪贴板内容，避免污染用户复制历史
+        if let Some(old_clipboard) = old_clipboard {
+            if let Err(e) = handle.clipboard().write_text(old_clipboard) {
+                eprintln!("[Clipboard Warning] 划词后恢复原剪贴板失败（可能被外部锁占用）: {e}");
+            }
+        }
+
+        // 无论成败均释放抑制标志，避免剪贴板监听被永久抑制
+        sel_flag.store(false, Ordering::SeqCst);
+    });
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_shortcut(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("custom_shortcut")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_shortcut").ok())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string())
+    .pipe(Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_shortcut(
+    shortcut: String,
+    app: tauri::AppHandle,
+    selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
+    pending_slot: tauri::State<'_, Arc<PendingFloatRequests>>,
+    shortcut_slot: tauri::State<'_, Arc<ShortcutStatusSlot>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let clean = shortcut.trim();
+    if clean.is_empty() {
+        return Err("快捷键不能为空".to_string());
+    }
+
+    // 读取当前生效的旧快捷键（优先读取 SQLite，旧版回退 Keyring）
+    let cache_read = cache.inner().clone();
+    let old_shortcut = tokio::task::spawn_blocking(move || {
+        cache_read
+            .get_setting("custom_shortcut")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_shortcut").ok())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string());
+
+    // 尝试注销旧快捷键以及即将注册的键（防止用户未改动快捷键重复保存时触发 AlreadyRegistered 错误）
+    let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+    if old_shortcut != clean {
+        let _ = app.global_shortcut().unregister(clean);
+    }
+
+    // 立即注册新快捷键
+    let app_h = app.clone();
+    let sel_flag = selection_ctx.sel_flag.clone();
+    let counter = selection_ctx.counter.clone();
+    let slot = pending_slot.inner().clone();
+    let register_res = app
+        .global_shortcut()
+        .on_shortcut(clean, move |_app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                trigger_selection_translation(
+                    app_h.clone(),
+                    sel_flag.clone(),
+                    counter.clone(),
+                    slot.clone(),
+                );
+            }
+        });
+
+    if let Err(e) = register_res {
+        // 注册失败时原子回滚：重新注册旧快捷键，防止快捷键状态永久丢失
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_counter = selection_ctx.counter.clone();
+            let rollback_slot = pending_slot.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_translation(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_counter.clone(),
+                            rollback_slot.clone(),
+                        );
+                    }
+                },
+            );
+        }
+        let err_msg = format!("快捷键注册失败，可能按键格式不合法或被系统占用: {e}");
+        shortcut_slot.set_translate_failed(err_msg.clone());
+        return Err(err_msg);
+    }
+
+    // 持久化存储新快捷键到 SQLite 设置表
+    let to_save = clean.to_string();
+    let cache_write = cache.inner().clone();
+    let persist_res = tokio::task::spawn_blocking(move || {
+        let _ = crate::secrets::delete_secret("custom_shortcut");
+        cache_write.set_setting("custom_shortcut", &to_save)
+    })
+    .await
+    .map_err(|e| format!("快捷键调度异常: {e}"))?;
+
+    if let Err(e) = persist_res {
+        // 回滚：注销刚注册的新快捷键，恢复旧快捷键
+        let _ = app.global_shortcut().unregister(clean);
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_counter = selection_ctx.counter.clone();
+            let rollback_slot = pending_slot.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_translation(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_counter.clone(),
+                            rollback_slot.clone(),
+                        );
+                    }
+                },
+            );
+        }
+        let err_msg = format!("保存快捷键失败（已回滚到原快捷键）: {e}");
+        shortcut_slot.set_translate_failed(err_msg.clone());
+        return Err(err_msg);
+    }
+
+    shortcut_slot.set_translate_ok();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_replace_shortcut(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("custom_replace_shortcut")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_replace_shortcut").ok())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string())
+    .pipe(Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_replace_shortcut(
+    shortcut: String,
+    app: tauri::AppHandle,
+    selection_ctx: tauri::State<'_, Arc<SelectionContext>>,
+    deps: tauri::State<'_, Arc<TranslationDependencies>>,
+    shortcut_slot: tauri::State<'_, Arc<ShortcutStatusSlot>>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let clean = shortcut.trim();
+    if clean.is_empty() {
+        return Err("快捷键不能为空".to_string());
+    }
+
+    let cache_ref = deps.cache.clone();
+    let old_shortcut = tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("custom_replace_shortcut")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("custom_replace_shortcut").ok())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
+    })
+    .await
+    .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string());
+
+    let _ = app.global_shortcut().unregister(old_shortcut.as_str());
+    if old_shortcut != clean {
+        let _ = app.global_shortcut().unregister(clean);
+    }
+
+    let app_h = app.clone();
+    let sel_flag = selection_ctx.sel_flag.clone();
+    let deps_ref = deps.inner().clone();
+
+    let register_res = app
+        .global_shortcut()
+        .on_shortcut(clean, move |_app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                trigger_selection_replacement(app_h.clone(), sel_flag.clone(), deps_ref.clone());
+            }
+        });
+
+    if let Err(e) = register_res {
+        // 注册失败时原子回滚：重新注册旧快捷键，防止快捷键状态永久丢失
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_deps = deps.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_replacement(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_deps.clone(),
+                        );
+                    }
+                },
+            );
+        }
+        let err_msg = format!("划词替换快捷键注册失败，可能按键格式不合法或被系统占用: {e}");
+        shortcut_slot.set_replace_failed(err_msg.clone());
+        return Err(err_msg);
+    }
+
+    let to_save = clean.to_string();
+    let cache_write = deps.cache.clone();
+    let persist_res = tokio::task::spawn_blocking(move || {
+        let _ = crate::secrets::delete_secret("custom_replace_shortcut");
+        cache_write.set_setting("custom_replace_shortcut", &to_save)
+    })
+    .await
+    .map_err(|e| format!("快捷键调度异常: {e}"))?;
+
+    // 与 set_shortcut 同理：注册成功但持久化失败时必须对称回滚，
+    // 否则进程行为与 keyring 配置不一致，重启后快捷键回退。
+    if let Err(e) = persist_res {
+        let _ = app.global_shortcut().unregister(clean);
+        if old_shortcut != clean {
+            let rollback_h = app.clone();
+            let rollback_sel_flag = selection_ctx.sel_flag.clone();
+            let rollback_deps = deps.inner().clone();
+            let _ = app.global_shortcut().on_shortcut(
+                old_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        trigger_selection_replacement(
+                            rollback_h.clone(),
+                            rollback_sel_flag.clone(),
+                            rollback_deps.clone(),
+                        );
+                    }
+                },
+            );
+        }
+        let err_msg = format!("保存快捷键失败（已回滚到原快捷键）: {e}");
+        shortcut_slot.set_replace_failed(err_msg.clone());
+        return Err(err_msg);
+    }
+
+    shortcut_slot.set_replace_ok();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn detect_text_language(text: String) -> Result<Option<String>, String> {
+    Ok(transly_core::detect_language(&text).map(|s| s.to_string()))
+}
+
+trait Pipe: Sized {
+    fn pipe<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(Self) -> R,
+    {
+        f(self)
+    }
+}
+
+impl<T> Pipe for T {}
 
 /// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示
 #[derive(Clone, serde::Serialize)]
@@ -403,6 +1443,32 @@ pub async fn rotate_server_token(
     Ok(new_token)
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn approve_pairing(
+    pairing_mgr: tauri::State<'_, Arc<crate::server::pairing::PairingManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    if pairing_mgr.approve(&session_id).await {
+        Ok(())
+    } else {
+        Err("配对会话不存在或已过期".to_string())
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn reject_pairing(
+    pairing_mgr: tauri::State<'_, Arc<crate::server::pairing::PairingManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    if pairing_mgr.reject(&session_id).await {
+        Ok(())
+    } else {
+        Err("配对会话不存在或已过期".to_string())
+    }
+}
+
 /// 本地 HTTP 服务（供浏览器插件调用）的运行状态。
 ///
 /// 服务在后台异步启动，失败只进 stderr 的话用户完全无感：
@@ -444,11 +1510,292 @@ pub fn get_server_status(slot: tauri::State<'_, Arc<ServerStatusSlot>>) -> Serve
     slot.get()
 }
 
+/// 全局快捷键的注册状态。
+///
+/// `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
+/// 格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
+/// 莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ShortcutStatusDto {
+    /// 两个快捷键是否都注册成功
+    pub ok: bool,
+    /// 失败原因（注册成功时为 None）
+    pub reason: Option<String>,
+}
+
+/// 快捷键注册状态槽位。与 `ServerStatusSlot` 同构（Tauri 按 TypeId 存 state）。
+/// 分离维护划词翻译与划词原地替换的错误状态，避免二者状态相互覆盖。
+#[derive(Debug, Default)]
+pub struct ShortcutStatusSlot {
+    translate_error: std::sync::Mutex<Option<String>>,
+    replace_error: std::sync::Mutex<Option<String>>,
+}
+
+impl ShortcutStatusSlot {
+    pub fn set_translate_ok(&self) {
+        if let Ok(mut slot) = self.translate_error.lock() {
+            *slot = None;
+        }
+    }
+
+    pub fn set_translate_failed(&self, reason: String) {
+        if let Ok(mut slot) = self.translate_error.lock() {
+            *slot = Some(reason);
+        }
+    }
+
+    pub fn set_replace_ok(&self) {
+        if let Ok(mut slot) = self.replace_error.lock() {
+            *slot = None;
+        }
+    }
+
+    pub fn set_replace_failed(&self, reason: String) {
+        if let Ok(mut slot) = self.replace_error.lock() {
+            *slot = Some(reason);
+        }
+    }
+
+    pub fn set_ok(&self) {
+        self.set_translate_ok();
+        self.set_replace_ok();
+    }
+
+    pub fn set_failed(&self, reason: String) {
+        self.set_translate_failed(reason);
+    }
+
+    pub fn get(&self) -> ShortcutStatusDto {
+        let t_err = self.translate_error.lock().ok().and_then(|g| g.clone());
+        let r_err = self.replace_error.lock().ok().and_then(|g| g.clone());
+
+        match (t_err, r_err) {
+            (None, None) => ShortcutStatusDto {
+                ok: true,
+                reason: None,
+            },
+            (Some(t), None) => ShortcutStatusDto {
+                ok: false,
+                reason: Some(t),
+            },
+            (None, Some(r)) => ShortcutStatusDto {
+                ok: false,
+                reason: Some(r),
+            },
+            (Some(t), Some(r)) => ShortcutStatusDto {
+                ok: false,
+                reason: Some(format!("{t}; {r}")),
+            },
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_shortcut_status(slot: tauri::State<'_, Arc<ShortcutStatusSlot>>) -> ShortcutStatusDto {
+    slot.get()
+}
+
 fn validate_engine_name(engine: &str) -> Result<(), String> {
     match engine.to_lowercase().as_str() {
         "deepl" | "openai" | "deepseek" => Ok(()),
         other => Err(format!("不支持或未知的引擎凭据配置: {other}")),
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Default)]
+pub struct LlmConfigDto {
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_llm_config(
+    engine: String,
+    base_url: Option<String>,
+    model: Option<String>,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let eng = engine.to_lowercase();
+    if eng != "openai" && eng != "deepseek" {
+        return Err("仅支持配置 OpenAI 或 DeepSeek 的端点与模型".to_string());
+    }
+
+    let url_key = format!("{eng}_base_url");
+    let model_key = format!("{eng}_model");
+
+    let url_val = base_url.unwrap_or_default().trim().to_string();
+    let model_val = model.unwrap_or_default().trim().to_string();
+
+    // 端点校验：密钥会被明文发往该地址，因此必须限定协议。
+    // 允许任意 `http://` 意味着 API Key 可能以明文过网；
+    // 唯一的例外是本地回环（Ollama / vLLM 等本机部署，不出网卡）。
+    if !url_val.is_empty() {
+        let is_loopback = transly_core::OpenAIEngine::is_local_endpoint(&url_val);
+        if !url_val.starts_with("https://") && !is_loopback {
+            return Err(
+                "端点必须使用 https://（本地 Ollama 等本机服务可用 http://127.0.0.1 或 http://localhost）"
+                    .to_string(),
+            );
+        }
+    }
+
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        if url_val.is_empty() {
+            let _ = cache_ref.delete_setting(&url_key);
+            let _ = crate::secrets::delete_secret(&url_key);
+        } else {
+            cache_ref.set_setting(&url_key, &url_val)?;
+            let _ = crate::secrets::delete_secret(&url_key);
+        }
+
+        if model_val.is_empty() {
+            let _ = cache_ref.delete_setting(&model_key);
+            let _ = crate::secrets::delete_secret(&model_key);
+        } else {
+            cache_ref.set_setting(&model_key, &model_val)?;
+            let _ = crate::secrets::delete_secret(&model_key);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("配置保存调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    pool.invalidate(&engine).await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_llm_config(
+    engine: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<LlmConfigDto, String> {
+    let eng = engine.to_lowercase();
+    if eng != "openai" && eng != "deepseek" {
+        return Err("仅支持读取 OpenAI 或 DeepSeek 的端点与模型".to_string());
+    }
+
+    let url_key = format!("{eng}_base_url");
+    let model_key = format!("{eng}_model");
+    let cache_ref = cache.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let base_url = cache_ref
+            .get_setting(&url_key)
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret(&url_key).ok())
+            .filter(|s| !s.trim().is_empty());
+        let model = cache_ref
+            .get_setting(&model_key)
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret(&model_key).ok())
+            .filter(|s| !s.trim().is_empty());
+        Ok(LlmConfigDto { base_url, model })
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("配置读取调度异常: {e}")))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_llm_style(
+    style: String,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let s = style.trim().to_lowercase();
+    match s.as_str() {
+        "general" | "academic" | "literary" | "business" => {}
+        _ => return Err("无效的 LLM 翻译风格".to_string()),
+    }
+
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_ref.set_setting("llm_style", &s)?;
+        let _ = crate::secrets::delete_secret("llm_style");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存 LLM 风格任务调度异常: {e}"))?
+    .map_err(|e| format!("写入 LLM 风格失败: {e}"))?;
+
+    pool.invalidate("openai").await;
+    pool.invalidate("deepseek").await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_preferred_replace_engine(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("preferred_replace_engine")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("preferred_replace_engine").ok())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "google".to_string())
+    })
+    .await
+    .map_err(|e| format!("读取划词原地替换引擎配置异常: {e}"))
+}
+
+pub fn validate_preferred_replace_engine(engine: &str) -> Result<String, String> {
+    let clean = engine.trim().to_lowercase();
+    match clean.as_str() {
+        "google" | "google_web" => Ok("google".to_string()),
+        "deepl" | "deepseek" | "openai" => Ok(clean),
+        _ => Err("无效或不受支持的划词替换引擎".to_string()),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_preferred_replace_engine(
+    engine: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let to_save = validate_preferred_replace_engine(&engine)?;
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_ref.set_setting("preferred_replace_engine", &to_save)?;
+        let _ = crate::secrets::delete_secret("preferred_replace_engine");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存划词原地替换引擎调度异常: {e}"))?
+    .map_err(|e| format!("写入系统配置失败: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_llm_style(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("llm_style")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("llm_style").ok())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "general".to_string())
+    })
+    .await
+    .map_err(|e| format!("读取 LLM 风格任务调度异常: {e}"))
 }
 
 #[tauri::command]
@@ -478,15 +1825,32 @@ pub async fn save_api_key(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn is_api_key_configured(engine: String) -> bool {
+pub async fn is_api_key_configured(engine: String, app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
     if validate_engine_name(&engine).is_err() {
         return false;
     }
-    // keyring 读取为同步阻塞 I/O，禁止占用主线程
-    tokio::task::spawn_blocking(move || crate::secrets::get_secret(&engine))
-        .await
-        .map(|res| res.map(|k| !k.trim().is_empty()).unwrap_or(false))
-        .unwrap_or(false)
+    let cache_opt = app
+        .try_state::<Arc<TranslationCache>>()
+        .map(|c| c.inner().clone());
+    tokio::task::spawn_blocking(move || {
+        if engine == "openai" {
+            let url_opt = cache_opt
+                .as_ref()
+                .and_then(|c| c.get_setting("openai_base_url").ok().flatten())
+                .or_else(|| crate::secrets::get_secret("openai_base_url").ok());
+            if let Some(url) = url_opt {
+                if transly_core::OpenAIEngine::is_local_endpoint(&url) {
+                    return true;
+                }
+            }
+        }
+        crate::secrets::get_secret(&engine)
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -513,6 +1877,7 @@ pub struct EngineCapabilitiesDto {
     pub max_batch_size: u32,
     pub supports_batch: bool,
     pub requires_api_key: bool,
+    pub supports_streaming: bool,
 }
 
 #[tauri::command]
@@ -532,7 +1897,95 @@ pub async fn get_engine_capabilities(
         max_batch_size: caps.max_batch_size as u32,
         supports_batch: caps.supports_batch,
         requires_api_key: caps.requires_api_key,
+        supports_streaming: caps.supports_streaming,
     })
+}
+
+pub fn validate_proxy_config(config: &ProxyConfig) -> Result<(), String> {
+    if config.mode == ProxyMode::Manual {
+        match config.url {
+            Some(ref u) if !u.trim().is_empty() => {
+                if transly_core::normalize_proxy_url(u).is_none() {
+                    return Err("无效的手动代理地址格式".to_string());
+                }
+            }
+            _ => return Err("手动代理模式下必须填写代理地址".to_string()),
+        }
+    }
+    Ok(())
+}
+
+pub fn get_proxy_config_internal(cache: &TranslationCache) -> Result<ProxyConfig, String> {
+    let mode_str = cache
+        .get_setting("proxy_mode")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "auto".to_string());
+    let mode = ProxyMode::parse_str(&mode_str);
+    let url = cache
+        .get_setting("proxy_url")
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty());
+    Ok(ProxyConfig { mode, url })
+}
+
+pub async fn save_proxy_config_internal(
+    config: ProxyConfig,
+    pool: &EnginePool,
+    cache: &TranslationCache,
+) -> Result<(), String> {
+    validate_proxy_config(&config)?;
+
+    let mode_str = config.mode.as_str().to_string();
+    let url_opt = config.url.clone();
+
+    cache
+        .set_setting("proxy_mode", &mode_str)
+        .map_err(|e| format!("写入系统配置失败: {e}"))?;
+
+    if let Some(ref u) = url_opt {
+        let trimmed = u.trim();
+        if !trimmed.is_empty() {
+            cache
+                .set_setting("proxy_url", trimmed)
+                .map_err(|e| format!("写入系统配置失败: {e}"))?;
+        } else {
+            cache
+                .delete_setting("proxy_url")
+                .map_err(|e| format!("清理系统配置失败: {e}"))?;
+        }
+    } else {
+        cache
+            .delete_setting("proxy_url")
+            .map_err(|e| format!("清理系统配置失败: {e}"))?;
+    }
+
+    pool.reload_proxy().await;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_proxy_config(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<ProxyConfig, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || get_proxy_config_internal(&cache_ref))
+        .await
+        .map_err(|e| format!("读取网络代理配置调度异常: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_proxy_config(
+    config: ProxyConfig,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let pool_ref = pool.inner().clone();
+    let cache_ref = cache.inner().clone();
+    save_proxy_config_internal(config, &pool_ref, &cache_ref).await
 }
 
 #[cfg(test)]
@@ -604,5 +2057,167 @@ mod tests {
         let dto = TranslateErrorDto::from_error(&Error::Input("翻译文本过长".into()));
         assert_eq!(dto.kind, ErrorKind::Input);
         assert!(!dto.retryable);
+    }
+
+    #[tokio::test]
+    async fn test_pairing_commands_approve_and_reject() {
+        let manager = Arc::new(crate::server::pairing::PairingManager::new());
+        let (s1, _) = manager.create_session("client-1".into(), None).await;
+        let (s2, _) = manager.create_session("client-2".into(), None).await;
+
+        // approve 测试
+        assert!(manager.approve(&s1).await);
+        // 重复 approve 应失败
+        assert!(!manager.approve(&s1).await);
+
+        // reject 测试
+        assert!(manager.reject(&s2).await);
+        // 重复 reject 应失败
+        assert!(!manager.reject(&s2).await);
+    }
+
+    #[tokio::test]
+    async fn test_detect_text_language_command() {
+        let res = detect_text_language("你好世界".to_string()).await;
+        assert_eq!(res, Ok(Some("zh-CN".to_string())));
+
+        let res_en = detect_text_language("Hello world".to_string()).await;
+        assert_eq!(res_en, Ok(Some("en".to_string())));
+
+        let res_none = detect_text_language("".to_string()).await;
+        assert_eq!(res_none, Ok(None));
+    }
+
+    #[test]
+    fn test_shortcut_status_slot_transitions() {
+        let slot = ShortcutStatusSlot::default();
+        let initial = slot.get();
+        assert!(initial.ok);
+
+        slot.set_translate_failed("Alt+Shift+D: conflict".to_string());
+        let failed = slot.get();
+        assert!(!failed.ok);
+        assert_eq!(failed.reason.as_deref(), Some("Alt+Shift+D: conflict"));
+
+        // 原地替换注册成功不应冲掉划词快捷键的失败
+        slot.set_replace_ok();
+        let still_failed = slot.get();
+        assert!(!still_failed.ok);
+        assert_eq!(
+            still_failed.reason.as_deref(),
+            Some("Alt+Shift+D: conflict")
+        );
+
+        // 原地替换也失败时应聚合两者的原因
+        slot.set_replace_failed("Alt+Shift+R: conflict".to_string());
+        let both_failed = slot.get();
+        assert!(!both_failed.ok);
+        assert_eq!(
+            both_failed.reason.as_deref(),
+            Some("Alt+Shift+D: conflict; Alt+Shift+R: conflict")
+        );
+
+        // 划词修复后只留原地替换失败
+        slot.set_translate_ok();
+        let replace_only = slot.get();
+        assert!(!replace_only.ok);
+        assert_eq!(
+            replace_only.reason.as_deref(),
+            Some("Alt+Shift+R: conflict")
+        );
+
+        slot.set_ok();
+        let ok = slot.get();
+        assert!(ok.ok);
+        assert_eq!(ok.reason, None);
+    }
+
+    #[test]
+    fn test_save_preferred_replace_engine_validation() {
+        assert!(validate_preferred_replace_engine("invalid_eng").is_err());
+        assert!(validate_preferred_replace_engine("").is_err());
+        assert_eq!(
+            validate_preferred_replace_engine("google"),
+            Ok("google".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("google_web"),
+            Ok("google".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("deepl"),
+            Ok("deepl".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("deepseek"),
+            Ok("deepseek".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("openai"),
+            Ok("openai".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_proxy_config_save_and_get() {
+        let dir =
+            std::env::temp_dir().join(format!("transly-proxy-test-{}", rand::random::<u64>()));
+        let cache = TranslationCache::open_default(&dir);
+        let pool = Arc::new(EnginePool::with_cache(cache.clone()));
+
+        // 默认应为 auto
+        let initial = cache.get_setting("proxy_mode").unwrap();
+        assert_eq!(initial, None);
+
+        // 验证手动代理没有 URL 时被拒绝
+        let invalid_manual = ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: None,
+        };
+        assert!(validate_proxy_config(&invalid_manual).is_err());
+        assert!(save_proxy_config_internal(invalid_manual, &pool, &cache,)
+            .await
+            .is_err());
+
+        // 保存合法手动代理
+        let valid_manual = ProxyConfig {
+            mode: ProxyMode::Manual,
+            url: Some("127.0.0.1:7890".to_string()),
+        };
+        assert!(validate_proxy_config(&valid_manual).is_ok());
+        assert!(save_proxy_config_internal(valid_manual, &pool, &cache,)
+            .await
+            .is_ok());
+
+        assert_eq!(
+            cache.get_setting("proxy_mode").unwrap().as_deref(),
+            Some("manual")
+        );
+        assert_eq!(
+            cache.get_setting("proxy_url").unwrap().as_deref(),
+            Some("127.0.0.1:7890")
+        );
+
+        let retrieved = get_proxy_config_internal(&cache).unwrap();
+        assert_eq!(retrieved.mode, ProxyMode::Manual);
+        assert_eq!(retrieved.url.as_deref(), Some("127.0.0.1:7890"));
+
+        // 切换为 none
+        let none_cfg = ProxyConfig {
+            mode: ProxyMode::None,
+            url: None,
+        };
+        assert!(validate_proxy_config(&none_cfg).is_ok());
+        assert!(save_proxy_config_internal(none_cfg, &pool, &cache,)
+            .await
+            .is_ok());
+
+        assert_eq!(
+            cache.get_setting("proxy_mode").unwrap().as_deref(),
+            Some("none")
+        );
+        assert_eq!(cache.get_setting("proxy_url").unwrap(), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

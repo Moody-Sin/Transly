@@ -17,6 +17,8 @@ use transly_core::{
     Glossary, TranslationCache, TranslationRequest,
 };
 
+pub mod pairing;
+
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
     pub status: &'static str,
@@ -51,6 +53,26 @@ pub struct TranslateBatchResponse {
     pub items: Vec<BatchItemResult>,
 }
 
+#[derive(Deserialize)]
+pub struct PairRequestPayload {
+    pub client_id: String,
+    pub browser_hint: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PairRequestResponse {
+    pub session_id: String,
+    pub expires_in: u64,
+}
+
+#[derive(Deserialize)]
+pub struct PairPollPayload {
+    pub session_id: String,
+    pub client_id: String,
+}
+
+pub type PairingNotifyHook = Arc<dyn Fn(&str, u64, Option<&str>) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ServerState {
     pub token: Arc<RwLock<String>>,
@@ -59,28 +81,57 @@ pub struct ServerState {
     pub glossary: Arc<RwLock<Glossary>>,
     pub concurrency_limit: Arc<tokio::sync::Semaphore>,
     pub cache_controller: Arc<crate::cache_controller::CacheController>,
+    pub pairing_manager: Arc<pairing::PairingManager>,
+    pub pairing_notify_hook: Option<PairingNotifyHook>,
 }
 
-fn is_allowed_origin(origin_str: &str) -> bool {
-    // 1. Chrome 扩展校验：chrome-extension://<32位小写a-p字符扩展ID>
-    if let Some(id) = origin_str.strip_prefix("chrome-extension://") {
-        if id.len() == 32 && id.bytes().all(|c| (b'a'..=b'p').contains(&c)) {
-            return true;
+impl ServerState {
+    pub fn new(
+        token: Arc<RwLock<String>>,
+        pool: Arc<crate::engine_pool::EnginePool>,
+        cache: Arc<TranslationCache>,
+        glossary: Arc<RwLock<Glossary>>,
+        cache_controller: Arc<crate::cache_controller::CacheController>,
+    ) -> Self {
+        Self {
+            token,
+            pool,
+            cache,
+            glossary,
+            concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)),
+            cache_controller,
+            pairing_manager: Arc::new(pairing::PairingManager::new()),
+            pairing_notify_hook: None,
         }
     }
+}
 
-    // 2. Firefox 扩展校验：moz-extension://<标准UUID扩展ID>
+/// 官方受信任的 Chrome 扩展 ID 白名单。
+///
+/// 这些 ID 由 `extension/manifest.json` 中固定的 `"key"`
+/// （RSA-2048 SPKI 公钥，Base64）确定性派生：取 DER 的 SHA-256 前 16 字节，
+/// 每字节高 4 位与低 4 位分别映射到 `a`~`p`。
+///
+/// 为什么必须钉死 ID：仅校验「32 位 a-p 字符」只是**格式**校验，
+/// 任何第三方恶意扩展装上后都能满足该格式，从而跨域调用 `/pair/request`
+/// 弹出配对诱导窗口。CORS 白名单必须做**身份**隔离而非格式隔离。
+pub const ALLOWED_CHROME_EXT_IDS: &[&str] = &["ngfadgochghcplecgmdcjfancoikiihm"];
+
+/// 官方受信任的 Firefox 扩展 ID 白名单。
+///
+/// Firefox 不为临时加载的扩展生成稳定 UUID，因此这里同样只接受显式登记过的 ID，
+/// 不再对任意随机 UUID 放行。
+pub const ALLOWED_FIREFOX_EXT_IDS: &[&str] = &["d4e73b40-7988-4e89-a2e6-81525a74e2d3"];
+
+fn is_allowed_origin(origin_str: &str) -> bool {
+    // 1. Chrome 扩展校验：必须是白名单内的确切扩展 ID（不做格式放行）
+    if let Some(id) = origin_str.strip_prefix("chrome-extension://") {
+        return ALLOWED_CHROME_EXT_IDS.contains(&id);
+    }
+
+    // 2. Firefox 扩展校验：同样只接受白名单内的确切 UUID
     if let Some(id) = origin_str.strip_prefix("moz-extension://") {
-        let bytes = id.as_bytes();
-        if bytes.len() == 36
-            && [8, 13, 18, 23].into_iter().all(|i| bytes[i] == b'-')
-            && bytes
-                .iter()
-                .enumerate()
-                .all(|(i, &c)| [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit())
-        {
-            return true;
-        }
+        return ALLOWED_FIREFOX_EXT_IDS.contains(&id);
     }
 
     // 3. 仅在开发调试环境下允许本地回环端口
@@ -104,10 +155,62 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// 校验 `Authorization: Bearer <token>` 头是否与期望令牌一致。
+/// 校验 `Host` 头是否指向回环地址，用于抵御 DNS Rebinding 攻击。
+///
+/// **CORS 不是服务端访问控制。** 攻击者把域名的 A 记录 TTL 设为 0 指向
+/// `127.0.0.1`（DNS Rebinding）后，`http://evil.com:39281` 与其恶意页面**同源**，
+/// 浏览器不会发送预检、也不会校验 CORS，`is_allowed_origin` 形同虚设。
+/// 此时唯一有效的防线是在服务端独立校验 `Host` 头。
+fn host_header_allowed(host: &str) -> bool {
+    let host = host.trim();
+    let name = match host.strip_prefix('[') {
+        // IPv6 字面量，如 `[::1]:39281` 或 `[::1]`
+        Some(rest) => match rest.split_once(']') {
+            Some((name, tail))
+                if tail.is_empty()
+                    || (tail.starts_with(':')
+                        && !tail[1..].is_empty()
+                        && tail[1..].chars().all(|c| c.is_ascii_digit())) =>
+            {
+                name
+            }
+            _ => "",
+        },
+        None => match host.rsplit_once(':') {
+            // `主机名:端口`：端口必须全为数字，否则整体视为主机名
+            Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+                name
+            }
+            _ => host,
+        },
+    };
+    matches!(name, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// 拒绝任何指向非回环地址的请求。这是抵御 DNS Rebinding 的第一道也是最关键的一道。
+async fn host_guard(request: Request, next: Next) -> Result<Response, StatusCode> {
+    let allowed = request
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(host_header_allowed);
+
+    if allowed {
+        Ok(next.run(request).await)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
 fn bearer_matches(header: Option<&str>, expected: &str) -> bool {
     let Some(val) = header else {
         return false;
     };
+    // 期望令牌为空时必须 fail-closed：`Authorization: Bearer `（空值）
+    // 恰好等于空串会在恒定时间比较中判定为相等，导致鉴权整体失效。
+    if expected.is_empty() {
+        return false;
+    }
     let Some(presented) = val.strip_prefix("Bearer ") else {
         return false;
     };
@@ -121,6 +224,26 @@ pub fn create_router(
     glossary: Arc<RwLock<Glossary>>,
     cache_controller: Arc<crate::cache_controller::CacheController>,
 ) -> Router {
+    create_router_with_pairing(
+        token,
+        cache,
+        pool,
+        glossary,
+        cache_controller,
+        Arc::new(pairing::PairingManager::new()),
+        None,
+    )
+}
+
+pub fn create_router_with_pairing(
+    token: Arc<RwLock<String>>,
+    cache: Arc<TranslationCache>,
+    pool: Arc<crate::engine_pool::EnginePool>,
+    glossary: Arc<RwLock<Glossary>>,
+    cache_controller: Arc<crate::cache_controller::CacheController>,
+    pairing_manager: Arc<pairing::PairingManager>,
+    pairing_notify_hook: Option<PairingNotifyHook>,
+) -> Router {
     let state = ServerState {
         token,
         pool,
@@ -128,6 +251,8 @@ pub fn create_router(
         glossary,
         concurrency_limit: Arc::new(tokio::sync::Semaphore::new(10)), // 限制本地并发处理至多 10 批
         cache_controller,
+        pairing_manager,
+        pairing_notify_hook,
     };
 
     let protected = Router::new()
@@ -157,8 +282,13 @@ pub fn create_router(
 
     Router::new()
         .route("/health", get(health_handler))
+        .route("/pair/request", post(pair_request_handler))
+        .route("/pair/poll", post(pair_poll_handler))
         .merge(protected)
         .layer(cors)
+        // host_guard 必须在 cors 之内（更先执行）：预检与实请求都要先过 Host 校验，
+        // 否则 DNS Rebinding 下同源请求根本不会触发 CORS 分支。
+        .layer(middleware::from_fn(host_guard))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 限制单次 HTTP 请求体最大 2MB
         .with_state(state)
 }
@@ -219,6 +349,42 @@ async fn health_handler() -> Json<StatusResponse> {
 
 async fn verify_token_handler() -> Json<StatusResponse> {
     Json(status_response())
+}
+
+async fn pair_request_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<PairRequestPayload>,
+) -> Result<Json<PairRequestResponse>, StatusCode> {
+    let client_id = payload.client_id.trim();
+    if client_id.is_empty() || client_id.len() > 128 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let (session_id, expires_in) = state
+        .pairing_manager
+        .create_session(client_id.to_string(), payload.browser_hint.clone())
+        .await;
+
+    // 若注册了事件钩子（如 Tauri AppHandle），立即广播通知前端（携带服务端权威 expires_in）
+    if let Some(ref hook) = state.pairing_notify_hook {
+        hook(&session_id, expires_in, payload.browser_hint.as_deref());
+    }
+
+    Ok(Json(PairRequestResponse {
+        session_id,
+        expires_in,
+    }))
+}
+
+async fn pair_poll_handler(
+    State(state): State<ServerState>,
+    Json(payload): Json<PairPollPayload>,
+) -> Result<Json<pairing::PairingPollResult>, StatusCode> {
+    let current_token = state.token.read().await;
+    let res = state
+        .pairing_manager
+        .poll_session(&payload.session_id, &payload.client_id, &current_token)
+        .await;
+    Ok(Json(res))
 }
 
 fn status_response() -> StatusResponse {
@@ -301,7 +467,7 @@ async fn translate_batch_handler(
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
-    // 1. 若开启缓存，优先查缓存（先查当前引擎，若具备 fallback 且未命中，允许命中降级引擎历史缓存）
+    // 1. 若开启缓存，优先查缓存（结合 L1 内存与 L2 批量 SQL，单次完成整批带 Fallback 查询）
     if cache_enabled {
         let cached_items = {
             let cache_ref = state.cache.clone();
@@ -310,18 +476,13 @@ async fn translate_batch_handler(
             let s = source.clone();
             let t = target.clone();
             tokio::task::spawn_blocking(move || {
-                let mut matches = Vec::with_capacity(items.len());
-                for item in &items {
-                    let hit = transly_core::lookup_cache_with_fallback(
-                        cache_ref.as_ref(),
-                        engine_ref.as_ref(),
-                        &item.text,
-                        &s,
-                        &t,
-                    );
-                    matches.push(hit);
-                }
-                matches
+                transly_core::lookup_batch_with_fallback(
+                    cache_ref.as_ref(),
+                    engine_ref.as_ref(),
+                    &items,
+                    &s,
+                    &t,
+                )
             })
             .await
             .unwrap_or_else(|_| vec![None; unified_items.len()])
@@ -355,51 +516,70 @@ async fn translate_batch_handler(
         }
     }
 
-    // 2. 对未命中缓存的项发起批量引擎翻译并写回缓存
+    // 2. 对未命中缓存的项发起容错批量引擎翻译并写回缓存
     if !missing_requests.is_empty() {
-        match active_engine.translate_batch(&missing_requests).await {
-            Ok(results) => {
-                // 安全防范：验证引擎返回条数与请求条数完全一致
-                if results.len() != missing_requests.len() {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-                for (req_idx, res) in results.into_iter().enumerate() {
-                    let original_idx = missing_indices[req_idx];
-                    let original_item = &unified_items[original_idx];
-                    // 写回时通过同一同步门禁 set_if_current 校验版本并执行写入
-                    let actual_engine = res.actual_engine();
-                    if let Err(e) = state.cache_controller.set_if_current(start_generation, || {
-                        state.cache.set(
-                            &original_item.text,
-                            &res.text,
-                            &source,
-                            &target,
-                            actual_engine,
-                        )
-                    }) {
-                        eprintln!("[Cache Write Warning] 扩展批量翻译缓存写入失败: {e}");
-                    }
+        let results = active_engine
+            .translate_batch_tolerant(&missing_requests)
+            .await;
+        // 安全防范：验证引擎返回条数与请求条数完全一致
+        if results.len() != missing_requests.len() {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        // 构造批量写入项，通过单次事务批量写入缓存，避免循环频繁加锁与隐式事务开销
+        let mut batch_cache_entries = Vec::with_capacity(results.len());
+        for (req_idx, item_res) in results.into_iter().enumerate() {
+            let original_idx = missing_indices[req_idx];
+            let original_item = &unified_items[original_idx];
+
+            match item_res {
+                Ok(res) => {
+                    let actual_engine = res.actual_engine().to_string();
                     item_results[original_idx] = Some(BatchItemResult::Success {
                         id: original_item.id.clone(),
-                        text: res.text,
+                        text: res.text.clone(),
                         detected_source_lang: res.detected_source_lang,
                         engine: res.engine,
                     });
+
+                    batch_cache_entries.push((original_item.text.clone(), res.text, actual_engine));
                 }
-            }
-            Err(e) => {
-                // 逐项标记失败，支持部分失败结构化反馈
-                let kind = e.kind();
-                let msg = e.to_string();
-                for &orig_idx in &missing_indices {
-                    let original_item = &unified_items[orig_idx];
-                    item_results[orig_idx] = Some(BatchItemResult::Failed {
+                Err(e) => {
+                    item_results[original_idx] = Some(BatchItemResult::Failed {
                         id: original_item.id.clone(),
-                        error_kind: kind,
-                        message: msg.clone(),
+                        error_kind: e.kind(),
+                        message: e.to_string(),
                     });
                 }
             }
+        }
+
+        // 写回时通过同一同步门禁 set_if_current 校验版本并执行事务批量写入成功项
+        if !batch_cache_entries.is_empty() {
+            // 同步门禁 + SQLite 写必须下沉到阻塞线程池，否则单批最长可占用
+            // 一个 tokio worker 5 秒（连接 busy_timeout），且会拖住全局串行门禁。
+            let entries = batch_cache_entries.clone();
+            let source = source.clone();
+            let target = target.clone();
+            let controller = Arc::clone(&state.cache_controller);
+            let cache = Arc::clone(&state.cache);
+            crate::cache_controller::write_cache_offloaded(
+                controller,
+                start_generation,
+                move || {
+                    let rows = entries.iter().map(|(txt, trans, eng)| {
+                        (
+                            txt.as_str(),
+                            trans.as_str(),
+                            source.as_str(),
+                            target.as_str(),
+                            eng.as_str(),
+                        )
+                    });
+                    cache.set_batch(rows)
+                },
+            )
+            .await;
         }
     }
 
@@ -438,6 +618,7 @@ async fn translate_batch_handler(
 /// 拆成 bind 与 serve 两段，`on_listening` 在端口已成功绑定后触发：
 /// `axum::serve` 正常只在出错时返回，若等服务返回再上报状态，
 /// 成功路径永远停在“启动中”。
+#[allow(clippy::too_many_arguments)]
 pub async fn start_server(
     port: u16,
     token: Arc<RwLock<String>>,
@@ -445,6 +626,8 @@ pub async fn start_server(
     pool: Arc<crate::engine_pool::EnginePool>,
     glossary: Arc<RwLock<Glossary>>,
     cache_controller: Arc<crate::cache_controller::CacheController>,
+    pairing_manager: Arc<pairing::PairingManager>,
+    pairing_notify_hook: Option<PairingNotifyHook>,
     on_listening: impl FnOnce(),
 ) -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -452,7 +635,15 @@ pub async fn start_server(
     on_listening();
     axum::serve(
         listener,
-        create_router(token, cache, pool, glossary, cache_controller),
+        create_router_with_pairing(
+            token,
+            cache,
+            pool,
+            glossary,
+            cache_controller,
+            pairing_manager,
+            pairing_notify_hook,
+        ),
     )
     .await?;
     Ok(())

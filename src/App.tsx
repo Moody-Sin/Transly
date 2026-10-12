@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Languages,
   ArrowRight,
@@ -47,9 +47,7 @@ const PAIRING_DIALOG_TITLE_ID = 'transly-pairing-dialog-title'
 const OCR_DIALOG_TITLE_ID = 'transly-ocr-dialog-title'
 const OCR_DIALOG_DESC_ID = 'transly-ocr-dialog-desc'
 
-type CompareItem = { engine: string; text: string; loading: boolean; error: string | null }
-
-/** 引擎清单：单引擎下拉与多引擎对比共用同一数据源，杜绝两处硬编码漂移。 */
+/** 引擎清单 */
 const ENGINE_OPTIONS = [
   { id: 'google', labelKey: 'engineGoogle' },
   { id: 'deepl', labelKey: 'engineDeepl' },
@@ -106,10 +104,6 @@ export default function App() {
   const [proxyMode, setProxyMode] = useState<ProxyMode>('auto')
   const [proxyUrl, setProxyUrl] = useState('')
   const [proxySaving, setProxySaving] = useState(false)
-  const [isCompareMode, setIsCompareMode] = useState(false)
-  const [compareResults, setCompareResults] = useState<CompareItem[]>([])
-  const compareGenRef = useRef(0)
-  const compareDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 瞬时错误提示：saveStatus 只在设置面板内渲染，主窗口的复制失败无处可显示
   const [toastError, setToastError] = useState<string | null>(null)
@@ -122,74 +116,6 @@ export default function App() {
       setToastError(null)
     }, 3000)
   }
-
-  const triggerCompareTranslate = useCallback(
-    (textToTranslate: string) => {
-      const trimmed = textToTranslate.trim()
-      if (!trimmed) {
-        setCompareResults([])
-        return
-      }
-      const activeGen = ++compareGenRef.current
-      setCompareResults(
-        ENGINE_OPTIONS.map(({ id }) => ({ engine: id, text: '', loading: true, error: null })),
-      )
-      ENGINE_OPTIONS.forEach(({ id: engName }) => {
-        commands
-          .translate(trimmed, 'auto', targetLang, engName)
-          .then((res) => {
-            if (compareGenRef.current !== activeGen) return
-            if (res.status === 'ok') {
-              setCompareResults((prev) =>
-                prev.map((item) =>
-                  item.engine === engName ? { ...item, text: res.data.text, loading: false } : item,
-                ),
-              )
-            } else {
-              setCompareResults((prev) =>
-                prev.map((item) =>
-                  item.engine === engName
-                    ? {
-                        ...item,
-                        error: t.error[res.error.kind] || res.error.message,
-                        loading: false,
-                      }
-                    : item,
-                ),
-              )
-            }
-          })
-          .catch((err) => {
-            if (compareGenRef.current !== activeGen) return
-            setCompareResults((prev) =>
-              prev.map((item) =>
-                item.engine === engName ? { ...item, error: String(err), loading: false } : item,
-              ),
-            )
-          })
-      })
-    },
-    [targetLang, t.error],
-  )
-
-  /**
-   * 多引擎对比的统一取消入口：作废在途代际 + 清掉待触发的防抖 + 复位 loading。
-   * 任一入口漏掉其中一步，都可能让对比面板永久停在「翻译中」并让按钮被永久禁用。
-   */
-  const cancelCompare = useCallback(() => {
-    if (compareDebounceRef.current) {
-      clearTimeout(compareDebounceRef.current)
-      compareDebounceRef.current = null
-    }
-    compareGenRef.current += 1
-    setCompareResults([])
-  }, [])
-
-  const compareByEngine = useMemo(() => {
-    const map: Record<string, CompareItem | undefined> = {}
-    for (const item of compareResults) map[item.engine] = item
-    return map
-  }, [compareResults])
 
   // localStorage 属不可信输入：历史遗留或被改写的值会让主题/风格下拉与说明文案整块空白
   const [theme, setTheme] = useState<ThemePreference>(() =>
@@ -243,8 +169,7 @@ export default function App() {
   // 四类入口（输入框 / 划词 / 剪贴板 / 浮窗）共用同一任务状态机
   const runner = useTaskRunner(engine, targetLang)
   const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
-  const isComparing = isCompareMode && compareResults.some((r) => r.loading)
-  const isTranslating = isCompareMode ? isComparing : state === 'running'
+  const isTranslating = state === 'running'
 
   // 默认 Google 引擎在部分网络（如中国大陆）不可达：
   // 命中网络类错误时必须给出可执行的替代方案，而不是只报「检查网络」
@@ -597,7 +522,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    // 引擎能力与配置检查：展示批量上限、降级标记与密钥配置状态
+    // 引擎能力与配置检查：展示批量上限与密钥配置状态
     let cancelled = false
     commands
       .getEngineCapabilities(engine)
@@ -870,7 +795,6 @@ export default function App() {
   const handleClearSource = () => {
     setSourceText('')
     runner.reset()
-    cancelCompare()
   }
 
   const handleCopy = () => {
@@ -1023,54 +947,20 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2">
-                <div className="flex items-center rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 p-0.5 text-xs">
-                  <button
-                    onClick={() => {
-                      setIsCompareMode(false)
-                      // 必须一并作废对比代际：清空文本后切回单引擎、再切回对比，
-                      // 会看到上一次遗留的 loading:true，翻译按钮被永久禁用
-                      cancelCompare()
-                      if (sourceText.trim()) {
-                        runner.run(sourceText, { source: 'input', debounceMs: 0 })
-                      }
-                    }}
-                    className={`rounded px-2 py-0.5 ${!isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
-                  >
-                    {t.translation.modeSingle}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setIsCompareMode(true)
-                      runner.cancel()
-                      if (sourceText.trim()) {
-                        triggerCompareTranslate(sourceText)
-                      } else {
-                        cancelCompare()
-                      }
-                    }}
-                    className={`rounded px-2 py-0.5 ${isCompareMode ? 'bg-indigo-600 text-white font-medium' : 'text-slate-600 dark:text-slate-300'}`}
-                  >
-                    {t.translation.modeCompare}
-                  </button>
-                </div>
-                {!isCompareMode && (
-                  <>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
-                      {t.translation.engineSelect}:
-                    </span>
-                    <select
-                      value={engine}
-                      onChange={(e) => setEngine(e.target.value)}
-                      className="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 shadow-sm focus:border-indigo-500 focus:outline-none cursor-pointer"
-                    >
-                      {ENGINE_OPTIONS.map(({ id, labelKey }) => (
-                        <option key={id} value={id}>
-                          {t.translation[labelKey]}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                )}
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {t.translation.engineSelect}:
+                </span>
+                <select
+                  value={engine}
+                  onChange={(e) => setEngine(e.target.value)}
+                  className="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 shadow-sm focus:border-indigo-500 focus:outline-none cursor-pointer"
+                >
+                  {ENGINE_OPTIONS.map(({ id, labelKey }) => (
+                    <option key={id} value={id}>
+                      {t.translation[labelKey]}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {capabilities && (
@@ -1090,21 +980,8 @@ export default function App() {
                   onChange={(e) => {
                     const v = e.target.value
                     setSourceText(v)
-                    if (isCompareMode) {
-                      // 键盘清空必须与「清空内容」按钮走同一条路径，
-                      // 否则残留的 loading:true 会让翻译按钮永久禁用
-                      if (!v.trim()) {
-                        cancelCompare()
-                        return
-                      }
-                      if (compareDebounceRef.current) clearTimeout(compareDebounceRef.current)
-                      compareDebounceRef.current = setTimeout(() => {
-                        triggerCompareTranslate(v)
-                      }, 500)
-                    } else {
-                      // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
-                      runner.run(v, { source: 'input', debounceMs: 500 })
-                    }
+                    // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
+                    runner.run(v, { source: 'input', debounceMs: 500 })
                   }}
                   placeholder={t.translation.inputPlaceholder}
                   className="flex-1 resize-none bg-transparent text-sm text-slate-800 dark:text-slate-100 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"
@@ -1172,31 +1049,14 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     {isTranslating && (
                       <button
-                        onClick={() => {
-                          if (isCompareMode) {
-                            compareGenRef.current += 1
-                            setCompareResults((prev) =>
-                              prev.map((item) =>
-                                item.loading ? { ...item, loading: false } : item,
-                              ),
-                            )
-                          } else {
-                            runner.cancel()
-                          }
-                        }}
+                        onClick={runner.cancel}
                         className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                       >
                         {t.task.btnCancel}
                       </button>
                     )}
                     <button
-                      onClick={() => {
-                        if (isCompareMode) {
-                          triggerCompareTranslate(sourceText)
-                        } else {
-                          runner.run(sourceText, { source: 'input' })
-                        }
-                      }}
+                      onClick={() => runner.run(sourceText, { source: 'input' })}
                       disabled={isTranslating || !sourceText.trim()}
                       className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
                     >
@@ -1206,115 +1066,53 @@ export default function App() {
                 </div>
               </div>
 
-              {!isCompareMode ? (
-                <div className="flex flex-col rounded-lg border border-slate-200 bg-white dark:bg-slate-900 p-3 shadow-sm">
-                  <div className="flex-1 overflow-auto text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap">
-                    {translatedText ? (
-                      <span>
-                        {translatedText}
-                        {isTranslating && (
-                          <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-500 animate-pulse align-middle" />
-                        )}
-                      </span>
-                    ) : isTranslating ? (
-                      <span className="text-slate-400 flex items-center gap-1.5">
-                        <span className="inline-block w-1.5 h-3.5 bg-indigo-500 animate-pulse" />
-                        {t.translation.translating}
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
-                    )}
-                  </div>
-                  <div className="mt-2 flex items-center justify-between">
-                    {usedEngine && (
-                      <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
-                    )}
-                    {translatedText && (
-                      <div className="flex items-center gap-1.5 justify-end">
-                        <button
-                          onClick={() => handleSpeak(translatedText, targetLang)}
-                          className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                          title={t.translation.speak}
-                        >
-                          <Volume2 className="h-3.5 w-3.5" />
-                          <span>{t.translation.speak}</span>
-                        </button>
-                        <button
-                          onClick={handleCopy}
-                          className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                        >
-                          {copied ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-600" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
-                          <span>{copied ? t.translation.copied : t.translation.copy}</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
+              <div className="flex flex-col rounded-lg border border-slate-200 bg-white dark:bg-slate-900 p-3 shadow-sm">
+                <div className="flex-1 overflow-auto text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap">
+                  {translatedText ? (
+                    <span>
+                      {translatedText}
+                      {isTranslating && (
+                        <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-500 animate-pulse align-middle" />
+                      )}
+                    </span>
+                  ) : isTranslating ? (
+                    <span className="text-slate-400 flex items-center gap-1.5">
+                      <span className="inline-block w-1.5 h-3.5 bg-indigo-500 animate-pulse" />
+                      {t.translation.translating}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">{t.translation.outputPlaceholder}</span>
+                  )}
                 </div>
-              ) : (
-                <div className="flex flex-col gap-2 overflow-y-auto">
-                  {ENGINE_OPTIONS.map(({ id: engName }) => {
-                    const item = compareByEngine[engName]
-                    return (
-                      <div
-                        key={engName}
-                        className="flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 shadow-sm"
+                <div className="mt-2 flex items-center justify-between">
+                  {usedEngine && (
+                    <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
+                  )}
+                  {translatedText && (
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <button
+                        onClick={() => handleSpeak(translatedText, targetLang)}
+                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                        title={t.translation.speak}
                       >
-                        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1 mb-1.5">
-                          <span className="text-[11px] font-semibold uppercase text-indigo-600 dark:text-indigo-400">
-                            {engName}
-                          </span>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => {
-                                if (item?.text) handleSpeak(item.text, targetLang)
-                              }}
-                              className="p-1 text-slate-400 hover:text-slate-600"
-                              title={t.translation.speak}
-                            >
-                              <Volume2 className="h-3 w-3" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (!item?.text) return
-                                navigator.clipboard.writeText(item.text).catch((e: unknown) => {
-                                  showToastError(
-                                    e instanceof Error && e.message
-                                      ? e.message
-                                      : t.translation.copyFailed,
-                                  )
-                                })
-                              }}
-                              className="p-1 text-slate-400 hover:text-slate-600"
-                              title={t.translation.copy}
-                            >
-                              <Copy className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </div>
-                        <div className="text-xs text-slate-700 dark:text-slate-200 min-h-[40px]">
-                          {item?.loading ? (
-                            <span className="text-slate-400 animate-pulse">
-                              {t.translation.translating}
-                            </span>
-                          ) : item?.error ? (
-                            <span className="text-rose-500">{item.error}</span>
-                          ) : (
-                            item?.text || (
-                              <span className="text-slate-400">
-                                {t.translation.outputPlaceholder}
-                              </span>
-                            )
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
+                        <Volume2 className="h-3.5 w-3.5" />
+                        <span>{t.translation.speak}</span>
+                      </button>
+                      <button
+                        onClick={handleCopy}
+                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                      >
+                        {copied ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                        <span>{copied ? t.translation.copied : t.translation.copy}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </>
         )}

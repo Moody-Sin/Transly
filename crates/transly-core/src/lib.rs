@@ -15,8 +15,8 @@ pub use config::AppConfig;
 pub use detector::{detect_language, resolve_smart_target_lang};
 pub use engine::{
     lookup_batch_with_fallback, lookup_cache_with_fallback, plan_batch_ranges, BatchItemRequest,
-    BatchItemResult, DeepLEngine, EngineCapabilities, FallbackEngine, GoogleWebEngine,
-    OpenAIEngine, TranslateEngine, TranslationRequest, TranslationResponse, MAX_BATCH_ITEMS,
+    BatchItemResult, DeepLEngine, EngineCapabilities, GoogleWebEngine, OpenAIEngine,
+    TranslateEngine, TranslationRequest, TranslationResponse, MAX_BATCH_ITEMS,
     MAX_BATCH_TOTAL_CHARS, MAX_ITEM_CHARS,
 };
 pub use error::{Error, ErrorKind, Result};

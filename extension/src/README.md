@@ -15,12 +15,15 @@
 
 ## 上下文划分
 
-- **background/index.ts**：Service Worker。转发翻译请求到本地 HTTP 服务、维护每 Tab 的进度快照、驱动工具栏徽标（Badge）。
-- **content/index.ts**：Content Script。整页文本节点收集、批量打包、原地 DOM 替换与还原、`MutationObserver` 动态增量监听。持有任务代际 `currentGeneration`。
-- **selection/index.ts**：Content Script（按需注入）。右键菜单划词翻译气泡：Shadow DOM 渲染译文、复制与关闭，持有气泡代际 `bubbleGeneration`。
-- **popup/index.ts**：Popup UI 逻辑。连接探测、Token 配对、引擎/语言选择、进度回显与操作按钮。
-- **shared/batchPlan.ts**：批量切批规划（纯函数，与 Rust 侧 `plan_batch_ranges` 语义一致），附 `node:test` 单测（由根 `pnpm run test:task` 执行）。
-- **i18n/index.ts**：`chrome.i18n` 文案查询封装与静态节点注入（`data-i18n` / `data-i18n-placeholder` / `data-i18n-title`）。
+- **background/index.ts**：Service Worker。负责与本地 HTTP 服务通信（端口自适应）、维护每 Tab 的翻译进度快照、自动重试与驱动工具栏徽标（Badge）。
+- **content/index.ts**：Content Script。整页文本节点收集（流式 TreeWalker 与视口优先切批）、原地 DOM 替换与一键还原、`MutationObserver` 动态增量监听与悬停查看原文 Tooltip。持有任务代际 `currentGeneration`。
+- **selection/index.ts**：Content Script（按需注入）。划词微型悬浮图标与只读译文气泡（均渲染在封闭式 Shadow DOM 中），支持一键复制与快捷关闭，持有气泡代际 `bubbleGeneration`。
+- **popup/index.ts**：Popup UI 逻辑。连接探测、一键自动安全握手配对、引擎/语言选择、双语对照模式切换、站点自动翻译记忆与操作反馈。
+- **shared/**：跨入口共享纯逻辑模块，附带 `node:test` 单测：
+  - `batchPlan.ts`：批量切批规划（按项数与字符总量双上限切批，与 Rust 侧 `plan_batch_ranges` 严格对齐）。
+  - `domTraversal.ts`：DOM 遍历与开放模式 Shadow DOM 递归穿透、节点类型守卫。
+  - `richText.ts`：富文本段落行内标签保真聚合、占位保护与拓扑还原。
+- **i18n/index.ts**：`chrome.i18n` 文案查询封装与静态节点国际化属性注入（`data-i18n` / `data-i18n-placeholder` / `data-i18n-title`）。
 
 ## 消息契约
 

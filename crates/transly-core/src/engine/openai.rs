@@ -397,7 +397,6 @@ impl TranslateEngine for OpenAIEngine {
             supports_batch: true,
             requires_api_key: !Self::is_local_endpoint(&self.base_url),
             supports_streaming: true,
-            fallback_engine: None,
         }
     }
 

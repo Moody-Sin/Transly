@@ -142,7 +142,6 @@ impl TranslateEngine for DeepLEngine {
             supports_batch: true,
             requires_api_key: true,
             supports_streaming: false,
-            fallback_engine: None,
         }
     }
 

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use transly_core::{
-    DeepLEngine, FallbackEngine, GoogleWebEngine, OpenAIEngine, ProxyConfig, ProxyMode,
-    TranslateEngine, TranslationCache,
+    DeepLEngine, GoogleWebEngine, OpenAIEngine, ProxyConfig, ProxyMode, TranslateEngine,
+    TranslationCache,
 };
 
 pub type SecretGetter = Arc<dyn Fn(&str) -> anyhow::Result<String> + Send + Sync>;
@@ -13,7 +13,6 @@ pub type SecretGetter = Arc<dyn Fn(&str) -> anyhow::Result<String> + Send + Sync
 pub struct EnginePool {
     default_engine: Arc<std::sync::RwLock<Arc<dyn TranslateEngine>>>,
     cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
-    raw_cache: Arc<RwLock<HashMap<String, Arc<dyn TranslateEngine>>>>,
     secret_getter: Option<SecretGetter>,
     app_cache: Option<Arc<TranslationCache>>,
     is_custom_default: bool,
@@ -47,7 +46,6 @@ impl EnginePool {
         Self {
             default_engine: Arc::new(std::sync::RwLock::new(google)),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
             app_cache: None,
             is_custom_default: false,
@@ -61,7 +59,6 @@ impl EnginePool {
         Self {
             default_engine: Arc::new(std::sync::RwLock::new(google)),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
             app_cache: Some(app_cache),
             is_custom_default: false,
@@ -76,7 +73,6 @@ impl EnginePool {
         Self {
             default_engine: Arc::new(std::sync::RwLock::new(google)),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: Some(getter),
             app_cache: None,
             is_custom_default: false,
@@ -88,7 +84,6 @@ impl EnginePool {
         Self {
             default_engine: Arc::new(std::sync::RwLock::new(default_engine)),
             cache: Arc::new(RwLock::new(HashMap::new())),
-            raw_cache: Arc::new(RwLock::new(HashMap::new())),
             secret_getter: None,
             app_cache: None,
             is_custom_default: true,
@@ -102,32 +97,12 @@ impl EnginePool {
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
     }
 
-    /// 获取不带 Fallback 降级包装的原生引擎实例。
+    /// 获取不带包装的原生引擎实例（直接等同于 get_engine）
     pub async fn get_raw_engine(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
-        let id_clean = engine_id.trim().to_lowercase();
-        if id_clean.is_empty() || id_clean == "google" || id_clean == "google_web" {
-            return self.default_engine();
-        }
-
-        {
-            let map = self.raw_cache.read().await;
-            if let Some(engine) = map.get(&id_clean) {
-                return engine.clone();
-            }
-        }
-
-        let created = self.create_raw_engine_blocking(&id_clean).await;
-
-        let mut map = self.raw_cache.write().await;
-        if let Some(engine) = map.get(&id_clean) {
-            return engine.clone();
-        }
-
-        map.insert(id_clean, created.clone());
-        created
+        self.get_engine(engine_id).await
     }
 
-    /// 获取或按需复用创建引擎实例（已配置 Fallback 降级）
+    /// 获取或按需复用创建引擎实例（直出原生引擎，不执行自动降级）
     pub async fn get_engine(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
         let id_clean = engine_id.trim().to_lowercase();
         if id_clean.is_empty() || id_clean == "google" || id_clean == "google_web" {
@@ -143,7 +118,7 @@ impl EnginePool {
         }
 
         // 2. 先在锁外安全执行阻塞凭据读取和引擎构建
-        let created = self.create_engine_blocking(&id_clean).await;
+        let created = self.create_raw_engine_blocking(&id_clean).await;
 
         // 3. 获取写锁写入缓存（双重校验，杜绝重复写入覆盖）
         let mut map = self.cache.write().await;
@@ -243,16 +218,6 @@ impl EnginePool {
         .unwrap_or_else(|_| self.default_engine())
     }
 
-    async fn create_engine_blocking(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
-        let raw = self.get_raw_engine(engine_id).await;
-        let id_clean = engine_id.trim().to_lowercase();
-        if id_clean == "deepl" || id_clean == "openai" || id_clean == "deepseek" {
-            Arc::new(FallbackEngine::new(raw, self.default_engine()))
-        } else {
-            raw
-        }
-    }
-
     /// 代理配置发生变更时，重新加载代理策略并重置全部引擎连接池缓存
     pub async fn reload_proxy(&self) {
         if !self.is_custom_default {
@@ -264,8 +229,6 @@ impl EnginePool {
         }
         let mut map = self.cache.write().await;
         map.clear();
-        let mut raw_map = self.raw_cache.write().await;
-        raw_map.clear();
     }
 
     /// 密钥更新或删除时，使对应引擎缓存失效。
@@ -273,8 +236,6 @@ impl EnginePool {
         let id = engine_id.trim().to_lowercase();
         let mut map = self.cache.write().await;
         map.remove(&id);
-        let mut raw_map = self.raw_cache.write().await;
-        raw_map.remove(&id);
     }
 }
 
@@ -326,16 +287,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_get_raw_engine_isolation_and_fallback_contrast() {
+    async fn test_get_engine_returns_direct_engine() {
         let pool = EnginePool::new();
-        let fallback_wrapped = pool.get_engine("deepl").await;
-        assert_eq!(
-            fallback_wrapped.capabilities().fallback_engine,
-            Some("google_web".to_string())
-        );
+        let engine = pool.get_engine("deepl").await;
+        assert_eq!(engine.id(), "deepl");
+        assert_eq!(engine.capabilities().name, "DeepL");
 
         let raw_engine = pool.get_raw_engine("deepl").await;
-        assert_eq!(raw_engine.capabilities().fallback_engine, None);
+        assert_eq!(raw_engine.id(), "deepl");
     }
 
     #[tokio::test]

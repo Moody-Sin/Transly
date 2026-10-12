@@ -99,8 +99,13 @@ transly/
 │       │   ├── lib.rs
 │       │   ├── engine/        # 翻译引擎抽象与实现 (DeepL, OpenAI, Google...)
 │       │   ├── ocr/           # OCR 辅助运算与 DTO
-│       │   ├── cache.rs       # SQLite 缓存管理
-│       │   ├── glossary.rs    # 术语库
+│       │   ├── cache.rs       # SQLite 缓存与全量历史流式导出
+│       │   ├── detector.rs    # Unicode 脚本离线语言检测与智能对转
+│       │   ├── preserve.rs    # Markdown 代码块占位保护与容错还原
+│       │   ├── proxy.rs       # 代理模式与配置模型契约
+│       │   ├── task.rs        # 批量上限与切批容量契约常量
+│       │   ├── validation.rs  # 语言代码与引擎标识校验
+│       │   ├── glossary.rs    # 术语库 (Aho-Corasick 流式自动机)
 │       │   ├── config.rs      # 配置模型
 │       │   └── error.rs
 │       └── Cargo.toml
@@ -110,40 +115,48 @@ transly/
 │   │   ├── main.rs            # 应用入口：状态挂载、托盘、快捷键、剪贴板监听任务
 │   │   ├── lib.rs             # 模块声明与 app_command_builder! 命令注册宏
 │   │   ├── commands/          # Tauri command 入口（薄层）
-│   │   ├── server/            # 本地 HTTP 服务（供浏览器插件调用）+ tests.rs
-│   │   ├── engine_pool.rs     # 引擎实例池（读写锁 + spawn_blocking 凭据读取）
+│   │   ├── server/            # 本地 HTTP 服务（供浏览器插件调用）+ 握手配对 + tests.rs
+│   │   ├── engine_pool.rs     # 引擎实例池（读写锁 + spawn_blocking 凭据读取 + 代理热重载）
 │   │   ├── cache_controller.rs# 缓存开关 generation 门禁
 │   │   ├── clipboard_gate.rs  # 剪贴板去重与划词抑制判定（纯函数）
 │   │   ├── ocr.rs             # 平台原生 OCR（Windows WinRT，其余平台返回未支持）
-│   │   ├── storage.rs         # 应用数据目录解析与旧版数据迁移
+│   │   ├── proxy.rs           # Windows 注册表原生系统代理探测与自动/手动网络代理策略转换
+│   │   ├── storage.rs         # 应用数据目录解析（便携版支持）与旧版数据迁移
 │   │   └── secrets.rs         # 密钥读写（系统凭据管理器）
 │   ├── capabilities/          # Tauri 2 ACL 能力声明（前端插件命令最小放行白名单）
 │   ├── bin/export_bindings.rs # 导出 tauri-specta 强类型绑定
+│   ├── bin/transly_test_server.rs # E2E 测试轻量后端服务
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 │
 ├── src/                       # 桌面端前端 (React + TS)
-│   ├── App.tsx                # 主窗口与浮窗（#float）视图、设置中心
+│   ├── main.tsx               # 根入口路由分流（主窗口与 FloatWindow 分流）
+│   ├── App.tsx                # 桌面端主工作台视图、设置中心
+│   ├── FloatWindow.tsx        # 悬浮迷你查词窗独立组件（路由级解耦）
+│   ├── HistoryPanel.tsx       # 翻译历史记录面板与全量流式导出
+│   ├── ShortcutRecorder.tsx   # 全局快捷键智能录制器
 │   ├── task/                  # 共享任务状态机、代际隔离、useTaskRunner 钩子
-│   ├── i18n/                  # zh-CN.json / en.json
+│   ├── i18n/                  # zh-CN.json / en.json 国际化文案
+│   ├── utils/                 # 前端通用辅助工具（如 Web Speech 规范化）
 │   └── bindings.ts            # tauri-specta 自动生成的类型与 API
 │
 ├── extension/                 # 浏览器插件 (Vite + 原生 TypeScript)
 │   ├── src/
-│   │   ├── background/        # 后台通信（负责与桌面端 127.0.0.1 HTTP 通信）
-│   │   ├── content/           # 页面 DOM 原地提取与替换（含 Shadow DOM 穿透）
-│   │   ├── selection/         # 划词气泡与选区悬浮图标
-│   │   ├── shared/            # 跨入口共享纯函数（切批规划、富文本、DOM 遍历）
+│   │   ├── background/        # 后台通信（端口自适应、服务代理、徽标驱动）
+│   │   ├── content/           # 页面 DOM 原地提取与替换（视口优先切批、Shadow DOM 穿透）
+│   │   ├── selection/         # 划词气泡与选区悬浮微型图标（封闭 Shadow DOM）
+│   │   ├── shared/            # 跨入口共享纯函数（切批规划、富文本保真、DOM 遍历）
 │   │   ├── i18n/              # chrome.i18n 查询封装与静态文案注入
-│   │   └── popup/             # 插件工具栏弹窗 UI
+│   │   └── popup/             # 插件工具栏弹窗 UI（一键配对、双语对照、站点记忆）
 │   ├── scripts/               # 构建脚本（Chrome 产物 / Firefox 适配产物）
 │   ├── _locales/              # Chrome 原生 i18n 文案（zh_CN / en）
 │   ├── manifest.json
 │   └── package.json
 │
+├── scripts/                   # 项目级端到端测试与质量验证脚本
 ├── docs/                      # 架构决策与跨端边界说明（索引见 docs/README.md）
 │
-├── .github/workflows/         # CI
+├── .github/workflows/         # CI 与 Release 流水线
 ├── lefthook.yml               # 本地 Git 提交钩子
 └── Cargo.toml                 # Workspace 根配置
 ```
@@ -162,7 +175,7 @@ transly/
 
 ### 翻译引擎
 - 可插拔设计，每个引擎实现统一 `TranslateEngine` trait
-- 支持引擎降级（主引擎失败自动切换备用，由 `FallbackEngine` 实现）
+- 独立调用与严格报错：移除隐式自动降级，各引擎错误真实直接暴露，杜绝静默篡改
 - 多引擎聚合 / 对比为待评估方向，当前未实现
 
 ### 缓存策略

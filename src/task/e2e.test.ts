@@ -88,23 +88,6 @@ test('E2E: 浏览器扩展双语对照模式与原文节点完全隔离', () => 
   assert.equal(mockNode.nodeValue, 'Original Text to Translate')
 })
 
-test('E2E: 多引擎对比翻译 (Google / DeepL / DeepSeek) 响应聚合与容灾隔离', async () => {
-  // 模拟三引擎并发调用结果
-  const mockCalls = [
-    Promise.resolve({ status: 'ok', data: { text: 'Google译文', engine: 'google' } }),
-    Promise.resolve({ status: 'ok', data: { text: 'DeepL译文', engine: 'deepl' } }),
-    Promise.reject(new Error('DeepSeek API限流')),
-  ]
-
-  const results = await Promise.allSettled(mockCalls)
-  assert.equal(results.length, 3)
-
-  // 验证 Google 与 DeepL 正常返回，DeepSeek 失败隔离不影响前两者
-  assert.equal(results[0].status, 'fulfilled')
-  assert.equal(results[1].status, 'fulfilled')
-  assert.equal(results[2].status, 'rejected')
-})
-
 test('E2E: 富文本段落闭合占位聚合 -> 批量翻译 -> 准确按语序回填各子节点', () => {
   // 模拟网页段落: <p>Visit <a href="...">Transly docs</a> to learn more.</p>
   const nodeParts = [

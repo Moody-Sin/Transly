@@ -7,6 +7,10 @@
 
 ## [未发布]
 
+### 移除
+- **移除多引擎对比翻译模式**: 移除桌面端多引擎同屏并发对比翻译交互、卡片聚合渲染与代际取消定时器逻辑，精简主翻译窗口为单引擎直连模式，直接呈现引擎选择下拉框；同步移除多语言包中的 `modeSingle` / `modeCompare` 键值，以及对应的前端与 E2E 自动化测试用例，降低并发调用额度开销与竞态维护负担。
+- **彻底移除跨翻译引擎自动降级机制 (Breaking Change)**: 移除 `FallbackEngine` 包装器及其在 `EnginePool` 中的强制包裹逻辑，消除商业引擎（DeepL / OpenAI / DeepSeek）报错时静默切换至 Google 网页翻译所导致的用户困惑与质量降级；精简 `EngineCapabilities`，移除 `fallback_engine` 字段；优化缓存查询逻辑，严格按当前引擎隔离历史缓存；各引擎在遇到未配密钥或网络故障时直接向上报告真实错误；同步更新中英文语言包下拉文案。
+
 ### 新增
 - **流式文件导出后端命令 (`export_translation_history`)**: 新增直接在后台线程流式导出翻译历史到本地文件的后端命令，支持 CSV（带 BOM 防 Excel 乱码与公式注入转义）与 JSON 格式，直接从 SQLite 游标写入用户 Downloads 目录，彻底消除前端一次性拉取数万条记录跨 IPC 传输导致内存暴涨与界面假死的问题。
 - **悬浮迷你窗独立架构拆分 (`FloatWindow.tsx`)**: 在应用根入口 `main.tsx` 进行路由级分流，彻底解耦悬浮迷你窗（`#float`）与主窗口巨石组件，浮窗不再初始化主窗口的 50+ 个 Hook 与多套模态状态，冷启动性能大幅提升且内存更轻量，同时消除主窗口文本输入时的全局组件重绘。
@@ -14,7 +18,7 @@
 - **CI 工作流完整纳入桌面与扩展端到端自动化测试及 macOS Runner**: 在 `.github/workflows/ci.yml` 中配置 Playwright 无头环境，将桌面端 UI 交互 E2E（`pnpm run test:e2e:ui`）与浏览器插件真实端到端 E2E（`pnpm run test:e2e:extension`）纳入 CI 硬门禁，并新增 `macos-latest` 测试矩阵，保障跨平台质量。
 - **多策略网络代理体系支持 (Auto / System / Manual / None)**: 新增 `ProxyMode` 与 `ProxyConfig` 强类型契约，支持默认自动（环境代理优先 -> 自动嗅探系统原生代理 -> 直连回退）、系统代理（强制读取 Windows 注册表 Internet Settings 等）、手动配置（支持指定 HTTP/HTTPS/SOCKS5 代理端口）以及强制直连（禁用代理）；在 `src-tauri` 平台层通过 `Win32_System_Registry` 原生嗅探 Windows 注册表代理；在桌面端设置面板新增“网络代理设置”交互卡片，修改后即时热重载引擎连接池，无需重启应用立即对桌面端与浏览器插件生效。
 - **便携版单文件全内嵌标准构建工作流**: 在 `package.json` 中固化 `"build:portable": "tauri build --no-bundle"` 脚本，确保单文件编译时将前端静态资产（`dist/`）完整打包内嵌，杜绝裸运行 `cargo build --release` 导致的 `localhost:5173` 拒绝连接（ERR_CONNECTION_REFUSED）问题。
-- **桌面端 UI 全交互真实渲染端到端自动化测试套件**: 在 `scripts/test-desktop-ui-e2e.mjs` 中构建基于 Playwright 的桌面端前端真实渲染 E2E 测试套件（`pnpm run test:e2e:ui`），全真模拟 37 个 Tauri IPC 命令与事件通道注册表，覆盖主窗口挂载、主题即时切换、即输即译、多引擎并发对比、历史记录检索过滤与导出、设置中心与术语库管理、浏览器扩展配对申请弹窗以及迷你划词悬浮窗（`#float`）等全部 8 项交互场景，验证 0 未捕获异常。
+- **桌面端 UI 全交互真实渲染端到端自动化测试套件**: 在 `scripts/test-desktop-ui-e2e.mjs` 中构建基于 Playwright 的桌面端前端真实渲染 E2E 测试套件（`pnpm run test:e2e:ui`），全真模拟 37 个 Tauri IPC 命令与事件通道注册表，覆盖主窗口挂载、主题即时切换、即输即译、历史记录检索过滤与导出、设置中心与术语库管理、浏览器扩展配对申请弹窗以及迷你划词悬浮窗（`#float`）等全部 7 项交互场景，验证 0 未捕获异常。
 - **Rust 本地服务真实 TCP 协议端到端集成测试**: 在 `src-tauri/src/server/tests.rs` 中新增 `test_real_tcp_server_e2e_lifecycle`，绑定系统真实 TCP 回环端口，全链路验证网络握手、`/health` 探针、DNS Rebinding 恶意 Host 阻断（403）、配对申请/轮询状态机、Bearer Token 强鉴权与批量翻译术语干预及缓存写入。
 - **跨进程真实 Rust 本地服务与浏览器扩展端到端联调测试**: 新增 `transly_test_server` 轻量测试服务器二进制，升级 `scripts/test-extension-e2e.mjs`，由真实 Rust 进程托管 127.0.0.1:39281 本地服务与测试页面，实现浏览器扩展在真实浏览器环境中向真实 Rust 后端发起跨域通信与整页沉浸式翻译的全闭环验证。
 - **划词原地替换首选引擎配置与直接报错提醒**: 支持在桌面端设置中选择划词原地替换（默认 `Alt+Shift+R`）的首选引擎（`Google` / `DeepL` / `DeepSeek` / `OpenAI`），配置安全保存在系统原生凭据中；当所选商业引擎缺少 API Key 或网络请求失败时，通过 `transly://replacement-failed` 事件向主窗口广播并在界面弹出明确 Toast 告警，杜绝静默隐蔽降级，并自动安全还原系统剪贴板。

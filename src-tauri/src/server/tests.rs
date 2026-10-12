@@ -471,25 +471,16 @@ async fn test_translate_structured_batch_items() {
 }
 
 #[tokio::test]
-async fn test_fallback_cache_hit_on_secondary() {
+async fn test_cache_hit_isolation_without_fallback() {
     let cache = Arc::new(TranslationCache::in_memory().unwrap());
-    // 使用注入了模拟密钥的 EnginePool，严禁读写开发者的真实 keyring
-    let pool = Arc::new(crate::engine_pool::EnginePool::with_secret_getter(
-        Arc::new(|key: &str| {
-            if key == "deepl" {
-                Ok("mock-deepl-key".to_string())
-            } else {
-                Ok(String::new())
-            }
-        }),
-    ));
+    let pool = Arc::new(crate::engine_pool::EnginePool::new());
     let glossary = Arc::new(RwLock::new(Glossary::new()));
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("valid-token".to_string()));
 
-    // 模拟先前 Fallback 写回了实际成功的 google_web 引擎缓存
+    // 写入 google_web 引擎缓存
     cache
-        .set("fallback-test", "降级译文", "auto", "zh-CN", "google_web")
+        .set("cache-test", "谷歌独立译文", "auto", "zh-CN", "google_web")
         .unwrap();
 
     let state = ServerState::new(token, pool, cache, glossary, cache_controller);
@@ -504,7 +495,7 @@ async fn test_fallback_cache_hit_on_secondary() {
         )
         .with_state(state);
 
-    // 使用 deepl 引擎请求，该引擎具备容灾降级能力，可命中 google_web 降级缓存
+    // 1. 使用 google_web 引擎请求，正常命中专属缓存并返回原生引擎标识
     let req = local_builder()
         .method("POST")
         .uri("/translate")
@@ -512,24 +503,24 @@ async fn test_fallback_cache_hit_on_secondary() {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             r#"{
-                "texts": ["fallback-test"],
+                "texts": ["cache-test"],
                 "target_lang": "zh-CN",
-                "engine": "deepl"
+                "engine": "google_web"
             }"#,
         ))
         .unwrap();
 
-    let response = app.oneshot(req).await.unwrap();
+    let response = app.clone().oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
-    assert_eq!(resp.translations, vec!["降级译文"]);
+    assert_eq!(resp.translations, vec!["谷歌独立译文"]);
     match &resp.items[0] {
         BatchItemResult::Success { engine, .. } => {
-            assert_eq!(engine, "google_web(fallback)")
+            assert_eq!(engine, "google_web");
         }
-        BatchItemResult::Failed { message, .. } => panic!("降级缓存未命中: {message}"),
+        BatchItemResult::Failed { message, .. } => panic!("缓存未命中: {message}"),
     }
 }
 

@@ -36,6 +36,15 @@ const FALLBACK_LIMITS: BatchLimits = {
 
 let cachedLimits: BatchLimits | null = null
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (
+    areaName === 'local' &&
+    (changes.transly_server_url || changes.transly_server_port || changes.transly_server_token)
+  ) {
+    cachedLimits = null
+  }
+})
+
 async function getBatchLimits(): Promise<BatchLimits> {
   if (cachedLimits) return cachedLimits
   try {

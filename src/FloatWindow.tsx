@@ -6,6 +6,7 @@ import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import { speakText } from './utils/speech'
+import { parseThemePreference } from './utils/prefs'
 
 export default function FloatWindow() {
   const [locale] = useState<Locale>('zh-CN')
@@ -13,7 +14,31 @@ export default function FloatWindow() {
   const [targetLang, setTargetLang] = useState('zh-CN')
   const [engine, setEngine] = useState('google')
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<string | null>(null)
   const [isFloatPinned, setIsFloatPinned] = useState(false)
+
+  // 同步暗黑模式主题类名（并监听主窗口切换主题时的 localStorage 变化）
+  useEffect(() => {
+    const syncTheme = () => {
+      const theme = parseThemePreference(localStorage.getItem('transly_theme'))
+      const isDark =
+        theme === 'dark' ||
+        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      if (isDark) {
+        document.documentElement.classList.add('dark')
+      } else {
+        document.documentElement.classList.remove('dark')
+      }
+    }
+    syncTheme()
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    mediaQuery.addEventListener('change', syncTheme)
+    window.addEventListener('storage', syncTheme)
+    return () => {
+      mediaQuery.removeEventListener('change', syncTheme)
+      window.removeEventListener('storage', syncTheme)
+    }
+  }, [])
 
   // 迷你悬浮窗启动时尝试读取用户首选翻译引擎
   useEffect(() => {
@@ -52,10 +77,14 @@ export default function FloatWindow() {
     navigator.clipboard
       .writeText(translatedText)
       .then(() => {
+        setCopyError(null)
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
       })
-      .catch(() => {})
+      .catch((e: unknown) => {
+        setCopyError(e instanceof Error && e.message ? e.message : t.translation.copyFailed)
+        setTimeout(() => setCopyError(null), 2500)
+      })
   }
 
   const handleSpeak = (text: string, lang: string) => {
@@ -163,12 +192,16 @@ export default function FloatWindow() {
       </div>
 
       <div className="flex items-center justify-between pt-1">
-        <span className="text-[10px] text-slate-400 truncate max-w-[200px]">
-          {state === 'cancelled'
-            ? t.task.cancelled
-            : runner.snapshot.sourceText
-              ? `“${runner.snapshot.sourceText.slice(0, 30)}...”`
-              : t.float.autoHideNotice}
+        <span
+          className={`text-[10px] truncate max-w-[200px] ${copyError ? 'text-rose-500' : 'text-slate-400'}`}
+        >
+          {copyError
+            ? copyError
+            : state === 'cancelled'
+              ? t.task.cancelled
+              : runner.snapshot.sourceText
+                ? `“${runner.snapshot.sourceText.slice(0, 30)}...”`
+                : t.float.autoHideNotice}
         </span>
         {translatedText && (
           <div className="flex items-center gap-1.5">

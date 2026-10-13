@@ -463,26 +463,68 @@ async fn translate_batch_handler(
     // 检查缓存状态快照与 generation 版本，杜绝并发关闭清空后的写回竞争
     let (cache_enabled, start_generation) = state.cache_controller.snapshot();
 
+    // 0. 在查询缓存与调用引擎前先应用全局术语库预替换：
+    //    确保源语言术语在进入翻译引擎前被替换为目标词条，且术语变更后不会误命中旧版未替换缓存。
+    let effective_items: Vec<BatchItemRequest> = {
+        let g = state.glossary.read().await;
+        if g.is_empty() {
+            unified_items.clone()
+        } else {
+            unified_items
+                .iter()
+                .map(|it| BatchItemRequest {
+                    id: it.id.clone(),
+                    text: g.apply(&it.text),
+                })
+                .collect()
+        }
+    };
+
     let mut item_results: Vec<Option<BatchItemResult>> = vec![None; unified_items.len()];
     let mut missing_indices = Vec::new();
     let mut missing_requests = Vec::new();
 
-    // 1. 若开启缓存，优先查缓存（结合 L1 内存与 L2 批量 SQL，单次完成整批带 Fallback 查询）
+    // 1. 若开启缓存，优先查缓存（结合 L1 内存与 L2 批量 SQL，单次完成整批查询）
     if cache_enabled {
         let cached_items = {
             let cache_ref = state.cache.clone();
             let engine_ref = active_engine.clone();
-            let items = unified_items.clone();
+            let items = effective_items.clone();
+            let orig_items = unified_items.clone();
             let s = source.clone();
             let t = target.clone();
             tokio::task::spawn_blocking(move || {
-                transly_core::lookup_batch_with_fallback(
+                let mut hits = transly_core::lookup_batch_with_fallback(
                     cache_ref.as_ref(),
                     engine_ref.as_ref(),
                     &items,
                     &s,
                     &t,
-                )
+                );
+                // 兼容直接按原始原文写入的既有缓存条目（当有效源文本与原文相同时已在首轮查过）
+                let mut fallback_indices = Vec::new();
+                let mut fallback_reqs = Vec::new();
+                for (i, hit) in hits.iter().enumerate() {
+                    if hit.is_none() && items[i].text != orig_items[i].text {
+                        fallback_indices.push(i);
+                        fallback_reqs.push(orig_items[i].clone());
+                    }
+                }
+                if !fallback_reqs.is_empty() {
+                    let orig_hits = transly_core::lookup_batch_with_fallback(
+                        cache_ref.as_ref(),
+                        engine_ref.as_ref(),
+                        &fallback_reqs,
+                        &s,
+                        &t,
+                    );
+                    for (sub_idx, orig_hit) in orig_hits.into_iter().enumerate() {
+                        if orig_hit.is_some() {
+                            hits[fallback_indices[sub_idx]] = orig_hit;
+                        }
+                    }
+                }
+                hits
             })
             .await
             .unwrap_or_else(|_| vec![None; unified_items.len()])
@@ -499,14 +541,14 @@ async fn translate_batch_handler(
             } else {
                 missing_indices.push(idx);
                 missing_requests.push(TranslationRequest {
-                    text: unified_items[idx].text.clone(),
+                    text: effective_items[idx].text.clone(),
                     source_lang: source.clone(),
                     target_lang: target.clone(),
                 });
             }
         }
     } else {
-        for (idx, item) in unified_items.iter().enumerate() {
+        for (idx, item) in effective_items.iter().enumerate() {
             missing_indices.push(idx);
             missing_requests.push(TranslationRequest {
                 text: item.text.clone(),
@@ -531,10 +573,11 @@ async fn translate_batch_handler(
         for (req_idx, item_res) in results.into_iter().enumerate() {
             let original_idx = missing_indices[req_idx];
             let original_item = &unified_items[original_idx];
+            let effective_item = &effective_items[original_idx];
 
             match item_res {
                 Ok(res) => {
-                    let actual_engine = res.actual_engine().to_string();
+                    let actual_engine = res.engine.clone();
                     item_results[original_idx] = Some(BatchItemResult::Success {
                         id: original_item.id.clone(),
                         text: res.text.clone(),
@@ -542,7 +585,18 @@ async fn translate_batch_handler(
                         engine: res.engine,
                     });
 
-                    batch_cache_entries.push((original_item.text.clone(), res.text, actual_engine));
+                    batch_cache_entries.push((
+                        effective_item.text.clone(),
+                        res.text.clone(),
+                        actual_engine.clone(),
+                    ));
+                    if effective_item.text != original_item.text {
+                        batch_cache_entries.push((
+                            original_item.text.clone(),
+                            res.text,
+                            actual_engine,
+                        ));
+                    }
                 }
                 Err(e) => {
                     item_results[original_idx] = Some(BatchItemResult::Failed {

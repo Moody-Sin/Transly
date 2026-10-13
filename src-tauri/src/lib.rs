@@ -50,6 +50,7 @@ macro_rules! app_command_builder {
             $crate::commands::set_replace_shortcut,
             $crate::commands::detect_text_language,
             $crate::commands::add_glossary_term,
+            $crate::commands::import_glossary_terms,
             $crate::commands::get_glossary_terms,
             $crate::commands::delete_glossary_term,
             $crate::commands::clear_cache,

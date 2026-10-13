@@ -41,6 +41,10 @@ impl L1Cache {
     fn insert(&mut self, key: String, val: String) {
         if let std::collections::hash_map::Entry::Occupied(mut e) = self.map.entry(key.clone()) {
             e.insert(val);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(key);
             return;
         }
         while self.map.len() >= self.capacity {
@@ -58,7 +62,11 @@ impl L1Cache {
     }
 
     fn remove(&mut self, key: &str) {
-        self.map.remove(key);
+        if self.map.remove(key).is_some() {
+            if let Some(pos) = self.order.iter().position(|k| k == key) {
+                self.order.remove(pos);
+            }
+        }
     }
 
     fn clear(&mut self) {
@@ -518,6 +526,47 @@ impl TranslationCache {
         })
     }
 
+    /// 在单个显式事务中批量保存或更新术语库规则，消除逐条导入时的重复磁盘 I/O 与锁开销
+    pub fn set_glossary_terms_batch<'a, I>(&self, entries: I) -> Result<usize>
+    where
+        I: IntoIterator<Item = (&'a str, &'a str, bool)>,
+    {
+        let items: Vec<(&'a str, &'a str, bool)> = entries
+            .into_iter()
+            .filter(|(src, tgt, _)| !src.trim().is_empty() && !tgt.trim().is_empty())
+            .collect();
+        if items.is_empty() {
+            return Ok(0);
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        self.with_writer(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare_cached(
+                    r#"
+                    INSERT OR REPLACE INTO glossary (source_term, target_term, created_at, match_case)
+                    VALUES (?1, ?2, ?3, ?4)
+                    "#,
+                )?;
+                for (source, target, match_case) in &items {
+                    stmt.execute(params![
+                        source,
+                        target,
+                        now,
+                        if *match_case { 1 } else { 0 }
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(items.len())
+        })
+    }
+
     /// 删除指定术语
     pub fn delete_glossary_term(&self, source: &str) -> Result<()> {
         self.with_writer(|conn| {
@@ -803,6 +852,7 @@ impl TranslationCache {
 }
 
 fn format_timestamp_iso(ts: i64) -> String {
+    let ts = ts.max(0);
     let secs = ts % 86400;
     let days = ts / 86400;
     let z = days + 719468;
@@ -1245,5 +1295,31 @@ mod tests {
         let filtered_str = String::from_utf8(filtered_buf).unwrap();
         assert!(filtered_str.contains("\"apple\""));
         assert!(!filtered_str.contains("\"banana\""));
+        assert!(
+            filtered_str.contains("T") && filtered_str.contains("Z\n"),
+            "CSV 导出必须包含合法的 ISO-8601 时间戳: {filtered_str}"
+        );
+
+        // 4. 验证 format_timestamp_iso 边界与非负钳制
+        assert_eq!(format_timestamp_iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_timestamp_iso(-100), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_set_glossary_terms_batch_transaction() {
+        let cache = TranslationCache::in_memory().unwrap();
+        let count = cache
+            .set_glossary_terms_batch([
+                ("Rust", "锈语言", true),
+                ("LLM", "大语言模型", false),
+                ("   ", "无效空源", true),
+            ])
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let all = cache.get_all_glossary_terms().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.contains(&("Rust".to_string(), "锈语言".to_string(), true)));
+        assert!(all.contains(&("LLM".to_string(), "大语言模型".to_string(), false)));
     }
 }

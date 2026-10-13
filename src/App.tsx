@@ -88,7 +88,12 @@ export default function App() {
   const [glossaryList, setGlossaryList] = useState<
     Array<{ source: string; target: string; match_case: boolean }>
   >([])
-  const [saveStatus, setSaveStatus] = useState<string | null>(null)
+  const [saveStatus, setSaveStatusState] = useState<string | null>(null)
+  const [saveStatusIsError, setSaveStatusIsError] = useState(false)
+  const setSaveStatus = (msg: string | null, isError = false) => {
+    setSaveStatusState(msg)
+    setSaveStatusIsError(isError)
+  }
   const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrError, setOcrError] = useState<string | null>(null)
@@ -315,16 +320,8 @@ export default function App() {
     commands
       .getShortcutStatus()
       .then((status) => {
-        if (status.ok || !status.reason) {
-          setShortcutConflict('')
-          setReplaceShortcutConflict('')
-          return
-        }
-        const parts = status.reason.split('; ')
-        const normalConflict = parts.find((p) => p.includes('Alt+Shift+D'))
-        const replaceConflict = parts.find((p) => p.includes('Alt+Shift+R'))
-        setShortcutConflict(normalConflict || (!replaceConflict ? status.reason : ''))
-        setReplaceShortcutConflict(replaceConflict || '')
+        setShortcutConflict(status.translate_error || '')
+        setReplaceShortcutConflict(status.replace_error || '')
       })
       .catch((err) => {
         console.warn('[Transly] 读取快捷键注册状态失败：', err)
@@ -544,13 +541,16 @@ export default function App() {
       const res = await commands.setCacheEnabled(val)
       if (res.status === 'error') {
         setCacheEnabled(!val)
-        setSaveStatus(res.error)
+        setSaveStatus(res.error, true)
         setTimeout(() => setSaveStatus(null), 2500)
       }
     } catch (err) {
       // typedError 遇到 Error 实例会直接 rethrow：缺 try/catch 时下面的回滚永不执行
       setCacheEnabled(!val)
-      setSaveStatus(err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed)
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed,
+        true,
+      )
       setTimeout(() => setSaveStatus(null), 2500)
     }
   }
@@ -562,12 +562,15 @@ export default function App() {
       const res = await commands.setClipboardMonitor(val)
       if (res.status === 'error') {
         setClipboardMonitor(!val)
-        setSaveStatus(res.error)
+        setSaveStatus(res.error, true)
         setTimeout(() => setSaveStatus(null), 2500)
       }
     } catch (err) {
       setClipboardMonitor(!val)
-      setSaveStatus(err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed)
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed,
+        true,
+      )
       setTimeout(() => setSaveStatus(null), 2500)
     }
   }
@@ -581,19 +584,14 @@ export default function App() {
         // 保存成功不等于注册成功：组合键可能被其它软件占用。
         // 向后端确认真实注册结果，失败时把原因摆到界面上。
         const status = await commands.getShortcutStatus()
-        if (status.ok || !status.reason) {
-          setShortcutConflict('')
-        } else {
-          const parts = status.reason.split('; ')
-          const target = parts.find((p) => p.includes(customShortcut.trim()))
-          setShortcutConflict(target || status.reason)
-        }
+        setShortcutConflict(status.translate_error || '')
       } else {
-        setSaveStatus(res.error)
+        setSaveStatus(res.error, true)
       }
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusShortcutFailed,
+        true,
       )
     }
   }
@@ -605,19 +603,14 @@ export default function App() {
         setSaveStatus(t.settings.statusShortcutSaved)
         setTimeout(() => setSaveStatus(null), 2000)
         const status = await commands.getShortcutStatus()
-        if (status.ok || !status.reason) {
-          setReplaceShortcutConflict('')
-        } else {
-          const parts = status.reason.split('; ')
-          const target = parts.find((p) => p.includes(customReplaceShortcut.trim()))
-          setReplaceShortcutConflict(target || status.reason)
-        }
+        setReplaceShortcutConflict(status.replace_error || '')
       } else {
-        setSaveStatus(res.error)
+        setSaveStatus(res.error, true)
       }
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusShortcutFailed,
+        true,
       )
     }
   }
@@ -630,11 +623,12 @@ export default function App() {
         setSaveStatus(t.settings.statusReplaceEngineSaved)
         setTimeout(() => setSaveStatus(null), 2000)
       } else {
-        setSaveStatus(res.error)
+        setSaveStatus(res.error, true)
       }
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusReplaceEngineFailed,
+        true,
       )
     }
   }
@@ -652,12 +646,13 @@ export default function App() {
         setSaveStatus(t.settings.statusProxySaved)
         setTimeout(() => setSaveStatus(null), 2500)
       } else {
-        setSaveStatus(`${t.settings.statusProxySaveFailed}: ${res.error}`)
+        setSaveStatus(`${t.settings.statusProxySaveFailed}: ${res.error}`, true)
         setTimeout(() => setSaveStatus(null), 4000)
       }
     } catch (err) {
       setSaveStatus(
         `${t.settings.statusProxySaveFailed}: ${err instanceof Error ? err.message : String(err)}`,
+        true,
       )
       setTimeout(() => setSaveStatus(null), 4000)
     } finally {
@@ -676,12 +671,13 @@ export default function App() {
         setSaveStatus(t.settings.statusTokenRotated)
         setTimeout(() => setSaveStatus(null), 2500)
       } else {
-        setSaveStatus(res.error)
+        setSaveStatus(res.error, true)
       }
     } catch (err) {
       // 保留后端具体原因（如凭据管理器不可用），仅在其缺失时回落通用文案
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusTokenRotateFailed,
+        true,
       )
     } finally {
       setRotatingToken(false)
@@ -740,7 +736,10 @@ export default function App() {
       setTimeout(() => setSaveStatus(null), 2500)
     } catch (err) {
       // 透传后端校验原因（如「API 密钥长度超出限制」），避免退化为无法自查的通用文案
-      setSaveStatus(err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed)
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed,
+        true,
+      )
     }
   }
 
@@ -754,6 +753,7 @@ export default function App() {
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusKeyDeleteFailed,
+        true,
       )
     }
   }
@@ -776,6 +776,7 @@ export default function App() {
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusGlossaryFailed,
+        true,
       )
     }
   }
@@ -788,6 +789,7 @@ export default function App() {
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusGlossaryFailed,
+        true,
       )
     }
   }
@@ -1561,13 +1563,14 @@ export default function App() {
                             t.settings.statusCacheCleared.replace('{n}', String(res.data)),
                           )
                         } else {
-                          setSaveStatus(res.error)
+                          setSaveStatus(res.error, true)
                         }
                       } catch (err) {
                         setSaveStatus(
                           err instanceof Error && err.message
                             ? err.message
                             : t.settings.statusCacheClearFailed,
+                          true,
                         )
                       }
                       setTimeout(() => setSaveStatus(null), 2000)
@@ -1624,39 +1627,50 @@ export default function App() {
                             const text =
                               typeof evt.target?.result === 'string' ? evt.target.result : ''
                             if (!text) return
-                            let imported = 0
-                            let failed = 0
-                            for (const term of parseGlossaryCsv(text)) {
-                              try {
-                                const res = await commands.addGlossaryTerm(
-                                  term.source,
-                                  term.target,
-                                  term.matchCase,
-                                )
-                                // add_glossary_term 失败不抛错：不判 status 就会静默吞掉
-                                if (res.status === 'error') {
-                                  failed += 1
-                                  console.warn('[Transly] 导入术语失败:', res.error)
-                                } else {
-                                  imported += 1
-                                }
-                              } catch (err) {
-                                failed += 1
-                                console.warn('[Transly] 导入术语失败:', err)
-                              }
+                            const parsedTerms = parseGlossaryCsv(text)
+                            if (parsedTerms.length === 0) {
+                              setSaveStatus(t.settings.glossaryImportDone.replace('{n}', '0'))
+                              setTimeout(() => setSaveStatus(null), 3000)
+                              return
                             }
-                            loadGlossaryList()
-                            setSaveStatus(
-                              failed > 0
-                                ? t.settings.glossaryImportPartial
-                                    .replace('{n}', String(imported))
-                                    .replace('{m}', String(failed))
-                                : t.settings.glossaryImportDone.replace('{n}', String(imported)),
-                            )
+                            try {
+                              const res = await commands.importGlossaryTerms(
+                                parsedTerms.map((term) => ({
+                                  source: term.source,
+                                  target: term.target,
+                                  match_case: term.matchCase,
+                                })),
+                              )
+                              if (res.status === 'error') {
+                                setSaveStatus(res.error, true)
+                              } else {
+                                loadGlossaryList()
+                                const imported = res.data
+                                const failed = Math.max(0, parsedTerms.length - imported)
+                                setSaveStatus(
+                                  failed > 0
+                                    ? t.settings.glossaryImportPartial
+                                        .replace('{n}', String(imported))
+                                        .replace('{m}', String(failed))
+                                    : t.settings.glossaryImportDone.replace(
+                                        '{n}',
+                                        String(imported),
+                                      ),
+                                  failed > 0,
+                                )
+                              }
+                            } catch (err) {
+                              setSaveStatus(
+                                err instanceof Error && err.message
+                                  ? err.message
+                                  : t.settings.statusGlossaryFailed,
+                                true,
+                              )
+                            }
                             setTimeout(() => setSaveStatus(null), 3000)
                           }
                           reader.onerror = () => {
-                            setSaveStatus(t.settings.statusGlossaryFailed)
+                            setSaveStatus(t.settings.statusGlossaryFailed, true)
                             setTimeout(() => setSaveStatus(null), 3000)
                           }
                           reader.readAsText(file)
@@ -1732,7 +1746,14 @@ export default function App() {
               </div>
 
               {saveStatus && (
-                <div className="rounded bg-emerald-50 border border-emerald-200 p-2 text-center text-emerald-700 font-medium">
+                <div
+                  role={saveStatusIsError ? 'alert' : 'status'}
+                  className={`rounded border p-2 text-center font-medium ${
+                    saveStatusIsError
+                      ? 'bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400'
+                      : 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-900/60 text-emerald-700 dark:text-emerald-400'
+                  }`}
+                >
                   {saveStatus}
                 </div>
               )}

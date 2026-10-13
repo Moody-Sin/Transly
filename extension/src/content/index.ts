@@ -63,23 +63,32 @@ export function replaceTextNode(node: Text, translatedText: string, mode: string
   translatedTextSet.add(node)
 
   if (mode === 'bilingual') {
-    // 双语对照模式：保留原文节点不变，紧随其后追加译文兄弟节点
+    // 双语对照模式：保留原文节点不变，紧随其后追加译文兄弟节点（若已存在则原地更新，避免重试或动态变更时重复插入）
     const parent = node.parentElement
     if (parent) {
-      const transEl = document.createElement('span')
-      transEl.className = 'transly-bilingual-trans'
-      transEl.setAttribute('data-no-translate', 'true')
-      transEl.style.display = 'inline-block'
-      transEl.style.marginLeft = '4px'
-      transEl.style.color = '#4f46e5'
-      transEl.style.opacity = '0.9'
-      transEl.textContent = ` (${translatedText})`
-
-      // 插入到当前 textNode 之后
-      if (node.nextSibling) {
-        parent.insertBefore(transEl, node.nextSibling)
+      const next = node.nextSibling
+      if (
+        next &&
+        next.nodeType === ELEMENT_NODE &&
+        (next as Element).classList.contains('transly-bilingual-trans')
+      ) {
+        next.textContent = ` (${translatedText})`
       } else {
-        parent.appendChild(transEl)
+        const transEl = document.createElement('span')
+        transEl.className = 'transly-bilingual-trans'
+        transEl.setAttribute('data-no-translate', 'true')
+        transEl.style.display = 'inline-block'
+        transEl.style.marginLeft = '4px'
+        transEl.style.color = '#4f46e5'
+        transEl.style.opacity = '0.9'
+        transEl.textContent = ` (${translatedText})`
+
+        // 插入到当前 textNode 之后
+        if (next) {
+          parent.insertBefore(transEl, next)
+        } else {
+          parent.appendChild(transEl)
+        }
       }
     }
   } else {
@@ -223,30 +232,41 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;')
 }
 
-// 监听鼠标在网页上的移动，当目标为已翻译节点且用户悬停（或按住 Alt）时显示原文 Tooltip
+// 监听鼠标在网页上的移动，当目标为已翻译节点且用户悬停时显示完整段落原文 Tooltip
 document.addEventListener('mouseover', (e) => {
   const target = e.target
   if (!(target instanceof Element)) return
-  if (!target.hasAttribute('data-transly-has-translation')) return
+  const translatedEl = target.closest('[data-transly-has-translation]')
+  if (!translatedEl) return
+  // 若该元素的祖先也是已翻译富文本段落（如 <p> 内含 <a>），优先以最外层已翻译段落为单位提取完整句子原文
+  const container =
+    translatedEl.parentElement?.closest('[data-transly-has-translation]') || translatedEl
 
-  // 提取该元素或其子文本节点中缓存的原文
   let origText = ''
-  for (const child of Array.from(target.childNodes)) {
-    if (child.nodeType === Node.TEXT_NODE && originalTextMap.has(child as Text)) {
-      origText += (originalTextMap.get(child as Text) || '') + ' '
+  let hasTranslatedNode = false
+  for (const textNode of iterateTextNodesDeep(container)) {
+    if (textNode.parentElement?.classList.contains('transly-bilingual-trans')) continue
+    if (originalTextMap.has(textNode)) {
+      hasTranslatedNode = true
+      origText += originalTextMap.get(textNode) || ''
+    } else {
+      origText += textNode.nodeValue || ''
     }
   }
 
-  if (origText.trim()) {
+  if (hasTranslatedNode && origText.trim()) {
     showOriginalTooltip(origText.trim(), e.clientX, e.clientY)
   }
 })
 
 document.addEventListener('mouseout', (e) => {
   const target = e.target
-  if (target instanceof Element && target.hasAttribute('data-transly-has-translation')) {
-    hideOriginalTooltip()
-  }
+  if (!(target instanceof Element)) return
+  const container = target.closest('[data-transly-has-translation]')
+  if (!container) return
+  const related = e.relatedTarget
+  if (related instanceof Node && container.contains(related)) return
+  hideOriginalTooltip()
 })
 
 document.addEventListener('keydown', (e) => {
@@ -321,24 +341,30 @@ const INLINE_TAGS = new Set([
 ])
 
 /**
- * 判断是否为叶子富文本容器（例如 <p>、<li> 等段落，包含行内标签子节点）
+ * 收集叶子富文本容器内的合法行内子孙元素（例如 <p>、<li> 等段落，仅包含行内标签子节点）。
+ * 若非合法的叶子富文本容器则返回 null；单次扫描即可供调用方复用，消除二次 querySelectorAll('*')。
  */
-export function isLeafRichTextContainer(el: Element): boolean {
+export function getLeafRichTextDescendants(el: Element): Element[] | null {
   const tag = el.tagName.toUpperCase()
   if (!['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TD', 'TH'].includes(tag)) {
-    return false
+    return null
   }
-  if (el.children.length === 0) return false
+  if (el.children.length === 0) return null
 
   // 必须检查全部子孙元素：<p><strong><a>link</a></strong></p> 的一级子元素只有
   // <strong>，只看 el.children 会把嵌套行内结构误判为叶子段落
-  for (const descendant of Array.from(el.querySelectorAll('*'))) {
-    if (!INLINE_TAGS.has(descendant.tagName.toUpperCase())) return false
-    if (descendant.hasAttribute('data-no-translate')) return false
-    if (descendant.classList.contains('notranslate')) return false
-    if ((descendant as HTMLElement).isContentEditable) return false
+  const descendants = Array.from(el.querySelectorAll('*'))
+  for (const descendant of descendants) {
+    if (!INLINE_TAGS.has(descendant.tagName.toUpperCase())) return null
+    if (descendant.hasAttribute('data-no-translate')) return null
+    if (descendant.classList.contains('notranslate')) return null
+    if ((descendant as HTMLElement).isContentEditable) return null
   }
-  return true
+  return descendants
+}
+
+export function isLeafRichTextContainer(el: Element): boolean {
+  return getLeafRichTextDescendants(el) !== null
 }
 
 function rememberFailed(entry: TextNodeEntry & { errorKind?: string }) {
@@ -393,8 +419,8 @@ export function collectTextNodes(
     )
     leafCandidates.forEach((candidate) => {
       if (!shouldTranslateElement(candidate)) return
-      if (!isLeafRichTextContainer(candidate)) return
-      if (candidate.children.length === 0) return
+      const descendants = getLeafRichTextDescendants(candidate)
+      if (!descendants || descendants.length === 0) return
 
       // 提取容器内所有的连续 text parts
       const rawParts: Array<{ node: Text; text: string; isInline: boolean }> = []
@@ -432,7 +458,7 @@ export function collectTextNodes(
       if (hasInline && rawParts.length >= 2 && validTextLen >= 2) {
         processedContainers.add(candidate)
         // 子孙元素全部登记，防止主 TreeWalker 再次扫到嵌套行内子树里的文本节点
-        for (const descendant of Array.from(candidate.querySelectorAll('*'))) {
+        for (const descendant of descendants) {
           processedContainers.add(descendant)
         }
         for (const p of rawParts) {
@@ -700,20 +726,6 @@ interface BatchResponsePayload {
 
 import { planBatchRanges, splitByViewport, type BatchLimits } from '../shared/batchPlan'
 import { buildRichTextComposite, restoreRichTextComposite, type TextPart } from '../shared/richText'
-
-// 供单元测试与段落保真翻译调用的富文本装箱与拆箱包装
-export function processRichTextParagraph(
-  parts: TextPart[],
-  translated: string,
-): Map<string, string> | null {
-  const composite = buildRichTextComposite(parts)
-  const baseIds = composite.baseSlots || []
-  const placeholderToId = new Map<string, string>()
-  for (const [id, ph] of composite.idToPlaceholder) {
-    placeholderToId.set(ph, id)
-  }
-  return restoreRichTextComposite(translated, baseIds, placeholderToId)
-}
 
 /**
  * 当前任务使用的批量上限。

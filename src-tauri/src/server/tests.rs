@@ -111,6 +111,15 @@ fn test_is_allowed_origin() {
         "任意第三方 UUID 扩展必须被拒绝"
     );
 
+    // 校验 Firefox 构建脚本中声明的 gecko addon ID 必须与服务端 ALLOWED_FIREFOX_EXT_IDS 严格一致
+    let firefox_build_script = include_str!("../../../extension/scripts/build-firefox.mjs");
+    for allowed_ff_id in ALLOWED_FIREFOX_EXT_IDS {
+        assert!(
+            firefox_build_script.contains(&format!("{{{allowed_ff_id}}}")),
+            "extension/scripts/build-firefox.mjs 必须包含服务端白名单 ID {{{allowed_ff_id}}}"
+        );
+    }
+
     // 拒绝格式不正确的扩展 ID、伪装前缀与外部网页
     assert!(!is_allowed_origin("chrome-extension://abcdefg"));
     assert!(!is_allowed_origin(
@@ -877,6 +886,7 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
     let mut glossary_instance = Glossary::new();
     glossary_instance.insert_with_options("agent", "智能体", false);
     let glossary = Arc::new(RwLock::new(glossary_instance));
+    let glossary_for_test = glossary.clone();
     let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
     let token = Arc::new(RwLock::new("e2e-session-token".to_string()));
 
@@ -946,8 +956,30 @@ async fn test_e2e_extension_batch_translate_and_fallback_flow() {
     let bytes2 = res2.into_body().collect().await.unwrap().to_bytes();
     let resp2: TranslateBatchResponse = serde_json::from_slice(&bytes2).unwrap();
     assert_eq!(resp2.items.len(), 2);
-    if let BatchItemResult::Success { ref text, .. } = resp2.items[0] {
-        assert!(text.contains("智能体"));
+    // 4. 验证当用户新增源语言术语时，即使旧原文已在缓存中，新术语依然能穿透旧缓存立即生效
+    {
+        let mut g = glossary_for_test.write().await;
+        g.insert_with_options("World", "宇宙", false);
+    }
+    let req3 = local_builder()
+        .method("POST")
+        .uri("/translate")
+        .header(header::AUTHORIZATION, "Bearer e2e-session-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, OFFICIAL_CHROME_ORIGIN)
+        .body(Body::from(batch_req_body.to_string()))
+        .unwrap();
+    let res3 = app.clone().oneshot(req3).await.unwrap();
+    assert_eq!(res3.status(), StatusCode::OK);
+    let bytes3 = res3.into_body().collect().await.unwrap().to_bytes();
+    let resp3: TranslateBatchResponse = serde_json::from_slice(&bytes3).unwrap();
+    if let BatchItemResult::Success { ref text, .. } = resp3.items[0] {
+        assert!(
+            text.contains("宇宙") && text.contains("智能体"),
+            "新增源语言术语后，不得被旧的未替换缓存屏蔽: {text}"
+        );
+    } else {
+        panic!("第一项应为成功结果");
     }
 }
 

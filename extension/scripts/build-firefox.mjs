@@ -30,7 +30,7 @@ const firefoxManifest = {
     gecko: {
       // 固定的 addon ID：必须是一个合法 UUID 字面量，否则 addons-linter 会判定非法。
       // 此前遗留的是脚手架模板占位符 {{EMAIL_...}}，从未被替换过。
-      id: '{3f8b1c24-7d5a-4e91-9b6c-2a4f0d8e5b71}',
+      id: '{d4e73b40-7988-4e89-a2e6-81525a74e2d3}',
       strict_min_version: '109.0',
     },
   },

@@ -71,12 +71,29 @@ pub async fn translate(
     // 检查缓存状态快照与 generation 版本号
     let (cache_enabled, start_gen) = cache_controller.snapshot();
 
-    // 1. 若开启缓存，优先查缓存（先查当前引擎，若具备 fallback 且未命中，允许命中降级引擎历史缓存）
+    // 0. 提取代码块保护后再应用全局术语库预替换：
+    //    - 先 stash 代码块，防止代码字面量被术语库误改；
+    //    - 再对非代码正文应用术语库，确保外文源术语在进入翻译引擎和计算缓存 key 前
+    //      就已经被替换为目标术语（避免引擎把源术语译成别的词并固化进 SQLite 缓存，
+    //      导致用户后续新增或修改术语时因命中旧缓存而失效）。
+    let preserved = transly_core::stash_code_blocks(&text);
+    let glossary_applied_source = {
+        let g = glossary.read().await;
+        if g.is_empty() {
+            preserved.text.clone()
+        } else {
+            g.apply(&preserved.text)
+        }
+    };
+    let effective_source =
+        transly_core::restore_code_blocks(&glossary_applied_source, &preserved.stash);
+
+    // 1. 若开启缓存，优先查缓存（按已应用源端术语的 effective_source 计算 key）
     if cache_enabled {
         let cached_res = {
             let cache_ref = cache.inner().clone();
             let engine_clone = active_engine.clone();
-            let t = text.clone();
+            let t = effective_source.clone();
             let s = sl.clone();
             let tl = target_lang.clone();
             tokio::task::spawn_blocking(move || {
@@ -103,10 +120,8 @@ pub async fn translate(
     }
 
     // 2. 缓存未命中或未开启，调用引擎翻译
-    // 在翻译前提取代码块与行内代码进行占位保护，防止代码和特殊标识符被篡改
-    let preserved = transly_core::stash_code_blocks(&text);
     let req = TranslationRequest {
-        text: preserved.text.clone(),
+        text: glossary_applied_source,
         source_lang: sl.clone(),
         target_lang: target_lang.clone(),
     };
@@ -115,14 +130,14 @@ pub async fn translate(
         Ok(res) => {
             let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
             // 3. 异步写入缓存（在同步门禁锁内同时验证 generation 版本与开启状态，消除判断与写入之间的竞态）
-            let cache_target_engine = res.actual_engine().to_string();
+            let cache_target_engine = res.engine.clone();
             let cache_arc = cache.inner().clone();
             let controller = cache_controller.inner().clone();
             // 译文在闭包后仍要交给术语库，故入闭包前先克隆一份
             let restored_for_cache = restored.clone();
             crate::cache_controller::write_cache_offloaded(controller, start_gen, move || {
                 cache_arc.set(
-                    &text,
+                    &effective_source,
                     &restored_for_cache,
                     &sl,
                     &target_lang,
@@ -191,12 +206,25 @@ pub async fn translate_stream(
 
     let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
 
+    // 0. 先提取代码块保护，再对非代码正文应用全局术语库预替换
+    let preserved = transly_core::stash_code_blocks(&text);
+    let glossary_applied_source = {
+        let g = deps.glossary.read().await;
+        if g.is_empty() {
+            preserved.text.clone()
+        } else {
+            g.apply(&preserved.text)
+        }
+    };
+    let effective_source =
+        transly_core::restore_code_blocks(&glossary_applied_source, &preserved.stash);
+
     // 1. 若开启缓存，优先查缓存
     if cache_enabled {
         let cached_res = {
             let cache_ref = deps.cache.clone();
             let engine_clone = active_engine.clone();
-            let t = text.clone();
+            let t = effective_source.clone();
             let s = sl.clone();
             let tl = target_lang.clone();
             tokio::task::spawn_blocking(move || {
@@ -215,14 +243,8 @@ pub async fn translate_stream(
         if let Some((cached_text, used_engine)) = cached_res {
             let g = deps.glossary.read().await;
             let applied = g.apply(&cached_text);
-            // 命中缓存时直接分发完整 chunk，让打字机视图立即就绪
-            let _ = window.emit(
-                "translate-stream-chunk",
-                StreamChunkPayload {
-                    task_id,
-                    chunk: applied.clone(),
-                },
-            );
+            // 命中缓存时直接由 IPC 返回完整译文，不再重复发送 translate-stream-chunk 事件，
+            // 避免前端在异步事件与 IPC resolve 竞争时将完整译文拼接两次或产生状态闪烁。
             return Ok(TranslateOutcomeDto {
                 text: applied,
                 engine: used_engine,
@@ -231,9 +253,8 @@ pub async fn translate_stream(
     }
 
     // 2. 缓存未命中或未开启，调用流式引擎翻译
-    let preserved = transly_core::stash_code_blocks(&text);
     let req = TranslationRequest {
-        text: preserved.text.clone(),
+        text: glossary_applied_source,
         source_lang: sl.clone(),
         target_lang: target_lang.clone(),
     };
@@ -296,14 +317,14 @@ pub async fn translate_stream(
     match res {
         Ok(res) => {
             let restored = transly_core::restore_code_blocks(&res.text, &preserved.stash);
-            let cache_target_engine = res.actual_engine().to_string();
+            let cache_target_engine = res.engine.clone();
             let cache_arc = Arc::clone(&deps.cache);
             let controller = Arc::clone(&deps.cache_controller);
             // 译文在闭包后仍要交给术语库，故入闭包前先克隆一份
             let restored_for_cache = restored.clone();
             crate::cache_controller::write_cache_offloaded(controller, start_gen, move || {
                 cache_arc.set(
-                    &text,
+                    &effective_source,
                     &restored_for_cache,
                     &sl,
                     &target_lang,
@@ -379,6 +400,59 @@ pub async fn add_glossary_term(
     let mut g = glossary.write().await;
     g.insert_with_options(source, target, is_match_case);
     Ok(())
+}
+
+/// 在单个 SQLite 事务与单次内存写锁内批量导入术语库词条，避免 CSV 批量导入逐条 IPC 与 fsync。
+#[tauri::command]
+#[specta::specta]
+pub async fn import_glossary_terms(
+    terms: Vec<GlossaryTermDto>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<u32, String> {
+    let valid_terms: Vec<GlossaryTermDto> = terms
+        .into_iter()
+        .filter_map(|t| {
+            let src = t.source.trim().to_string();
+            let tgt = t.target.trim().to_string();
+            if src.is_empty() || tgt.is_empty() {
+                None
+            } else {
+                Some(GlossaryTermDto {
+                    source: src,
+                    target: tgt,
+                    match_case: t.match_case,
+                })
+            }
+        })
+        .collect();
+
+    if valid_terms.is_empty() {
+        return Ok(0);
+    }
+
+    let cache_ref = cache.inner().clone();
+    let db_terms = valid_terms
+        .iter()
+        .map(|t| (t.source.clone(), t.target.clone(), t.match_case))
+        .collect::<Vec<_>>();
+
+    let count = tokio::task::spawn_blocking(move || {
+        let refs = db_terms
+            .iter()
+            .map(|(s, t, m)| (s.as_str(), t.as_str(), *m));
+        cache_ref.set_glossary_terms_batch(refs)
+    })
+    .await
+    .map_err(|e| format!("术语批量写入调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    let mut g = glossary.write().await;
+    for item in valid_terms {
+        g.insert_with_options(item.source, item.target, item.match_case);
+    }
+
+    Ok(count as u32)
 }
 
 #[tauri::command]
@@ -782,14 +856,27 @@ pub fn trigger_selection_replacement(
             .unwrap_or_else(|_| "google".to_string())
         };
 
-        let active_engine = deps.pool.get_raw_engine(&preferred_engine).await;
+        let active_engine = deps.pool.get_engine(&preferred_engine).await;
+
+        // 0. 先提取代码块保护，再对非代码正文应用全局术语库预替换
+        let preserved = transly_core::stash_code_blocks(clean);
+        let glossary_applied_source = {
+            let g = deps.glossary.read().await;
+            if g.is_empty() {
+                preserved.text.clone()
+            } else {
+                g.apply(&preserved.text)
+            }
+        };
+        let effective_source =
+            transly_core::restore_code_blocks(&glossary_applied_source, &preserved.stash);
 
         // 优先查缓存（仅查询首选引擎专属缓存，绝不跨引擎命中 Google 降级缓存）
         let mut final_text = None;
         if cache_enabled {
             let cache_ref = deps.cache.clone();
             let eng_id = active_engine.id().to_string();
-            let t = clean.to_string();
+            let t = effective_source.clone();
             let tl = target_lang.clone();
             let hit = tokio::task::spawn_blocking(move || {
                 cache_ref.get(&t, "auto", &tl, &eng_id).unwrap_or(None)
@@ -806,9 +893,8 @@ pub fn trigger_selection_replacement(
         let final_text = match final_text {
             Some(cached) => cached,
             None => {
-                let preserved = transly_core::stash_code_blocks(clean);
                 let req = TranslationRequest {
-                    text: preserved.text.clone(),
+                    text: glossary_applied_source,
                     source_lang: "auto".to_string(),
                     target_lang: target_lang.clone(),
                 };
@@ -817,8 +903,8 @@ pub fn trigger_selection_replacement(
                     Ok(res) => {
                         let restored =
                             transly_core::restore_code_blocks(&res.text, &preserved.stash);
-                        let cache_target_engine = res.actual_engine().to_string();
-                        let owned_text = clean.to_string();
+                        let cache_target_engine = res.engine.clone();
+                        let owned_text = effective_source;
                         let owned_restored = restored.clone();
                         let owned_target = target_lang.clone();
                         let cache_arc = Arc::clone(&deps.cache);
@@ -1042,7 +1128,7 @@ pub async fn get_shortcut(
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<String, String> {
     let cache_ref = cache.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    Ok(tokio::task::spawn_blocking(move || {
         cache_ref
             .get_setting("custom_shortcut")
             .ok()
@@ -1052,8 +1138,7 @@ pub async fn get_shortcut(
             .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
     })
     .await
-    .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string())
-    .pipe(Ok)
+    .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string()))
 }
 
 #[tauri::command]
@@ -1184,7 +1269,7 @@ pub async fn get_replace_shortcut(
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<String, String> {
     let cache_ref = cache.inner().clone();
-    tokio::task::spawn_blocking(move || {
+    Ok(tokio::task::spawn_blocking(move || {
         cache_ref
             .get_setting("custom_replace_shortcut")
             .ok()
@@ -1194,8 +1279,7 @@ pub async fn get_replace_shortcut(
             .unwrap_or_else(|| DEFAULT_REPLACE_SHORTCUT.to_string())
     })
     .await
-    .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string())
-    .pipe(Ok)
+    .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string()))
 }
 
 #[tauri::command]
@@ -1312,17 +1396,6 @@ pub async fn set_replace_shortcut(
 pub async fn detect_text_language(text: String) -> Result<Option<String>, String> {
     Ok(transly_core::detect_language(&text).map(|s| s.to_string()))
 }
-
-trait Pipe: Sized {
-    fn pipe<F, R>(self, f: F) -> R
-    where
-        F: FnOnce(Self) -> R,
-    {
-        f(self)
-    }
-}
-
-impl<T> Pipe for T {}
 
 /// 浮窗翻译请求负载：携带来源区分与请求 ID，供前端去重与提示
 #[derive(Clone, serde::Serialize)]
@@ -1519,8 +1592,12 @@ pub fn get_server_status(slot: tauri::State<'_, Arc<ServerStatusSlot>>) -> Serve
 pub struct ShortcutStatusDto {
     /// 两个快捷键是否都注册成功
     pub ok: bool,
-    /// 失败原因（注册成功时为 None）
+    /// 聚合失败原因（兼容旧字段，注册成功时为 None）
     pub reason: Option<String>,
+    /// 划词翻译快捷键注册失败原因（注册成功时为 None）
+    pub translate_error: Option<String>,
+    /// 划词原地替换快捷键注册失败原因（注册成功时为 None）
+    pub replace_error: Option<String>,
 }
 
 /// 快捷键注册状态槽位。与 `ServerStatusSlot` 同构（Tauri 按 TypeId 存 state）。
@@ -1556,36 +1633,22 @@ impl ShortcutStatusSlot {
         }
     }
 
-    pub fn set_ok(&self) {
-        self.set_translate_ok();
-        self.set_replace_ok();
-    }
-
-    pub fn set_failed(&self, reason: String) {
-        self.set_translate_failed(reason);
-    }
-
     pub fn get(&self) -> ShortcutStatusDto {
         let t_err = self.translate_error.lock().ok().and_then(|g| g.clone());
         let r_err = self.replace_error.lock().ok().and_then(|g| g.clone());
 
-        match (t_err, r_err) {
-            (None, None) => ShortcutStatusDto {
-                ok: true,
-                reason: None,
-            },
-            (Some(t), None) => ShortcutStatusDto {
-                ok: false,
-                reason: Some(t),
-            },
-            (None, Some(r)) => ShortcutStatusDto {
-                ok: false,
-                reason: Some(r),
-            },
-            (Some(t), Some(r)) => ShortcutStatusDto {
-                ok: false,
-                reason: Some(format!("{t}; {r}")),
-            },
+        let reason = match (&t_err, &r_err) {
+            (None, None) => None,
+            (Some(t), None) => Some(t.clone()),
+            (None, Some(r)) => Some(r.clone()),
+            (Some(t), Some(r)) => Some(format!("{t}; {r}")),
+        };
+
+        ShortcutStatusDto {
+            ok: reason.is_none(),
+            reason,
+            translate_error: t_err,
+            replace_error: r_err,
         }
     }
 }
@@ -1933,33 +1996,38 @@ pub fn get_proxy_config_internal(cache: &TranslationCache) -> Result<ProxyConfig
 pub async fn save_proxy_config_internal(
     config: ProxyConfig,
     pool: &EnginePool,
-    cache: &TranslationCache,
+    cache: Arc<TranslationCache>,
 ) -> Result<(), String> {
     validate_proxy_config(&config)?;
 
     let mode_str = config.mode.as_str().to_string();
     let url_opt = config.url.clone();
 
-    cache
-        .set_setting("proxy_mode", &mode_str)
-        .map_err(|e| format!("写入系统配置失败: {e}"))?;
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        cache
+            .set_setting("proxy_mode", &mode_str)
+            .map_err(|e| format!("写入系统配置失败: {e}"))?;
 
-    if let Some(ref u) = url_opt {
-        let trimmed = u.trim();
-        if !trimmed.is_empty() {
-            cache
-                .set_setting("proxy_url", trimmed)
-                .map_err(|e| format!("写入系统配置失败: {e}"))?;
+        if let Some(ref u) = url_opt {
+            let trimmed = u.trim();
+            if !trimmed.is_empty() {
+                cache
+                    .set_setting("proxy_url", trimmed)
+                    .map_err(|e| format!("写入系统配置失败: {e}"))?;
+            } else {
+                cache
+                    .delete_setting("proxy_url")
+                    .map_err(|e| format!("清理系统配置失败: {e}"))?;
+            }
         } else {
             cache
                 .delete_setting("proxy_url")
                 .map_err(|e| format!("清理系统配置失败: {e}"))?;
         }
-    } else {
-        cache
-            .delete_setting("proxy_url")
-            .map_err(|e| format!("清理系统配置失败: {e}"))?;
-    }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存网络代理配置调度异常: {e}"))??;
 
     pool.reload_proxy().await;
     Ok(())
@@ -1985,7 +2053,7 @@ pub async fn save_proxy_config(
 ) -> Result<(), String> {
     let pool_ref = pool.inner().clone();
     let cache_ref = cache.inner().clone();
-    save_proxy_config_internal(config, &pool_ref, &cache_ref).await
+    save_proxy_config_internal(config, &pool_ref, cache_ref).await
 }
 
 #[cfg(test)]
@@ -2093,43 +2161,60 @@ mod tests {
         let slot = ShortcutStatusSlot::default();
         let initial = slot.get();
         assert!(initial.ok);
+        assert_eq!(initial.translate_error, None);
+        assert_eq!(initial.replace_error, None);
 
-        slot.set_translate_failed("Alt+Shift+D: conflict".to_string());
+        slot.set_translate_failed("Ctrl+Shift+T: conflict".to_string());
         let failed = slot.get();
         assert!(!failed.ok);
-        assert_eq!(failed.reason.as_deref(), Some("Alt+Shift+D: conflict"));
+        assert_eq!(
+            failed.translate_error.as_deref(),
+            Some("Ctrl+Shift+T: conflict")
+        );
+        assert_eq!(failed.replace_error, None);
 
         // 原地替换注册成功不应冲掉划词快捷键的失败
         slot.set_replace_ok();
         let still_failed = slot.get();
         assert!(!still_failed.ok);
         assert_eq!(
-            still_failed.reason.as_deref(),
-            Some("Alt+Shift+D: conflict")
+            still_failed.translate_error.as_deref(),
+            Some("Ctrl+Shift+T: conflict")
         );
 
-        // 原地替换也失败时应聚合两者的原因
-        slot.set_replace_failed("Alt+Shift+R: conflict".to_string());
+        // 原地替换也失败时应独立保留两者的原因并聚合 reason
+        slot.set_replace_failed("Ctrl+Shift+X: conflict".to_string());
         let both_failed = slot.get();
         assert!(!both_failed.ok);
         assert_eq!(
+            both_failed.translate_error.as_deref(),
+            Some("Ctrl+Shift+T: conflict")
+        );
+        assert_eq!(
+            both_failed.replace_error.as_deref(),
+            Some("Ctrl+Shift+X: conflict")
+        );
+        assert_eq!(
             both_failed.reason.as_deref(),
-            Some("Alt+Shift+D: conflict; Alt+Shift+R: conflict")
+            Some("Ctrl+Shift+T: conflict; Ctrl+Shift+X: conflict")
         );
 
         // 划词修复后只留原地替换失败
         slot.set_translate_ok();
         let replace_only = slot.get();
         assert!(!replace_only.ok);
+        assert_eq!(replace_only.translate_error, None);
         assert_eq!(
-            replace_only.reason.as_deref(),
-            Some("Alt+Shift+R: conflict")
+            replace_only.replace_error.as_deref(),
+            Some("Ctrl+Shift+X: conflict")
         );
 
-        slot.set_ok();
+        slot.set_replace_ok();
         let ok = slot.get();
         assert!(ok.ok);
         assert_eq!(ok.reason, None);
+        assert_eq!(ok.translate_error, None);
+        assert_eq!(ok.replace_error, None);
     }
 
     #[test]
@@ -2175,9 +2260,11 @@ mod tests {
             url: None,
         };
         assert!(validate_proxy_config(&invalid_manual).is_err());
-        assert!(save_proxy_config_internal(invalid_manual, &pool, &cache,)
-            .await
-            .is_err());
+        assert!(
+            save_proxy_config_internal(invalid_manual, &pool, cache.clone())
+                .await
+                .is_err()
+        );
 
         // 保存合法手动代理
         let valid_manual = ProxyConfig {
@@ -2185,9 +2272,11 @@ mod tests {
             url: Some("127.0.0.1:7890".to_string()),
         };
         assert!(validate_proxy_config(&valid_manual).is_ok());
-        assert!(save_proxy_config_internal(valid_manual, &pool, &cache,)
-            .await
-            .is_ok());
+        assert!(
+            save_proxy_config_internal(valid_manual, &pool, cache.clone())
+                .await
+                .is_ok()
+        );
 
         assert_eq!(
             cache.get_setting("proxy_mode").unwrap().as_deref(),
@@ -2208,7 +2297,7 @@ mod tests {
             url: None,
         };
         assert!(validate_proxy_config(&none_cfg).is_ok());
-        assert!(save_proxy_config_internal(none_cfg, &pool, &cache,)
+        assert!(save_proxy_config_internal(none_cfg, &pool, cache.clone())
             .await
             .is_ok());
 

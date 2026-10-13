@@ -31,6 +31,7 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **评审报告 15 项全量缺陷与质量加固**: 统一 `extension/scripts/build-firefox.mjs` 与服务端 `ALLOWED_FIREFOX_EXT_IDS` 的 Gecko Addon ID 并增加测试交叉断言；在翻译与流式链路中先提取代码块保护再预应用源端术语库替换，消除新增术语被旧缓存屏蔽及流式缓存命中重复广播事件的问题；修复浏览器扩展双语模式在重试/动态变更时重复插入译文节点、富文本段落悬停查看原文残缺（穿透提取完整段落原文）及 `cachedLimits` 配置变更后不刷新的问题；将 `save_proxy_config` 与 `reload_proxy` 的 SQLite/注册表同步 I/O 下沉至 `spawn_blocking`；新增 `import_glossary_terms` 单事务批量导入命令；为 `ShortcutStatusDto` 增加独立 `translate_error` / `replace_error` 字段消除硬编码快捷键冲突拆分；为 `FloatWindow.tsx` 补齐暗黑模式同步与复制失败提示，区分设置页 `saveStatus` 成功与失败视觉样式；加固 `format_timestamp_iso` 非负钳制与 `L1Cache` 队列顺序一致性，并清理多处历史遗留死代码。
 - **代码块与数学公式占位符丢失安全保真 (`preserve.rs`)**: 当大模型偶发丢弃或改写生成的 `⟦TRANSLY_CODE_N⟧` 占位符时，`restore_code_blocks` 自动追踪未命中的 `stash` 索引并将其安全补回译文末尾，杜绝因模型格式幻觉静默删除用户的代码块或数学公式。
 - **Google 网页翻译长文本跨语种分片拼接空格保真 (`google.rs`)**: 修正长文本切片后的拼接分隔符逻辑，同时考察译文首尾字符（西文词尾/标点与西文词首）与原文末尾特征，彻底解决长段中文切块翻译为英文时分片粘连（`...worldThis...`）及段落末尾残留多余空格的问题。
 - **翻译缓存 L1 内存写入严格后置于 SQLite 事务提交 (`cache.rs`)**: 调整 `set` 与 `set_batch` 的写入时序，仅在 SQLite 写连接或事务 `commit()` 成功后才更新 L1 内存缓存，防止磁盘满或锁失败时 L1 产生未持久化的脏数据。

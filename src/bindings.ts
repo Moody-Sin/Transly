@@ -35,6 +35,8 @@ export const commands = {
 	setReplaceShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_replace_shortcut", { shortcut })),
 	detectTextLanguage: (text: string) => typedError<string | null, string>(__TAURI_INVOKE("detect_text_language", { text })),
 	addGlossaryTerm: (source: string, target: string, matchCase: boolean | null) => typedError<null, string>(__TAURI_INVOKE("add_glossary_term", { source, target, matchCase })),
+	/**  在单个 SQLite 事务与单次内存写锁内批量导入术语库词条，避免 CSV 批量导入逐条 IPC 与 fsync。 */
+	importGlossaryTerms: (terms: GlossaryTermDto[]) => typedError<number, string>(__TAURI_INVOKE("import_glossary_terms", { terms })),
 	getGlossaryTerms: () => typedError<GlossaryTermDto[], string>(__TAURI_INVOKE("get_glossary_terms")),
 	deleteGlossaryTerm: (source: string) => typedError<null, string>(__TAURI_INVOKE("delete_glossary_term", { source })),
 	clearCache: () => typedError<number, string>(__TAURI_INVOKE("clear_cache")),
@@ -160,8 +162,12 @@ export type ServerStatus =
 export type ShortcutStatusDto = {
 	/**  两个快捷键是否都注册成功 */
 	ok: boolean,
-	/**  失败原因（注册成功时为 None） */
+	/**  聚合失败原因（兼容旧字段，注册成功时为 None） */
 	reason: string | null,
+	/**  划词翻译快捷键注册失败原因（注册成功时为 None） */
+	translate_error: string | null,
+	/**  划词原地替换快捷键注册失败原因（注册成功时为 None） */
+	replace_error: string | null,
 };
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */

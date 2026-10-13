@@ -233,7 +233,9 @@ const TAURI_MOCK_INIT_SCRIPT = `
         case 'get_shortcut_status':
           return {
             ok: true,
-            reason: null
+            reason: null,
+            translate_error: null,
+            replace_error: null
           };
 
         case 'get_shortcut':
@@ -311,6 +313,18 @@ const TAURI_MOCK_INIT_SCRIPT = `
             match_case: args.matchCase ?? true
           });
           return null;
+
+        case 'import_glossary_terms': {
+          const items = Array.isArray(args.terms) ? args.terms : [];
+          for (const item of items) {
+            state.glossary.push({
+              source: item.source,
+              target: item.target,
+              match_case: item.match_case ?? true
+            });
+          }
+          return items.length;
+        }
 
         case 'delete_glossary_term':
           state.glossary = state.glossary.filter(item => item.source !== args.source);

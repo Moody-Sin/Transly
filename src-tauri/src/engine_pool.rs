@@ -97,11 +97,6 @@ impl EnginePool {
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
     }
 
-    /// 获取不带包装的原生引擎实例（直接等同于 get_engine）
-    pub async fn get_raw_engine(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
-        self.get_engine(engine_id).await
-    }
-
     /// 获取或按需复用创建引擎实例（直出原生引擎，不执行自动降级）
     pub async fn get_engine(&self, engine_id: &str) -> Arc<dyn TranslateEngine> {
         let id_clean = engine_id.trim().to_lowercase();
@@ -221,11 +216,16 @@ impl EnginePool {
     /// 代理配置发生变更时，重新加载代理策略并重置全部引擎连接池缓存
     pub async fn reload_proxy(&self) {
         if !self.is_custom_default {
-            let proxy = Self::resolve_proxy_from_cache(self.app_cache.as_ref());
-            let new_default = Self::create_default_google(&proxy);
-            if let Ok(mut def) = self.default_engine.write() {
-                *def = new_default;
-            }
+            let app_cache = self.app_cache.clone();
+            let default_engine = self.default_engine.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let proxy = Self::resolve_proxy_from_cache(app_cache.as_ref());
+                let new_default = Self::create_default_google(&proxy);
+                if let Ok(mut def) = default_engine.write() {
+                    *def = new_default;
+                }
+            })
+            .await;
         }
         let mut map = self.cache.write().await;
         map.clear();
@@ -292,9 +292,6 @@ mod tests {
         let engine = pool.get_engine("deepl").await;
         assert_eq!(engine.id(), "deepl");
         assert_eq!(engine.capabilities().name, "DeepL");
-
-        let raw_engine = pool.get_raw_engine("deepl").await;
-        assert_eq!(raw_engine.id(), "deepl");
     }
 
     #[tokio::test]

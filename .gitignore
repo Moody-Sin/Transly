@@ -45,3 +45,4 @@ lerna-debug.log*
 Thumbs.db
 .superpowers/
 /docs/superpowers/
+/graphify-out/

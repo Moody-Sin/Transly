@@ -24,16 +24,6 @@ pub struct TranslationResponse {
     pub engine: String,
 }
 
-impl TranslationResponse {
-    /// 实际产出译文的引擎标识（剥离 `(fallback)` 后缀）。
-    /// 缓存写入必须用它，否则降级路径会与查询侧的 key 不对称而永久 Miss。
-    pub fn actual_engine(&self) -> &str {
-        self.engine
-            .strip_suffix("(fallback)")
-            .unwrap_or(&self.engine)
-    }
-}
-
 /// 批量翻译中单项请求契约（保证输入与输出具备稳定映射）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchItemRequest {
@@ -113,14 +103,6 @@ pub(crate) fn build_timed_client_with_proxy(
             reqwest::Client::new()
         }
     }
-}
-
-#[allow(dead_code)]
-pub(crate) fn build_timed_client(
-    builder: reqwest::ClientBuilder,
-    timeout: std::time::Duration,
-) -> reqwest::Client {
-    build_timed_client_with_proxy(builder, timeout, None, false)
 }
 
 /// 翻译引擎能力描述符

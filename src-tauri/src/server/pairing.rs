@@ -153,19 +153,6 @@ impl PairingManager {
         }
         false
     }
-
-    /// 获取当前处于 Pending 状态的会话信息（供前端回显或事件补发）
-    pub async fn get_pending_session(&self, session_id: &str) -> Option<PairingSession> {
-        let lock = self.sessions.read().await;
-        let now = Instant::now();
-        lock.get(session_id).and_then(|s| {
-            if now < s.expires_at && s.status == PairingStatus::Pending {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
-    }
 }
 
 impl Default for PairingManager {

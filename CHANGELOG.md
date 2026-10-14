@@ -7,6 +7,8 @@
 
 ## [未发布]
 
+## [0.3.1] - 2026-10-15
+
 ### 移除
 - **移除多引擎对比翻译模式**: 移除桌面端多引擎同屏并发对比翻译交互、卡片聚合渲染与代际取消定时器逻辑，精简主翻译窗口为单引擎直连模式，直接呈现引擎选择下拉框；同步移除多语言包中的 `modeSingle` / `modeCompare` 键值，以及对应的前端与 E2E 自动化测试用例，降低并发调用额度开销与竞态维护负担。
 - **彻底移除跨翻译引擎自动降级机制 (Breaking Change)**: 移除 `FallbackEngine` 包装器及其在 `EnginePool` 中的强制包裹逻辑，消除商业引擎（DeepL / OpenAI / DeepSeek）报错时静默切换至 Google 网页翻译所导致的用户困惑与质量降级；精简 `EngineCapabilities`，移除 `fallback_engine` 字段；优化缓存查询逻辑，严格按当前引擎隔离历史缓存；各引擎在遇到未配密钥或网络故障时直接向上报告真实错误；同步更新中英文语言包下拉文案。
@@ -414,7 +416,8 @@
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...HEAD
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Moody-Sin/Transly/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Moody-Sin/Transly/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Moody-Sin/Transly/compare/v0.1.0...v0.2.0

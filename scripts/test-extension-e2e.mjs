@@ -158,7 +158,7 @@ function startMockServer(serverPort) {
         res.end(
           JSON.stringify({
             status: 'ok',
-            version: '0.3.0',
+            version: '0.3.1',
             max_batch_items: 30,
             max_batch_total_chars: 50000,
             max_item_chars: 10000,
@@ -171,7 +171,7 @@ function startMockServer(serverPort) {
         const auth = req.headers['authorization']
         if (auth && auth.startsWith('Bearer ')) {
           res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ status: 'ok', version: '0.3.0' }))
+          res.end(JSON.stringify({ status: 'ok', version: '0.3.1' }))
         } else {
           res.writeHead(401, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({ status: 'unauthorized' }))

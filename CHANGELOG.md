@@ -15,6 +15,13 @@
 - **移除根目录踩坑知识库 `Lessons Learned.md` (Breaking Change)**: 移除 637 行踩坑记录文件，并同步清理 `crates/transly-core/src/cache.rs`、`src/bindings.ts`、`extension/src/selection/index.ts`、`extension/src/background/index.ts`、`src/task/useTaskRunner.ts`、`src/task/README.md`、`PROJECT_RULES.md` 中共 8 处对其条目的引用；随后进一步移除源码注释中沉淀自该知识库的因果解释文字（`CacheEntry` 字段类型取舍、气泡代际设计动机、空 `catch` 暴露规程的由来），注释统一回归极简描述。移除原因在于集中式踩坑文档与注释中的经验复述均难以随代码同步演进，容易造成文档沉余与事实漂移。**注意：`created_at` 必须保持 `u32` 而非 `i64`**——specta 会把 `i64` 导出为 JS `BigInt`，在 `JSON.stringify` 时直接抛错并导致前端整页崩溃，该约束现仅由类型定义与 CI 绑定比对保障。
 
 ### 新增
+- **悬浮迷你窗双向对转快捷键 (`FloatWindow.tsx`)**: 悬浮迷你窗新增 `Ctrl+S` / `Cmd+S` 快捷键，支持全键盘极速在中文（`zh-CN`）与英文（`en`）之间双向对转切换并自动触发重新翻译。
+- **术语库前端即时搜索与过滤 (`App.tsx`)**: 在设置中心的术语库卡片中新增术语本地搜索框，支持在数百至上千条术语中实时按源词或译文关键词模糊过滤并高亮展示。
+- **任务耗时感知展示 (`useTaskRunner.ts`, `App.tsx`, `FloatWindow.tsx`)**: 在任务状态机快照中引入精确耗时指标 `durationMs`，并在主窗口与悬浮迷你窗的引擎信息栏同步呈现耗时（如 `1.2s`），让用户直观感知各引擎与大模型网关的响应性能。
+- **SQLite 缓存物理回收与 WAL 截断 (`cache.rs`)**: 在全量清空翻译缓存（`clear_all_cache`）后追加调用 `PRAGMA wal_checkpoint(TRUNCATE)` 与 `VACUUM`，在磁盘底层释放数据页与缩容 WAL 文件，杜绝长期运行的磁盘碎片膨胀。
+- **扩展后台首包瞬态容错快速重试 (`extension/src/background/index.ts`)**: 在扩展端处理 `TRANSLATE_BATCH` 请求时，针对电脑唤醒或桌面端进程冷启动初期的网络被拒或连接抖动（HTTP 5xx 或无响应），增加间隔 400ms 的静默快速重试，大幅提升系统休眠唤醒后的整页翻译成功率。
+- **OpenAI/DeepSeek SSE 流式行缓冲跨包分片拼接 (`openai.rs`)**: 在 `OpenAIEngine::translate_stream` 中引入跨 TCP chunk 的流式行缓冲机制，未闭合的残余分包字节保留在缓冲区留待后续报文拼接成完整数据行，彻底消除网络分包或高频拆包导致的数据行阶段性反序列化失败与字符丢失问题；补充对应分包重组单元测试。
+- **本地扩展配对会话被动惰性驱逐 (`pairing.rs`)**: 在 `PairingManager::poll_session`、`approve` 与 `reject` 调用链路中均顺带执行过期会话（`now < s.expires_at`）清理，消除极端探测与异常断连场景下的陈旧会话滞留。
 - **LaTeX 数学公式保真保护与还原 (`preserve.rs`)**: 在 `stash_code_blocks` 中新增块级公式（`$$...$$`）与行内公式（`$...$`）识别与占位符保护逻辑，严格遵循 Pandoc 边界规范（排除 `\$` 转义及 `$100` 等金额数字误判），防止学术文档中的数学公式被翻译引擎篡改；补充对应单元测试。
 - **推理模型 `reasoning_content` 容错回退 (`openai.rs`)**: 在 `OpenAIEngine` 的同步与流式响应解析中支持 `reasoning_content` 字段，当接入推理模型（如 DeepSeek-R1）且正式 `content` 为空时安全回退消费推理文本。
 - **悬浮迷你窗 (`FloatWindow.tsx`) 引擎切换与首选同步**: 悬浮迷你窗初始化时自动读取用户配置的划词首选引擎（`getPreferredReplaceEngine`），并在顶栏提供引擎选择下拉框且切换后即时重译。
@@ -31,6 +38,9 @@
 - **浏览器扩展 Playwright 真实无头环境端到端集成测试**: 新增基于 Playwright 的无头 Chromium 插件集成测试套件（`pnpm run test:e2e:extension`），在挂载解压扩展与真实 DOM 环境下完整覆盖普通文本仅译文原地替换、`<a>` / `<strong>` 行内标签富文本保真、开放模式 Shadow DOM Web Components 穿透、双语对照模式以及一键还原 8 项核心用例。
 
 ### 修复
+- **划词原地替换网络等待期剪贴板外部修改防卫 (`commands/mod.rs`)**: 在划词原地替换的第三阶段写入译文前，先探测当前剪贴板是否已被用户在外部应用中修改。若当前剪贴板既不等于选区原文也不等于旧剪贴板，立即中止写回与模拟粘贴，彻底杜绝翻译等待期间用户复制的新数据（如代码、密码）被静默冲掉。
+- **未闭合块级数学公式避免吞噬后续正文 (`preserve.rs`)**: 修复当 Markdown 输入存在未闭合的 `$$` 围栏时，因仅消费首个 `$` 而在下一个字符将第二个 `$` 误判为行内公式起点、进而将文末所有正文吞噬进 stash 的严重缺陷；补充对应回归测试。
+- **DeepL 批量翻译集成字符数与项数双上限 (`engine/deepl.rs`)**: 在 `DeepLEngine::translate_batch` 中集成 `plan_batch_ranges` 切片规划，同时满足项数（≤30）与字符总量（≤50,000）双重约束，杜绝长段落批量翻译时触碰 DeepL 网关 413 Payload Too Large 报错。
 - **评审报告 15 项全量缺陷与质量加固**: 统一 `extension/scripts/build-firefox.mjs` 与服务端 `ALLOWED_FIREFOX_EXT_IDS` 的 Gecko Addon ID 并增加测试交叉断言；在翻译与流式链路中先提取代码块保护再预应用源端术语库替换，消除新增术语被旧缓存屏蔽及流式缓存命中重复广播事件的问题；修复浏览器扩展双语模式在重试/动态变更时重复插入译文节点、富文本段落悬停查看原文残缺（穿透提取完整段落原文）及 `cachedLimits` 配置变更后不刷新的问题；将 `save_proxy_config` 与 `reload_proxy` 的 SQLite/注册表同步 I/O 下沉至 `spawn_blocking`；新增 `import_glossary_terms` 单事务批量导入命令；为 `ShortcutStatusDto` 增加独立 `translate_error` / `replace_error` 字段消除硬编码快捷键冲突拆分；为 `FloatWindow.tsx` 补齐暗黑模式同步与复制失败提示，区分设置页 `saveStatus` 成功与失败视觉样式；加固 `format_timestamp_iso` 非负钳制与 `L1Cache` 队列顺序一致性，并清理多处历史遗留死代码。
 - **代码块与数学公式占位符丢失安全保真 (`preserve.rs`)**: 当大模型偶发丢弃或改写生成的 `⟦TRANSLY_CODE_N⟧` 占位符时，`restore_code_blocks` 自动追踪未命中的 `stash` 索引并将其安全补回译文末尾，杜绝因模型格式幻觉静默删除用户的代码块或数学公式。
 - **Google 网页翻译长文本跨语种分片拼接空格保真 (`google.rs`)**: 修正长文本切片后的拼接分隔符逻辑，同时考察译文首尾字符（西文词尾/标点与西文词首）与原文末尾特征，彻底解决长段中文切块翻译为英文时分片粘连（`...worldThis...`）及段落末尾残留多余空格的问题。

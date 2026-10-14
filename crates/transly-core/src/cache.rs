@@ -613,7 +613,7 @@ impl TranslationCache {
         })
     }
 
-    /// 清空所有翻译缓存
+    /// 清空所有翻译缓存，并在磁盘后端执行 WAL Checkpoint 与 VACUUM 回收磁盘物理碎片
     pub fn clear_all_cache(&self) -> Result<usize> {
         if let Ok(mut guard) = self.l1.lock() {
             guard.clear();
@@ -621,6 +621,15 @@ impl TranslationCache {
 
         self.with_writer(|conn| {
             let deleted = conn.execute("DELETE FROM translation_cache", [])?;
+            // 对文件数据库执行空间物理整理与 WAL 日志截断：先 VACUUM 重整表空间，再截断 WAL
+            if matches!(self.backend, CacheBackend::File { .. }) {
+                let _ = conn.execute_batch(
+                    r#"
+                    VACUUM;
+                    PRAGMA wal_checkpoint(TRUNCATE);
+                    "#,
+                );
+            }
             Ok(deleted)
         })
     }

@@ -959,6 +959,20 @@ pub fn trigger_selection_replacement(
             let _guard = CLIPBOARD_SIMULATION_MUTEX.lock().await;
             sel_flag.store(true, Ordering::SeqCst);
 
+            // 关键安全防线：在写回剪贴板前，检查当前剪贴板内容是否已被用户外部改写。
+            // 第二阶段（网络翻译）长达数秒，若用户在其他应用复制了新内容（例如代码、密码），
+            // 当前剪贴板既不等于选区原文 clean，也不等于 old_clipboard，说明外部产生了新复制。
+            // 此时必须放弃写回剪贴板与模拟粘贴，防止摧毁用户的新数据。
+            let pre_write_current = handle.clipboard().read_text().ok();
+            let is_unmodified =
+                pre_write_current.as_deref() == Some(clean) || pre_write_current == old_clipboard;
+
+            if !is_unmodified {
+                eprintln!("[Selection Replacement Warning] 翻译等待期间用户复制了新内容，放弃原地粘贴与剪贴板覆盖");
+                sel_flag.store(false, Ordering::SeqCst);
+                return;
+            }
+
             if handle.clipboard().write_text(&final_text).is_ok() {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
@@ -977,8 +991,6 @@ pub fn trigger_selection_replacement(
 
             // 恢复用户原有剪贴板内容。
             //
-            // 翻译阶段可能长达数秒，期间用户完全可能已在别的应用复制了新内容。
-            // 无条件写回 old_clipboard 会把那份新内容**彻底销毁**。
             // 判据是「当前剪贴板是否仍等于本流程写入的译文」：
             //   - 相等 → 期间无人干预，安全还原；
             //   - 不等 → 已被外部改写，必须放弃还原，保留用户的新内容。

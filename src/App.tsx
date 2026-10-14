@@ -82,6 +82,7 @@ export default function App() {
   const [openaiModel, setOpenaiModel] = useState('')
   const [clipboardMonitor, setClipboardMonitor] = useState(false)
   const [cacheEnabled, setCacheEnabled] = useState(true)
+  const [glossarySearch, setGlossarySearch] = useState('')
   const [glossarySource, setGlossarySource] = useState('')
   const [glossaryTarget, setGlossaryTarget] = useState('')
   const [glossaryMatchCase, setGlossaryMatchCase] = useState(true)
@@ -1087,9 +1088,16 @@ export default function App() {
                   )}
                 </div>
                 <div className="mt-2 flex items-center justify-between">
-                  {usedEngine && (
-                    <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {usedEngine && (
+                      <span className="text-[10px] text-slate-400">engine: {usedEngine}</span>
+                    )}
+                    {runner.snapshot.durationMs != null && runner.snapshot.durationMs > 0 && (
+                      <span className="text-[10px] text-slate-400">
+                        · {(runner.snapshot.durationMs / 1000).toFixed(1)}s
+                      </span>
+                    )}
+                  </div>
                   {translatedText && (
                     <div className="flex items-center gap-1.5 justify-end">
                       <button
@@ -1716,31 +1724,53 @@ export default function App() {
 
                 {/* 已保存术语列表 */}
                 {glossaryList.length > 0 && (
-                  <div className="mt-2 max-h-32 overflow-y-auto border-t border-slate-200 pt-2 flex flex-col gap-1.5">
-                    {glossaryList.map((item) => (
-                      <div
-                        key={item.source}
-                        className="flex items-center justify-between rounded bg-white px-2 py-1 border border-slate-200"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-slate-700">{item.source}</span>
-                          <span className="text-slate-400">→</span>
-                          <span className="text-slate-600">{item.target}</span>
-                          {!item.match_case && (
-                            <span className="rounded bg-amber-50 px-1 py-0.2 text-[10px] text-amber-600 border border-amber-200">
-                              Aa
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleDeleteGlossary(item.source)}
-                          className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                          title={t.settings.btnDeleteGlossary}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))}
+                  <div className="mt-2 border-t border-slate-200 dark:border-slate-700 pt-2 flex flex-col gap-1.5">
+                    <input
+                      type="text"
+                      value={glossarySearch}
+                      onChange={(e) => setGlossarySearch(e.target.value)}
+                      placeholder="搜索已保存术语 (源词 / 译词)..."
+                      className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-800 dark:text-slate-200 outline-none focus:border-indigo-500"
+                    />
+                    <div className="max-h-36 overflow-y-auto flex flex-col gap-1.5">
+                      {glossaryList
+                        .filter((item) => {
+                          const kw = glossarySearch.trim().toLowerCase()
+                          if (!kw) return true
+                          return (
+                            item.source.toLowerCase().includes(kw) ||
+                            item.target.toLowerCase().includes(kw)
+                          )
+                        })
+                        .map((item) => (
+                          <div
+                            key={item.source}
+                            className="flex items-center justify-between rounded bg-white dark:bg-slate-800 px-2 py-1 border border-slate-200 dark:border-slate-700 text-xs"
+                          >
+                            <div className="flex items-center gap-1.5 truncate">
+                              <span className="font-semibold text-slate-700 dark:text-slate-200 truncate">
+                                {item.source}
+                              </span>
+                              <span className="text-slate-400">→</span>
+                              <span className="text-slate-600 dark:text-slate-300 truncate">
+                                {item.target}
+                              </span>
+                              {!item.match_case && (
+                                <span className="rounded bg-amber-50 dark:bg-amber-950/50 px-1 py-0.2 text-[10px] text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800 shrink-0">
+                                  Aa
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => handleDeleteGlossary(item.source)}
+                              className="rounded p-0.5 text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-600 shrink-0"
+                              title={t.settings.btnDeleteGlossary}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
                   </div>
                 )}
               </div>

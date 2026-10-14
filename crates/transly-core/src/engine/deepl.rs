@@ -229,12 +229,14 @@ impl TranslateEngine for DeepLEngine {
         let target_lang = Self::normalize_target_lang(first_target)
             .ok_or_else(|| Error::Input(format!("DeepL 不支持目标语言：{first_target}")))?;
         let source_lang = Self::normalize_source_lang(first_source);
-        // 分片大小取自自身能力声明，不再写死数字（写死 50 会让该分片永不触发）
-        let chunk_size = self.capabilities().max_batch_size.max(1);
-        let chunks: Vec<&[TranslationRequest]> = requests.chunks(chunk_size).collect();
+
+        // 使用 plan_batch_ranges 实现项数与字符总量双重切片，彻底防止超长文本或多大段落触碰 DeepL 413 载荷上限
+        let texts_ref: Vec<&str> = requests.iter().map(|r| r.text.as_str()).collect();
+        let ranges = super::plan_batch_ranges(&texts_ref);
         let mut all_responses = Vec::with_capacity(requests.len());
 
-        for chunk in chunks {
+        for (start, end) in ranges {
+            let chunk = &requests[start..end];
             let texts: Vec<&str> = chunk.iter().map(|r| r.text.as_str()).collect();
 
             let body = DeepLApiRequest {

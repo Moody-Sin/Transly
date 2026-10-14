@@ -16,17 +16,20 @@ export interface RunnerSnapshot {
   sourceText: string
   detectedLang?: string | null
   effectiveTargetLang?: string | null
+  durationMs?: number | null
 }
 
 // run() 的可选参数：source/debounceMs 控制投递方式，
 // engine/targetLang 用于「切换引擎或目标语言后立刻重跑」——
 // React state 更新是异步的，此时 engineRef/langRef 仍是旧值，
 // 必须把新值随调用同步传入，否则重跑会沿用旧引擎/旧语言。
+// forceTargetLang: 显式锁死目标语言，跳过基于源语言推断的双向自动翻转逻辑（如全键盘对转或下拉显式切换）。
 export interface RunOptions {
   source?: RunnerSnapshot['source']
   debounceMs?: number
   engine?: string
   targetLang?: string
+  forceTargetLang?: boolean
 }
 
 export interface TaskRunner {
@@ -91,7 +94,7 @@ export function useTaskRunner(
   }, [])
 
   const execute = useCallback(
-    async (text: string, source: RunnerSnapshot['source']) => {
+    async (text: string, source: RunnerSnapshot['source'], forceTargetLang?: boolean) => {
       const gen = ++genRef.current
       lastRunRef.current = { text, source }
       setSnapshot((s) => ({
@@ -101,42 +104,40 @@ export function useTaskRunner(
         error: null,
       }))
 
-      // 探测源语言并在中英智能双向对转时自适应目标语言
+      // 探测源语言并在中英智能双向对转时自适应目标语言（若显式指定 forceTargetLang 则保持用户选择）
       let effectiveTarget = langRef.current
       let detected: string | null = null
       try {
         const detectRes = await commands.detectTextLanguage(text)
 
         // 代际闸门必须同时覆盖「请求投递」，不能只挡响应回流。
-        // detectTextLanguage 是一次 IPC 往返，其间用户可能已继续输入并触发
-        // run()/cancel()：代际被作废、后端 cancelStreamTask 因任务尚未注册而
-        // 是 no-op。若此处不复查就继续投递请求，后端会完整跑一次 LLM——
-        // 用户看不到任何结果，但 API 已计费，且这条译文还会被写进缓存与历史。
         if (gen !== genRef.current) return
 
         if (detectRes.status === 'ok' && detectRes.data) {
           detected = detectRes.data
-          const isTargetChinese =
-            effectiveTarget === 'zh' ||
-            effectiveTarget === 'zh-CN' ||
-            effectiveTarget === 'zh-Hans' ||
-            effectiveTarget === 'zh-TW'
-          const isTargetEnglish =
-            effectiveTarget === 'en' || effectiveTarget === 'en-US' || effectiveTarget === 'en-GB'
+          if (!forceTargetLang) {
+            const isTargetChinese =
+              effectiveTarget === 'zh' ||
+              effectiveTarget === 'zh-CN' ||
+              effectiveTarget === 'zh-Hans' ||
+              effectiveTarget === 'zh-TW'
+            const isTargetEnglish =
+              effectiveTarget === 'en' || effectiveTarget === 'en-US' || effectiveTarget === 'en-GB'
 
-          if (isTargetChinese && detected === 'zh-CN') {
-            effectiveTarget = 'en'
-          } else if (isTargetEnglish && detected === 'en') {
-            effectiveTarget = 'zh-CN'
+            if (isTargetChinese && detected === 'zh-CN') {
+              effectiveTarget = 'en'
+            } else if (isTargetEnglish && detected === 'en') {
+              effectiveTarget = 'zh-CN'
+            }
           }
         }
       } catch {
         // 探测失败时静默回退默认目标语言
       }
 
-      // 主窗口如果使用 LLM 引擎（OpenAI/DeepSeek），优先使用 translateStream 实现流式打字机效果
       const currentEng = engineRef.current
       const isLlm = currentEng === 'openai' || currentEng === 'deepseek'
+      const startTime = Date.now()
 
       // IPC 层抛错（非 status==='error'）时也必须回落为失败态，
       // 否则 UI 永久停留在 running。代际闸门同样适用：迟到异常不污染新代。
@@ -148,6 +149,7 @@ export function useTaskRunner(
           : commands.translate(text, 'auto', effectiveTarget, currentEng).catch(toFailureOutcome)
 
       const res = await reqPromise
+      const elapsed = Date.now() - startTime
       // 代际闸门：取消或新请求后，旧代响应一律丢弃，绝不覆盖新代状态
       if (applyIfCurrent(gen, genRef.current, true) !== true) return
 
@@ -161,6 +163,7 @@ export function useTaskRunner(
           sourceText: text,
           detectedLang: detected,
           effectiveTargetLang: effectiveTarget,
+          durationMs: elapsed,
         })
       } else {
         setSnapshot({
@@ -176,6 +179,7 @@ export function useTaskRunner(
           sourceText: text,
           detectedLang: detected,
           effectiveTargetLang: effectiveTarget,
+          durationMs: elapsed,
         })
       }
     },
@@ -211,14 +215,15 @@ export function useTaskRunner(
 
       const source = opts?.source ?? 'input'
       const delay = opts?.debounceMs ?? 0
+      const forceTargetLang = opts?.forceTargetLang
       if (delay > 0) {
         const gen = genRef.current
         debounceRef.current = setTimeout(() => {
           if (gen !== genRef.current) return
-          void execute(text, source)
+          void execute(text, source, forceTargetLang)
         }, delay)
       } else {
-        void execute(text, source)
+        void execute(text, source, forceTargetLang)
       }
     },
     [clearDebounce, execute],

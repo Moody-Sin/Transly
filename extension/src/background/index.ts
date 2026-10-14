@@ -455,37 +455,56 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'TRANSLATE_BATCH') {
-    Promise.all([getServerToken(), getServerUrl()]).then(([token, serverUrl]) => {
-      fetch(`${serverUrl}/translate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          items: message.items,
-          source_lang: message.source_lang,
-          target_lang: message.target_lang,
-          engine: message.engine,
-        }),
-      })
-        .then((res) => {
-          if (!res.ok) {
-            const err = new Error(`HTTP ${res.status}: ${res.statusText}`)
-            // 413 是「批次超限」，与网络故障不同：带上状态码供调用方区分处理
-            ;(err as Error & { status?: number }).status = res.status
-            throw err
-          }
-          return res.json()
-        })
-        .then((data) => sendResponse({ ok: true, data }))
-        .catch((err) =>
-          sendResponse({
-            ok: false,
-            error: err.message,
-            status: (err as Error & { status?: number }).status,
+    Promise.all([getServerToken(), getServerUrl()]).then(async ([token, serverUrl]) => {
+      const doFetch = async () => {
+        const res = await fetch(`${serverUrl}/translate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            items: message.items,
+            source_lang: message.source_lang,
+            target_lang: message.target_lang,
+            engine: message.engine,
           }),
-        )
+        })
+        if (!res.ok) {
+          const err = new Error(`HTTP ${res.status}: ${res.statusText}`)
+          ;(err as Error & { status?: number }).status = res.status
+          throw err
+        }
+        return res.json()
+      }
+
+      try {
+        const data = await doFetch()
+        sendResponse({ ok: true, data })
+      } catch (firstErr) {
+        // 睡眠唤醒/冷启动瞬态容错：若非 4xx 业务错误（如连接被拒或网络闪断），快速重试一次
+        const status = (firstErr as Error & { status?: number }).status
+        if (!status || status >= 500) {
+          await new Promise((r) => setTimeout(r, 400))
+          try {
+            const retryData = await doFetch()
+            sendResponse({ ok: true, data: retryData })
+            return
+          } catch (retryErr) {
+            sendResponse({
+              ok: false,
+              error: (retryErr as Error).message,
+              status: (retryErr as Error & { status?: number }).status,
+            })
+            return
+          }
+        }
+        sendResponse({
+          ok: false,
+          error: (firstErr as Error).message,
+          status,
+        })
+      }
     })
     return true
   }

@@ -148,6 +148,16 @@ pub fn stash_code_blocks(input: &str) -> PreservedText {
                     stash.push(math_content.to_string());
                     output.push_str(&ph);
                     continue;
+                } else {
+                    // 未闭合的块级公式：消费第二个 '$'，按普通字符输出 "$$"，
+                    // 彻底防止下一个循环将第二个 '$' 误判为行内公式起点而贪婪吞噬后续大段正文
+                    if let Some(&(_, next_c)) = chars.peek() {
+                        if next_c == '$' {
+                            chars.next();
+                        }
+                    }
+                    output.push_str("$$");
+                    continue;
                 }
             }
         }
@@ -452,6 +462,21 @@ mod tests {
         assert!(restored.starts_with("Consider Euler's formula $e^{i\\pi} + 1 = 0$"));
         assert!(restored.contains("$$\\int_{-\\infty}^\\infty e^{-x^2} dx = \\sqrt{\\pi}$$"));
         assert!(restored.contains("$100 美元和 $200 美元"));
+    }
+
+    #[test]
+    fn test_unclosed_block_math_formula_does_not_swallow_body() {
+        let input =
+            "未闭合公式：\n$$\\int_0^1 x dx\n这是后续正文，这里有孤立的 $ 符号，不能被吞掉。";
+        let preserved = stash_code_blocks(input);
+        assert_eq!(preserved.stash.len(), 0, "未闭合公式不应进入 stash");
+        assert!(
+            preserved.text.contains("这是后续正文"),
+            "未闭合公式后的正文必须保留：{}",
+            preserved.text
+        );
+        let restored = restore_code_blocks(&preserved.text, &preserved.stash);
+        assert_eq!(restored, input);
     }
 
     /// 回归：大模型在长文档中时常直接吞掉占位符。若只做替换，

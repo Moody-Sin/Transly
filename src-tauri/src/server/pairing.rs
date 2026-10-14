@@ -96,12 +96,14 @@ impl PairingManager {
     ) -> PairingPollResult {
         let mut lock = self.sessions.write().await;
         let now = Instant::now();
+        // 轮询时顺带执行轻量惰性过期清理
+        lock.retain(|_, s| now < s.expires_at);
 
         let Some(session) = lock.get_mut(session_id) else {
             return PairingPollResult::Expired;
         };
 
-        if session.client_id != client_id || now >= session.expires_at {
+        if session.client_id != client_id {
             lock.remove(session_id);
             return PairingPollResult::Expired;
         }
@@ -132,8 +134,11 @@ impl PairingManager {
     pub async fn approve(&self, session_id: &str) -> bool {
         let mut lock = self.sessions.write().await;
         let now = Instant::now();
+        // 顺带清理已超时的陈旧会话，防止极端探测场景下的滞留
+        lock.retain(|_, s| now < s.expires_at);
+
         if let Some(session) = lock.get_mut(session_id) {
-            if now < session.expires_at && session.status == PairingStatus::Pending {
+            if session.status == PairingStatus::Pending {
                 session.status = PairingStatus::Approved;
                 return true;
             }
@@ -145,8 +150,11 @@ impl PairingManager {
     pub async fn reject(&self, session_id: &str) -> bool {
         let mut lock = self.sessions.write().await;
         let now = Instant::now();
+        // 顺带清理已超时的陈旧会话，防止极端探测场景下的滞留
+        lock.retain(|_, s| now < s.expires_at);
+
         if let Some(session) = lock.get_mut(session_id) {
-            if now < session.expires_at && session.status == PairingStatus::Pending {
+            if session.status == PairingStatus::Pending {
                 session.status = PairingStatus::Rejected;
                 return true;
             }

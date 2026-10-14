@@ -562,7 +562,8 @@ impl TranslateEngine for OpenAIEngine {
             let bytes = item?;
             byte_buffer.extend_from_slice(&bytes);
 
-            // 逐行解析 SSE 数据帧，保持 O(n) 的单趟扫描与单次内存缩容，杜绝每行重复 drain
+            // 逐行解析 SSE 数据帧，保持 O(n) 的单趟扫描与单次内存缩容，杜绝每行重复 drain。
+            // 末尾未闭合的残余字节保留在 byte_buffer 中，留待下个 TCP 报文/分包抵达后拼成完整行。
             let mut cursor = 0;
             while let Some(relative_nl) = byte_buffer[cursor..].iter().position(|&b| b == b'\n') {
                 let newline_pos = cursor + relative_nl;
@@ -608,10 +609,44 @@ impl TranslateEngine for OpenAIEngine {
                 }
             }
 
-            // 单趟结束后一次性移走已消费的字节，消除 O(n^2) 搬移
+            // 单趟结束后一次性移走已消费的完整行字节，保留末尾未闭合的残余分包字节
             if cursor > 0 {
                 byte_buffer.drain(..cursor);
             }
+        }
+
+        // 处理流结束时若存在未带末尾换行的最后一行残余数据帧
+        if !byte_buffer.is_empty() {
+            let line_trimmed = if byte_buffer.ends_with(b"\r") {
+                &byte_buffer[..byte_buffer.len() - 1]
+            } else {
+                &byte_buffer[..]
+            };
+            if let Ok(line) = std::str::from_utf8(line_trimmed) {
+                let line = line.trim();
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim();
+                    if data != "[DONE]" {
+                        if let Ok(parsed) =
+                            serde_json::from_str::<StreamChatCompletionResponse>(data)
+                        {
+                            for choice in parsed.choices {
+                                if let Some(content) = choice.delta.content {
+                                    if !content.is_empty() {
+                                        on_chunk(&content);
+                                        full_text.push_str(&content);
+                                    }
+                                } else if let Some(reasoning) = choice.delta.reasoning_content {
+                                    if !reasoning.is_empty() {
+                                        reasoning_text.push_str(&reasoning);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            byte_buffer.clear();
         }
 
         if full_text.trim().is_empty() {
@@ -847,5 +882,66 @@ mod tests {
         let prompt = engine.build_batch_system_prompt("zh-CN");
         assert!(prompt.contains("JSON array of items"));
         assert!(prompt.contains("'id' and 'text'"));
+    }
+
+    #[test]
+    fn test_stream_sse_fragment_reassembly() {
+        // 模拟 TCP 分包将完整的 data 行在 JSON 字符甚至前缀中间拆开到达
+        let chunks = vec![
+            "data: {\"choices\":[{\"delta\":{\"c".as_bytes(),
+            "ontent\":\"Hello \"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"World\"}}]}"
+                .as_bytes(),
+            "\n\ndata: [DONE]\n\n".as_bytes(),
+        ];
+
+        let mut byte_buffer = Vec::new();
+        let mut full_text = String::new();
+
+        'stream_loop: for bytes in chunks {
+            byte_buffer.extend_from_slice(bytes);
+            let mut cursor = 0;
+            while let Some(relative_nl) = byte_buffer[cursor..].iter().position(|&b| b == b'\n') {
+                let newline_pos = cursor + relative_nl;
+                let line_bytes = &byte_buffer[cursor..newline_pos];
+                cursor = newline_pos + 1;
+
+                let line_trimmed = if line_bytes.ends_with(b"\r") {
+                    &line_bytes[..line_bytes.len() - 1]
+                } else {
+                    line_bytes
+                };
+
+                if line_trimmed.is_empty() {
+                    continue;
+                }
+
+                let line = match std::str::from_utf8(line_trimmed) {
+                    Ok(s) => s.trim(),
+                    Err(_) => continue,
+                };
+
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        break 'stream_loop;
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<StreamChatCompletionResponse>(data) {
+                        for choice in parsed.choices {
+                            if let Some(content) = choice.delta.content {
+                                if !content.is_empty() {
+                                    full_text.push_str(&content);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if cursor > 0 {
+                byte_buffer.drain(..cursor);
+            }
+        }
+
+        assert_eq!(full_text, "Hello World");
     }
 }

@@ -52,22 +52,33 @@ export default function FloatWindow() {
       .catch(() => {})
   }, [])
 
-  // 迷你悬浮窗 Escape 键极速关闭交互
+  const runner = useTaskRunner(engine, targetLang, { isPinned: isFloatPinned })
+  const { state, text: translatedText, error } = runner.snapshot
+  const isTranslating = state === 'running'
+
+  // 迷你悬浮窗 Escape 键极速关闭交互与 Ctrl+S / Cmd+S 快速对转切换语言
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         getCurrentWindow()
           .hide()
           .catch((err) => console.warn('[Transly] 隐藏浮窗失败：', err))
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        // 对转基准以当前生效语言为准：如果是有效目标为英文，则转为中文，反之转为英文
+        const currentActive = runner.snapshot.effectiveTargetLang || targetLang
+        const nextLang =
+          currentActive === 'zh-CN' || currentActive.startsWith('zh') ? 'en' : 'zh-CN'
+        setTargetLang(nextLang)
+        if (runner.snapshot.sourceText) {
+          // 无论当前是否在运行，直接打断并以 forceTargetLang 显式发起新目标语言翻译
+          runner.run(runner.snapshot.sourceText, { targetLang: nextLang, forceTargetLang: true })
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
-  const runner = useTaskRunner(engine, targetLang, { isPinned: isFloatPinned })
-  const { state, text: translatedText, error } = runner.snapshot
-  const isTranslating = state === 'running'
+  }, [targetLang, runner])
 
   const showNetworkEngineHint =
     error?.kind === 'network' && (engine === 'google' || engine === 'google_web')
@@ -152,9 +163,12 @@ export default function FloatWindow() {
             onChange={(e) => {
               const newLang = e.target.value
               setTargetLang(newLang)
-              if (runner.snapshot.sourceText && !isTranslating) {
-                // 同步传入新目标语言：setTargetLang 是异步的，此刻 runner 内部 ref 仍是旧值
-                runner.run(runner.snapshot.sourceText, { targetLang: newLang })
+              if (runner.snapshot.sourceText) {
+                // 用户在下拉框显式指定目标语言：传入 forceTargetLang 避免被离线语言检测覆盖
+                runner.run(runner.snapshot.sourceText, {
+                  targetLang: newLang,
+                  forceTargetLang: true,
+                })
               }
             }}
             className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
@@ -200,7 +214,7 @@ export default function FloatWindow() {
             : state === 'cancelled'
               ? t.task.cancelled
               : runner.snapshot.sourceText
-                ? `“${runner.snapshot.sourceText.slice(0, 30)}...”`
+                ? `“${runner.snapshot.sourceText.slice(0, 24)}...”${runner.snapshot.durationMs != null && runner.snapshot.durationMs > 0 ? ` (${(runner.snapshot.durationMs / 1000).toFixed(1)}s)` : ''}`
                 : t.float.autoHideNotice}
         </span>
         {translatedText && (

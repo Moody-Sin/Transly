@@ -26,4 +26,4 @@ pnpm run test:task
 
 ## 许可证
 
-[MIT](../../LICENSE) © Transly Authors
+[商业专有许可](../../LICENSE) © Transly Authors

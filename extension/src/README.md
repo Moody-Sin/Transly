@@ -55,4 +55,4 @@ pnpm build        # 在 extension/ 目录下
 
 ## 许可证
 
-[MIT](../../LICENSE)
+[商业专有许可](../../LICENSE)

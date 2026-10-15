@@ -1,21 +1,57 @@
-MIT License
+# Transly 软件最终用户许可协议 (EULA) 与开源核心授权声明
 
-Copyright (c) 2025 Transly Authors
+本软件工程采用 **Open-Core（开放核心）** 授权模式进行管理。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+---
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## 1. 核心库开源许可（Open-Source Core）
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+本项目位于 `crates/transly-core` 目录下的纯底层核心库（包含翻译与 OCR 引擎抽象、持久化缓存调度、语种识别与术语库逻辑等），采用 **[Apache License 2.0](crates/transly-core/LICENSE)** 许可开源。
+
+您可以在遵循 Apache 2.0 许可证的条件下，自由地将 `transly-core` 用于您的个人、研究或第三方项目中。
+
+---
+
+## 2. 客户端应用与浏览器扩展专有商业买断许可（Proprietary Commercial License）
+
+除上述明确属于 `crates/transly-core` 的代码外，本项目所有其他组件——包括但不限于：
+* `src/`：桌面端用户界面及交互逻辑；
+* `src-tauri/`：桌面端平台适配、系统凭据管理、本地 HTTP 守护服务及授权验证模块；
+* `extension/`：Transly 浏览器沉浸式整页翻译扩展；
+* 官方构建产物、安装包（Installer）以及配套的视觉设计与商标（Transly Logo、图标及界面资产）。
+
+均为 **商业专有软件（Commercial Proprietary Software）**，由 Transly 原作者拥有全部著作权与知识产权。
+
+### 2.1 源码查看与编译条款 (Source-Available)
+您被允许出于**安全审计、学习研究或为开源核心贡献代码**的目的，在本地克隆、查阅本仓库的源码并进行私有调试构建。
+
+### 2.2 外部贡献与知识产权授予 (Inbound Contributions)
+对于向开源核心库 `crates/transly-core` 提交的贡献，自动遵循 Apache 2.0 许可证条款管理。  
+任何向本项目商业专有模块（除 `crates/transly-core` 以外的所有目录与组件）提交的贡献（包括 Pull Request、补丁、设计或相关代码建议），均视为贡献者明确同意将其著作权不可撤销地以全球性、免版税、非排他方式永久授权给 Transly 原作者进行商业集成、打包、闭源发布与商业化销售。
+
+### 2.3 收费买断与使用限制 (License & Usage Restrictions)
+* **买断授权**：Transly 客户端及浏览器扩展的正式使用、分发与功能解锁实行**收费买断制**。最终用户必须通过官方渠道获得合法授权（License 授权码）。
+* **禁止未授权再分发**：严禁任何个人或实体在未经版权持有人明确书面许可的情况下，将包含上述专有组件的编译二进制产物、打包扩展或其衍生版本进行公开发布、出售、转售、租赁或作为免费竞品进行商业运营。
+* **禁止逆向破解**：禁止恶意绕过、修改、破解或移除本软件内包含的任何授权验证机制、数字签名或权利声明。
+
+---
+
+## 3. 商标与知识产权（Trademarks）
+
+"Transly" 以及相关标志和图标均为本项目作者的专有标识。任何开源或二次开发均不得擅自使用 "Transly" 商标进行商业推广或混淆性宣传。
+
+---
+
+## 4. 第三方开源组件声明（Third-Party Notices）
+
+本软件客户端与扩展集成或依赖了若干第三方开源软件库与框架（包括但不限于 Tauri、React、Tokio、Rusqlite 等）。各依赖组件均遵循其各自的开源许可协议（包括 Apache-2.0、MIT、BSD、MPL 等）。此等第三方开源组件的知识产权与版权均归其各自作者所有。
+
+---
+
+## 5. 免责声明（Disclaimer of Warranties）
+
+在法律允许的最大范围内，本软件按“现状”（AS-IS）提供，作者不作任何明示或暗示的保证（包括但不限于适销性、特定用途适用性或无侵权保证）。在任何情况下，作者均不对因使用或无法使用本软件所造成的任何直接或间接损失承担责任。
+
+---
+
+Copyright © 2025-2026 Transly Authors. All Rights Reserved.

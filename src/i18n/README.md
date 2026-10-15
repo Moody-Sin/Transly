@@ -36,4 +36,4 @@ pnpm run test:task
 
 ## 许可证
 
-[MIT](../../LICENSE)
+[商业专有许可](../../LICENSE)

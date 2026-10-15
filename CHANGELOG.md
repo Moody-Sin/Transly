@@ -7,6 +7,12 @@
 
 ## [未发布]
 
+### 变更
+- **项目授权模式转型为 Open-Core 商业买断混合许可**:
+  - 底层核心逻辑库 `crates/transly-core` 独立声明为 **Apache License 2.0** 开源许可，为第三方开发者与社区提供无侵权隐患的底层翻译、缓存、OCR与语种检测基础引擎；
+  - 桌面客户端前端 (`src/`)、平台适配层 (`src-tauri/`) 与沉浸式浏览器扩展 (`extension/`) 正式转为**商业专有买断授权 (Proprietary Commercial EULA)**，支持个人源码安全审计与本地私有构建调试 (Source-Available)，严禁未经许可公开发布、转售、租赁或重新打包商业成品；
+  - 在 `src-tauri/Cargo.toml` 中标记 `publish = false` 与 `license = "LicenseRef-Proprietary"`，`package.json` 显式标注 `"license": "UNLICENSED"`，并同步更新全仓 19 处子模块 README 的许可证链接与声明。
+
 ### 新增
 - **全离线轻量嵌入式翻译引擎支持 (`OfflineEngine`)**: 在 `transly-core` 中新增纯本地无外呼、零第三方服务依赖的离线翻译引擎，配合 Unicode 脚本语言检测器，完全满足无网断网、极度私密场景下的基础翻译保障；桌面端主窗口、划词悬浮迷你窗、设置中心与浏览器插件同步支持选择该引擎。
 - **Firefox 浏览器扩展全链路打包与自动化校验门禁**: 新增 `scripts/test-firefox-package.mjs`，在 `package.json` 的 `test:e2e` 中纳入 Firefox 产物自动化校验，确保输出严格符合 Gecko MV3、UUID 绑定与白名单契约。

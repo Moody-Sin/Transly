@@ -19,6 +19,7 @@
 - **google.rs**：`GoogleWebEngine` 免密钥网页翻译适配，实现官方扩展标头（`dict-chrome-ex`）风控防护、多段换行自动切块与防超长分片。
 - **deepl.rs**：`DeepLEngine` 官方 API 适配，支持 Free/Pro 双端点切换、严格条数对齐与 50 项批量分片。
 - **openai.rs**：`OpenAIEngine` 大模型翻译适配（支持 OpenAI 与 DeepSeek），支持自定义 Base URL 端点、模型名、翻译风格（`TranslationStyle`）、本地离线模型（Ollama）免 Key 适配及 SSE 流式打字机输出。
+- **offline.rs**：`OfflineEngine` 纯本地无外呼、零第三方服务依赖的离线翻译引擎，配合 Unicode 脚本语言检测器，提供极度私密/断网场景下的基础保障。
 
 ## 核心机制
 

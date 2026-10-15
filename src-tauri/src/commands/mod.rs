@@ -1829,7 +1829,7 @@ pub fn validate_preferred_replace_engine(engine: &str) -> Result<String, String>
     let clean = engine.trim().to_lowercase();
     match clean.as_str() {
         "google" | "google_web" => Ok("google".to_string()),
-        "deepl" | "deepseek" | "openai" => Ok(clean),
+        "deepl" | "deepseek" | "openai" | "offline" => Ok(clean),
         _ => Err("无效或不受支持的划词替换引擎".to_string()),
     }
 }
@@ -2252,6 +2252,10 @@ mod tests {
         assert_eq!(
             validate_preferred_replace_engine("openai"),
             Ok("openai".to_string())
+        );
+        assert_eq!(
+            validate_preferred_replace_engine("offline"),
+            Ok("offline".to_string())
         );
     }
 

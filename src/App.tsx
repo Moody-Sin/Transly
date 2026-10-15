@@ -355,10 +355,12 @@ export default function App() {
       async (event) => {
         setPairingError(null)
         setPairingBusy(false)
+        const expiresIn = event.payload.expires_in ?? PAIRING_TTL_SECONDS
+        pairingInitialCountdownRef.current = expiresIn
         setPairingRequest({
           sessionId: event.payload.session_id,
           browserHint: event.payload.browser_hint,
-          countdown: event.payload.expires_in ?? PAIRING_TTL_SECONDS,
+          countdown: expiresIn,
         })
         try {
           const win = getCurrentWindow()
@@ -434,10 +436,11 @@ export default function App() {
   // 倒计时每秒重建一次对象，也会把 setInterval 每秒 clear 一次再重建。
   const pairingSessionId = pairingRequest?.sessionId ?? null
   const pairingCountdownRef = useRef(PAIRING_TTL_SECONDS)
+  const pairingInitialCountdownRef = useRef(PAIRING_TTL_SECONDS)
 
   useEffect(() => {
     if (!pairingSessionId) return
-    pairingCountdownRef.current = PAIRING_TTL_SECONDS
+    pairingCountdownRef.current = pairingInitialCountdownRef.current
     const timer = setInterval(() => {
       const next = pairingCountdownRef.current - 1
       if (next <= 0) {

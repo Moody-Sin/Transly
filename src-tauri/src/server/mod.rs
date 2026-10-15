@@ -421,6 +421,17 @@ async fn translate_batch_handler(
     if unified_items.is_empty() || unified_items.len() > transly_core::MAX_BATCH_ITEMS {
         return Err(StatusCode::BAD_REQUEST);
     }
+
+    // 校验批量 ID 唯一性，防止下游客户端按 ID 映射时产生覆盖或错位
+    {
+        let mut seen_ids = std::collections::HashSet::with_capacity(unified_items.len());
+        for it in &unified_items {
+            if !seen_ids.insert(&it.id) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+
     let total_chars: usize = unified_items.iter().map(|t| t.text.chars().count()).sum();
     if total_chars > transly_core::MAX_BATCH_TOTAL_CHARS {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);

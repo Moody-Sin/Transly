@@ -390,6 +390,23 @@ async fn test_translate_language_and_length_validation() {
     let res3 = app.clone().oneshot(invalid_engine_req).await.unwrap();
     assert_eq!(res3.status(), StatusCode::BAD_REQUEST);
 
+    // 3.5. 测试批量请求中包含重复 ID 时直接拒绝
+    let duplicate_id_req = local_builder()
+        .method("POST")
+        .uri("/translate")
+        .header(header::AUTHORIZATION, "Bearer valid-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"items":[{"id":"1","text":"hello"},{"id":"1","text":"world"}],"target_lang":"zh-CN"}"#,
+        ))
+        .unwrap();
+    let res_dup = app.clone().oneshot(duplicate_id_req).await.unwrap();
+    assert_eq!(
+        res_dup.status(),
+        StatusCode::BAD_REQUEST,
+        "重复 ID 必须被 400 拒绝"
+    );
+
     // 4. 测试 Token 轮换：旧 Token 立即返回 401，新 Token 正常访问
     {
         let mut w = token.write().await;

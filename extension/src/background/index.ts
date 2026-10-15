@@ -1,12 +1,22 @@
-const DEFAULT_LOCAL_SERVER_URL = 'http://127.0.0.1:39281'
+import {
+  DEFAULT_LOCAL_SERVER_URL,
+  normalizeLoopbackServerUrl,
+  normalizeServerPort,
+} from '../shared/serverUrl'
 
 async function getServerUrl(): Promise<string> {
   const result = await chrome.storage.local.get(['transly_server_url', 'transly_server_port'])
   if (result.transly_server_url) {
-    return result.transly_server_url
+    const validated = normalizeLoopbackServerUrl(result.transly_server_url)
+    if (validated) {
+      return validated
+    }
   }
   if (result.transly_server_port) {
-    return `http://127.0.0.1:${result.transly_server_port}`
+    const validPort = normalizeServerPort(result.transly_server_port)
+    if (validPort !== null) {
+      return `http://127.0.0.1:${validPort}`
+    }
   }
   return DEFAULT_LOCAL_SERVER_URL
 }

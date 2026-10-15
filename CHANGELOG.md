@@ -18,6 +18,12 @@
 - **Firefox 浏览器扩展全链路打包与自动化校验门禁**: 新增 `scripts/test-firefox-package.mjs`，在 `package.json` 的 `test:e2e` 中纳入 Firefox 产物自动化校验，确保输出严格符合 Gecko MV3、UUID 绑定与白名单契约。
 - **跨平台原生 OCR 异常优雅提示与平台分流优化**: 在 `transly-core` 与平台层中针对 Linux 等暂无原生 OCR 组件的系统输出友好的指引提示，强化位图内存预算与候选语言过滤。
 
+### 修复
+- **配对倒计时使用服务端权威 TTL**：修复桌面端收到 `expires_in` 后，倒计时 effect 又固定重置为 60 秒的问题，避免服务端调整配对会话时前端提前或延后显示过期。
+- **浏览器扩展本地服务 URL 严格回环地址校验 (`serverUrl.ts`)**：增加 `normalizeLoopbackServerUrl` 与 `normalizeServerPort`，严格限制扩展通信仅允许回环地址（`127.0.0.1`、`localhost`、`[::1]`），防止恶意配置或误配导致 Bearer Token 泄露到外部网络。
+- **DeepSeek 本地端点免 API Key 支持 (`commands/mod.rs`)**：在 `is_api_key_configured` 中对 `deepseek` 增加与 `openai` 同等的本地端点判定，当指向 Ollama 等本地回环服务时自动放行免配 Key。
+- **本地批量翻译接口 items ID 唯一性校验 (`server/mod.rs`)**：在 `/translate` 入口对批次内 item ID 增加唯一性检查，杜绝重复 ID 导致下游客户端结果映射产生覆盖与错位。
+
 ## [0.3.1] - 2026-10-15
 
 ### 移除

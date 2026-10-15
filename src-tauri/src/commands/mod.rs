@@ -1909,11 +1909,12 @@ pub async fn is_api_key_configured(engine: String, app: tauri::AppHandle) -> boo
         .try_state::<Arc<TranslationCache>>()
         .map(|c| c.inner().clone());
     tokio::task::spawn_blocking(move || {
-        if engine == "openai" {
+        if engine == "openai" || engine == "deepseek" {
+            let setting_key = format!("{engine}_base_url");
             let url_opt = cache_opt
                 .as_ref()
-                .and_then(|c| c.get_setting("openai_base_url").ok().flatten())
-                .or_else(|| crate::secrets::get_secret("openai_base_url").ok());
+                .and_then(|c| c.get_setting(&setting_key).ok().flatten())
+                .or_else(|| crate::secrets::get_secret(&setting_key).ok());
             if let Some(url) = url_opt {
                 if transly_core::OpenAIEngine::is_local_endpoint(&url) {
                     return true;
@@ -2324,5 +2325,21 @@ mod tests {
         assert_eq!(cache.get_setting("proxy_url").unwrap(), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_is_local_endpoint_support_for_llm_engines() {
+        assert!(transly_core::OpenAIEngine::is_local_endpoint(
+            "http://localhost:11434/v1"
+        ));
+        assert!(transly_core::OpenAIEngine::is_local_endpoint(
+            "http://127.0.0.1:11434/v1"
+        ));
+        assert!(transly_core::OpenAIEngine::is_local_endpoint(
+            "http://[::1]:11434/v1"
+        ));
+        assert!(!transly_core::OpenAIEngine::is_local_endpoint(
+            "https://api.deepseek.com"
+        ));
     }
 }

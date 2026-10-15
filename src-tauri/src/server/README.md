@@ -38,4 +38,4 @@ cargo test -p src-tauri server::tests
 
 ## 许可证
 
-[MIT](../../../LICENSE)
+[商业专有许可](../../../LICENSE)

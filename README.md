@@ -123,4 +123,7 @@ pnpm tauri dev
 
 ## 许可证
 
-[MIT](LICENSE)
+本项目采用 **Open-Core（开放核心）** 授权模式，详情参阅根目录 [LICENSE](LICENSE)：
+
+* **开源核心底层 (`crates/transly-core`)**：遵循 [Apache-2.0 许可证](crates/transly-core/LICENSE)，向所有开发者开放自由集成、修改与分发。
+* **商业应用与扩展 (`src/`, `src-tauri/`, `extension/`)**：属于商业专有授权（Proprietary License），实行**收费买断制**。支持个人出于学习与安全审计目的查阅及本地私有构建，未经书面许可严禁公开发布、转售或重新打包分发商业成品。

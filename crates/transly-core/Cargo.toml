@@ -4,7 +4,7 @@ version = "0.3.1"
 edition = "2021"
 authors = ["Transly Authors"]
 description = "Core logic for Transly translation engine, cache, validation, and glossary."
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"

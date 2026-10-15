@@ -3,9 +3,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod deepl;
 pub mod google;
+pub mod offline;
 pub mod openai;
 pub use deepl::DeepLEngine;
 pub use google::GoogleWebEngine;
+pub use offline::OfflineEngine;
 pub use openai::OpenAIEngine;
 
 use crate::{error::ErrorKind, Result};

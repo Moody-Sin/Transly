@@ -31,6 +31,7 @@
     "languageZhCN": "中文",
     "languageJa": "日文",
     "engineGoogle": "Google 网页翻译 (免Key)",
+    "engineOffline": "纯本地离线引擎 (免Key/完全断网)",
     "engineDeepl": "DeepL (需API Key)",
     "engineDeepseek": "DeepSeek LLM (需API Key)",
     "engineOpenai": "OpenAI (需API Key)",

@@ -51,7 +51,7 @@ pub fn validate_engine_id(engine: &str) -> bool {
     }
     matches!(
         clean.as_str(),
-        "google" | "google_web" | "deepl" | "openai" | "deepseek"
+        "google" | "google_web" | "deepl" | "openai" | "deepseek" | "offline"
     )
 }
 

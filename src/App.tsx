@@ -50,6 +50,7 @@ const OCR_DIALOG_DESC_ID = 'transly-ocr-dialog-desc'
 /** 引擎清单 */
 const ENGINE_OPTIONS = [
   { id: 'google', labelKey: 'engineGoogle' },
+  { id: 'offline', labelKey: 'engineOffline' },
   { id: 'deepl', labelKey: 'engineDeepl' },
   { id: 'deepseek', labelKey: 'engineDeepseek' },
   { id: 'openai', labelKey: 'engineOpenai' },
@@ -1390,6 +1391,7 @@ export default function App() {
                   className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 cursor-pointer"
                 >
                   <option value="google">{t.translation.engineGoogle}</option>
+                  <option value="offline">{t.translation.engineOffline}</option>
                   <option value="deepl">{t.translation.engineDeepl}</option>
                   <option value="deepseek">{t.translation.engineDeepseek}</option>
                   <option value="openai">{t.translation.engineOpenai}</option>

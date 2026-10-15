@@ -154,6 +154,7 @@ export default function FloatWindow() {
             className="rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-700 dark:text-slate-200 outline-none"
           >
             <option value="google">{t.translation.engineGoogle}</option>
+            <option value="offline">{t.translation.engineOffline}</option>
             <option value="deepl">{t.translation.engineDeepl}</option>
             <option value="deepseek">{t.translation.engineDeepseek}</option>
             <option value="openai">{t.translation.engineOpenai}</option>

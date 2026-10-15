@@ -31,6 +31,7 @@
     "languageZhCN": "Chinese",
     "languageJa": "Japanese",
     "engineGoogle": "Google Web (no key)",
+    "engineOffline": "Pure Offline (no key / offline)",
     "engineDeepl": "DeepL (API key required)",
     "engineDeepseek": "DeepSeek LLM (API key required)",
     "engineOpenai": "OpenAI (API key required)",

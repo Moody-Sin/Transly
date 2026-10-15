@@ -206,6 +206,7 @@ impl EnginePool {
                     };
                     llm
                 }
+                "offline" => Arc::new(transly_core::engine::OfflineEngine::new()),
                 _ => fallback,
             }
         })

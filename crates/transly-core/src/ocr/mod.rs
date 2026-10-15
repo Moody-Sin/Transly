@@ -40,10 +40,13 @@ impl OcrErrorDto {
     }
 
     pub fn unsupported_platform() -> Self {
-        Self::new(
-            OcrErrorKind::UnsupportedPlatform,
-            "当前操作系统暂未支持平台原生 OCR",
-        )
+        #[cfg(target_os = "linux")]
+        let msg =
+            "Linux 系统暂未集成平台原生 OCR 引擎，建议使用 Windows / macOS 原生系统或离线翻译";
+        #[cfg(not(target_os = "linux"))]
+        let msg = "当前操作系统暂未支持平台原生 OCR";
+
+        Self::new(OcrErrorKind::UnsupportedPlatform, msg)
     }
 
     pub fn internal(msg: impl Into<String>) -> Self {

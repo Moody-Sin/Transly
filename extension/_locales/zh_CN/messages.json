@@ -23,6 +23,9 @@
   "engineGoogle": {
     "message": "Google 网页翻译"
   },
+  "engineOffline": {
+    "message": "纯本地离线"
+  },
   "btnTranslate": {
     "message": "翻译此网页 (仅译文)"
   },

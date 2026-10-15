@@ -23,6 +23,9 @@
   "engineGoogle": {
     "message": "Google web translate"
   },
+  "engineOffline": {
+    "message": "Pure Offline"
+  },
   "btnTranslate": {
     "message": "Translate this page (translation only)"
   },

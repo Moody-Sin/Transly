@@ -54,28 +54,28 @@ Transly 是一款基于 Rust 与 Tauri 2 构建的跨平台桌面翻译软件，
 > [!NOTE]
 > **当前处于内测阶段**，版本号与产物会频繁迭代，正式发布时将重置版本号。
 
-从 [Releases](https://github.com/Moody-Sin/Transly/releases) 页面下载对应操作系统的版本：
-- **浏览器扩展**: 下载 `transly-extension-v0.4.0.zip` 并解压（Firefox 用户请下载 `transly-extension-firefox-v0.4.0.zip`）
+从 [Releases](https://github.com/Moody-Sin/Transly/releases) 页面下载**最新版本**对应操作系统的产物，下表中的 `<版本>` 为实际发布的语义化版本号（如 `0.4.0`）：
+- **浏览器扩展**: 下载 `transly-extension-v<版本>.zip` 并解压（Firefox 用户请下载 `transly-extension-firefox-v<版本>.zip`）
 
 #### Windows
 | 形式 | 文件名 | 说明 |
 | --- | --- | --- |
-| 免安装便携版 | `Transly-Portable-windows-x64.exe` | 下载即用，无需安装与解压 |
-| 安装包 | `Transly_0.4.0_x64-setup.exe` | NSIS 安装向导 |
-| 安装包 | `Transly_0.4.0_x64_en-US.msi` | MSI 企业分发 |
+| 免安装便携版 | `Transly-Portable-windows-x64.exe` | 下载即用，无需安装与解压（文件名固定不含版本号） |
+| 安装包 | `Transly_<版本>_x64-setup.exe` | NSIS 安装向导 |
+| 安装包 | `Transly_<版本>_x64_en-US.msi` | MSI 企业分发 |
 
 #### macOS
 | 形式 | 文件名 | 说明 |
 | --- | --- | --- |
-| 磁盘镜像 | `Transly_0.4.0_aarch64.dmg` | Apple Silicon (M 系列) |
-| 更新包 | `Transly_aarch64.app.tar.gz` | 应用内自动更新用 |
+| 磁盘镜像 | `Transly_<版本>_aarch64.dmg` | Apple Silicon (M 系列) |
+| 更新包 | `Transly_aarch64.app.tar.gz` | 应用内自动更新用（文件名固定不含版本号） |
 
 #### Linux
 | 形式 | 文件名 | 说明 |
 | --- | --- | --- |
-| Debian 系 | `Transly_0.4.0_amd64.deb` | Ubuntu / Debian |
-| Fedora 系 | `Transly-0.4.0-1.x86_64.rpm` | Fedora / openSUSE |
-| 通用 | `Transly_0.4.0_amd64.AppImage` | 免安装，双击运行 |
+| Debian 系 | `Transly_<版本>_amd64.deb` | Ubuntu / Debian |
+| Fedora 系 | `Transly-<版本>-1.x86_64.rpm` | Fedora / openSUSE |
+| 通用 | `Transly_<版本>_amd64.AppImage` | 免安装，双击运行 |
 
 ### 源码开发构建
 

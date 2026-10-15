@@ -51,12 +51,31 @@ Transly 是一款基于 Rust 与 Tauri 2 构建的跨平台桌面翻译软件，
 
 ### 预编译安装包与免安装便携版
 
+> [!NOTE]
+> **当前处于内测阶段**，版本号与产物会频繁迭代，正式发布时将重置版本号。
+
 从 [Releases](https://github.com/Moody-Sin/Transly/releases) 页面下载对应操作系统的版本：
-- **Windows (免安装便携版)**: `Transly-Portable-windows-x64.exe`（下载即用，无需安装与解压）
-- **Windows (安装包)**: `Transly_0.4.0_x64-setup.exe` 或 `.msi`
-- **macOS**: `Transly_0.4.0_aarch64.dmg`
-- **Linux**: `Transly_0.4.0_amd64.deb` 或 `.AppImage`（免安装双击运行）
-- **浏览器扩展**: 下载 `transly-extension-v0.4.0.zip` 并解压。
+- **浏览器扩展**: 下载 `transly-extension-v0.4.0.zip` 并解压（Firefox 用户请下载 `transly-extension-firefox-v0.4.0.zip`）
+
+#### Windows
+| 形式 | 文件名 | 说明 |
+| --- | --- | --- |
+| 免安装便携版 | `Transly-Portable-windows-x64.exe` | 下载即用，无需安装与解压 |
+| 安装包 | `Transly_0.4.0_x64-setup.exe` | NSIS 安装向导 |
+| 安装包 | `Transly_0.4.0_x64_en-US.msi` | MSI 企业分发 |
+
+#### macOS
+| 形式 | 文件名 | 说明 |
+| --- | --- | --- |
+| 磁盘镜像 | `Transly_0.4.0_aarch64.dmg` | Apple Silicon (M 系列) |
+| 更新包 | `Transly_aarch64.app.tar.gz` | 应用内自动更新用 |
+
+#### Linux
+| 形式 | 文件名 | 说明 |
+| --- | --- | --- |
+| Debian 系 | `Transly_0.4.0_amd64.deb` | Ubuntu / Debian |
+| Fedora 系 | `Transly-0.4.0-1.x86_64.rpm` | Fedora / openSUSE |
+| 通用 | `Transly_0.4.0_amd64.AppImage` | 免安装，双击运行 |
 
 ### 源码开发构建
 
@@ -108,6 +127,8 @@ pnpm tauri dev
 9. **Token 轮换**：若在桌面端点击“重新生成扩展配对 Token”，旧 Token 将即时失效（401 拦截），在扩展重新一键配对即可恢复。
 
 ### 3. 已知限制与注意事项
+- **商业引擎失败不再自动降级 (0.4.0 起)**：已彻底移除跨引擎自动降级机制。此前 DeepL / OpenAI / DeepSeek 报错时会静默切换至 Google 网页翻译，现在**不再切换**，界面直接呈现所选引擎的真实错误（如未配置 API Key、额度耗尽、网络不可达）。
+  若您依赖旧版「失败自动兜底」行为，请任选其一应对：① 为所选引擎配置有效 API Key 并保持网络可达；② 在主窗口或悬浮窗顶栏的下拉框中手动切换引擎；③ 选择新支持的**离线引擎**（纯本地、零外呼，断网可用）。
 - **复杂富文本编辑器**：为保障页面编辑安全，Transly 默认不对 `contenteditable`、富文本代码编辑器（如 Monaco / CodeMirror）及包含 `.notranslate` 属性的节点进行强行替换。
 - **扩展按需注入**：扩展不再向所有网站常驻注入脚本，仅在您点击「翻译此网页」或右键菜单「Transly 翻译选中文本」时向当前标签页注入，因此无需全站宿主权限；浏览器内部页（`chrome://`）等受限页面无法注入。
 - **图片 OCR 翻译 (Windows 原生)**：支持主输入框底栏「识别剪贴板图片」入口或 `ocr_clipboard_image` 命令。Windows 平台基于系统 `Windows.Media.Ocr` 原生硬件加速识别并自动触发即时翻译，全流程内存零落盘。非 Windows 平台调用返回明确的未支持错误。

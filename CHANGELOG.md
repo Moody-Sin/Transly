@@ -7,6 +7,8 @@
 
 ## [未发布]
 
+## [0.4.0] - 2026-10-16
+
 ### 变更
 - **项目授权模式转型为 Open-Core 商业买断混合许可**:
   - 底层核心逻辑库 `crates/transly-core` 独立声明为 **Apache License 2.0** 开源许可，为第三方开发者与社区提供无侵权隐患的底层翻译、缓存、OCR与语种检测基础引擎；
@@ -433,7 +435,8 @@
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...HEAD
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Moody-Sin/Transly/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Moody-Sin/Transly/compare/v0.2.0...v0.2.1

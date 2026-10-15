@@ -39,7 +39,7 @@ impl TranslateEngine for OfflineEngine {
         EngineCapabilities {
             id: self.id().to_string(),
             name: self.name().to_string(),
-            max_batch_size: 100,
+            max_batch_size: crate::MAX_BATCH_ITEMS,
             supports_batch: true,
             requires_api_key: false,
             supports_streaming: true,
@@ -80,6 +80,7 @@ mod tests {
         let engine = OfflineEngine::new();
         assert_eq!(engine.id(), "offline");
         let caps = engine.capabilities();
+        assert_eq!(caps.max_batch_size, crate::MAX_BATCH_ITEMS);
         assert!(!caps.requires_api_key);
         assert!(caps.supports_batch);
         assert!(caps.supports_streaming);

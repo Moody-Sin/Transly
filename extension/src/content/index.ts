@@ -34,6 +34,12 @@ const IGNORED_TAGS = new Set([
   'SVG',
 ])
 
+/**
+ * 叶子富文本容器选择器：这些块级元素内部常含 <a>/<strong>/<code> 等行内子标签，
+ * 需要走「占位符聚合 → 整句翻译 → 原位回填」的富文本路径，而非逐文本节点切分。
+ */
+const LEAF_RICH_TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th'
+
 export function shouldTranslateElement(element: Element): boolean {
   // tagName 大小写取决于命名空间：HTML 元素返回大写，SVG 等返回小写，
   // 归一化后比较，否则 IGNORED_TAGS 中的 'SVG' 永远不会命中。
@@ -205,7 +211,16 @@ function showOriginalTooltip(originalText: string, clientX: number, clientY: num
   ensureTooltipHost()
   if (!tooltipContainer) return
 
-  tooltipContainer.innerHTML = `<div class="badge">Original / 原文</div><div>${escapeHtml(originalText)}</div>`
+  // 用 DOM API 而非 innerHTML 赋值：译文/原文属不可信输入，
+  // 字符串拼接一旦被误用到属性上下文即构成注入面；纯文本节点天然免疫。
+  tooltipContainer.textContent = ''
+  const badge = document.createElement('div')
+  badge.className = 'badge'
+  badge.textContent = t('tooltipOriginalBadge')
+  const body = document.createElement('div')
+  body.textContent = originalText
+  tooltipContainer.appendChild(badge)
+  tooltipContainer.appendChild(body)
   tooltipContainer.classList.add('visible')
 
   const pad = 12
@@ -222,14 +237,6 @@ function showOriginalTooltip(originalText: string, clientX: number, clientY: num
 
   tooltipContainer.style.left = `${left}px`
   tooltipContainer.style.top = `${top}px`
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
 }
 
 // 监听鼠标在网页上的移动，当目标为已翻译节点且用户悬停时显示完整段落原文 Tooltip
@@ -414,9 +421,15 @@ export function collectTextNodes(
 
   if (root.nodeType === ELEMENT_NODE || root.nodeType === DOCUMENT_FRAGMENT_NODE) {
     const rootEl = root as Element | DocumentFragment
-    const leafCandidates = rootEl.querySelectorAll(
-      'p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th',
-    )
+    // `querySelectorAll` 只检索**子孙**节点，永不包含元素自身。
+    // SPA（React/Vue）增量插入的往往就是一个孤立的 <p> / <li>，
+    // 若只查子孙，这类根候选会整段漏掉富文本聚合，被 TreeWalker 砸成
+    // 碎文本节点各自独立翻译，语序与排版随之破损。因此必须显式补上根自身。
+    const leafCandidates: Element[] = []
+    if (root.nodeType === ELEMENT_NODE && (root as Element).matches(LEAF_RICH_TEXT_SELECTOR)) {
+      leafCandidates.push(root as Element)
+    }
+    leafCandidates.push(...Array.from(rootEl.querySelectorAll(LEAF_RICH_TEXT_SELECTOR)))
     leafCandidates.forEach((candidate) => {
       if (!shouldTranslateElement(candidate)) return
       const descendants = getLeafRichTextDescendants(candidate)
@@ -726,6 +739,7 @@ interface BatchResponsePayload {
 
 import { planBatchRanges, splitByViewport, type BatchLimits } from '../shared/batchPlan'
 import { buildRichTextComposite, restoreRichTextComposite, type TextPart } from '../shared/richText'
+import { t } from '../i18n'
 
 /**
  * 当前任务使用的批量上限。
@@ -1061,7 +1075,11 @@ function applyBatchResponse(
     // 兼容旧版 translations
     resData.translations.forEach((translated, idx) => {
       if (batch[idx]) {
-        if (translated && translated !== batch[idx].text) {
+        // 只要返回了非空译文即视为成功。
+        // 不能再要求 `translated !== 原文`：专有名词、品牌名、代码标识符
+        // （Python / Linux / Transly 等）译后本就与原文一致，旧判定会把它们
+        // 记成失败，导致整页明明翻译成功，徽标却显示 WARN、Popup 提示「部分失败」。
+        if (translated) {
           if (batch[idx].compositeInfo) {
             const restored = restoreRichTextComposite(
               translated,

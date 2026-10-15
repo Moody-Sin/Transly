@@ -725,9 +725,13 @@ async fn test_batch_item_count_over_limit_is_rejected() {
 #[tokio::test]
 async fn test_pairing_session_lifecycle() {
     let pairing_mgr = Arc::new(pairing::PairingManager::new());
-    let (session_id, expires_in) = pairing_mgr
+    let (session_id, expires_in) = match pairing_mgr
         .create_session("client-1".to_string(), Some("Chrome".to_string()))
-        .await;
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, ttl) => (id, ttl),
+        other => panic!("首次配对必须成功创建会话，实际 {other:?}"),
+    };
     assert_eq!(expires_in, pairing::PAIRING_SESSION_TTL_SECS);
 
     // 1. 未授权时轮询返回 pending
@@ -761,9 +765,13 @@ async fn test_pairing_session_lifecycle() {
 #[tokio::test]
 async fn test_pairing_reject_and_client_mismatch() {
     let pairing_mgr = Arc::new(pairing::PairingManager::new());
-    let (session_id, _) = pairing_mgr
+    let session_id = match pairing_mgr
         .create_session("client-1".to_string(), None)
-        .await;
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, _) => id,
+        other => panic!("配对必须成功创建会话，实际 {other:?}"),
+    };
 
     // 客户端 ID 不匹配返回 expired
     let poll_mismatch = pairing_mgr
@@ -772,9 +780,13 @@ async fn test_pairing_reject_and_client_mismatch() {
     assert_eq!(poll_mismatch, pairing::PairingPollResult::Expired);
 
     // 重新创建并拒绝
-    let (session_id2, _) = pairing_mgr
+    let session_id2 = match pairing_mgr
         .create_session("client-2".to_string(), None)
-        .await;
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, _) => id,
+        other => panic!("配对必须成功创建会话，实际 {other:?}"),
+    };
     let rejected = pairing_mgr.reject(&session_id2).await;
     assert!(rejected);
 
@@ -784,35 +796,141 @@ async fn test_pairing_reject_and_client_mismatch() {
     assert_eq!(poll_reject, pairing::PairingPollResult::Rejected);
 }
 
+/// 回归：会话表满时**拒绝**新请求，绝不淘汰他人仍在等待的有效会话。
+///
+/// 复现的缺陷：旧实现按 created_at 淘汰最早的会话。由于 `/pair/request` 位于
+/// 鉴权之外（配对本就发生在持有 Token 之前），本机任意进程只要连发
+/// MAX_PENDING_SESSIONS 个不同 client_id 的请求，就能把正常浏览器扩展正在等待的
+/// 配对会话挤掉 —— 扩展轮询立即收到 Expired，构成配对拒绝服务。
 #[tokio::test]
-async fn test_pairing_manager_max_capacity_flooding_defense() {
+async fn test_pairing_manager_rejects_new_session_instead_of_evicting_existing() {
     let pairing_mgr = Arc::new(pairing::PairingManager::new());
-    let mut session_ids = Vec::new();
+    let mut created = Vec::new();
 
-    // 连续创建超出 MAX_PENDING_SESSIONS 的会话
-    for i in 0..(pairing::MAX_PENDING_SESSIONS + 5) {
-        let (sid, _) = pairing_mgr
-            .create_session(format!("client-{i}"), None)
-            .await;
-        session_ids.push(sid);
+    // 先让一个「正常扩展」建立会话
+    let victim = match pairing_mgr
+        .create_session("legit-extension".to_string(), None)
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, _) => id,
+        other => panic!("正常扩展必须能创建会话，实际 {other:?}"),
+    };
+
+    // 恶意进程用不同 client_id 持续灌会话表。
+    // 全局限流按窗口突发放行，故此处按窗口节奏推进，模拟「有耐心的攻击者」，
+    // 以验证即便攻击者愿意等待，会话表也不会被突破，正常会话更不会被挤掉。
+    // 本用例只验证「容量上限不可被突破」，不验证限流节奏（后者由专门的
+    // 全局限流用例覆盖）。因此无需真实等待窗口，直接大批量尝试即可：
+    // 无论请求如何密集，接受的新会话数都必须被限流与容量双重约束住。
+    for i in 0..(pairing::MAX_PENDING_SESSIONS * 4) {
+        if let pairing::CreateSessionOutcome::Created(sid, _) = pairing_mgr
+            .create_session(format!("attacker-{i}"), None)
+            .await
+        {
+            created.push(sid);
+        }
     }
 
-    // 最早创建的 5 个会话必须已被防泛洪淘汰淘汰
-    for sid in &session_ids[..5] {
-        let res = pairing_mgr.poll_session(sid, "client-x", "token").await;
-        assert_eq!(res, pairing::PairingPollResult::Expired);
-    }
+    // 核心保护：无论攻击者如何尝试，接受的新会话数都不得超过容量上限
+    assert!(
+        created.len() <= pairing::MAX_PENDING_SESSIONS,
+        "接受的新会话数不得超过容量上限，实际 {}",
+        created.len()
+    );
 
-    // 最新创建的会话依然正常 Pending
-    let latest_sid = session_ids.last().unwrap();
+    // 核心断言：正常扩展的会话必须**仍然有效**
     let res = pairing_mgr
-        .poll_session(
-            latest_sid,
-            &format!("client-{}", pairing::MAX_PENDING_SESSIONS + 4),
-            "token",
-        )
+        .poll_session(&victim, "legit-extension", "token")
         .await;
-    assert_eq!(res, pairing::PairingPollResult::Pending);
+    assert_eq!(
+        res,
+        pairing::PairingPollResult::Pending,
+        "正常扩展的等待会话绝不能被泛洪请求挤掉"
+    );
+}
+
+/// 回归：攻击者用**随机 client_id** 也必须在全局层面被限流。
+///
+/// 复现的缺陷：仅有按 client_id 的节流可被「每次换一个新 ID」轻易绕过 ——
+/// 16 个并发请求即可占满会话表，使正常扩展在随后 60 秒 TTL 内全部被拒，
+/// 构成可反复触发的配对拒绝服务。现增加全局滑动窗口限流。
+#[tokio::test]
+async fn test_pairing_manager_global_throttle_blocks_random_client_id_flood() {
+    let pairing_mgr = Arc::new(pairing::PairingManager::new());
+
+    // 窗口内密集请求（每次都换一个全新 client_id）：最多放行 BURST 个，
+    // 其余必须被全局限流拦下，而不是逐个放行直到占满会话表。
+    let mut created = 0;
+    for i in 0..pairing::MAX_PENDING_SESSIONS {
+        if matches!(
+            pairing_mgr
+                .create_session(format!("attacker-{i}"), None)
+                .await,
+            pairing::CreateSessionOutcome::Created(_, _)
+        ) {
+            created += 1;
+        }
+    }
+
+    assert_eq!(
+        created,
+        pairing::PAIRING_GLOBAL_BURST,
+        "同一窗口内只允许突发 {} 个新会话，其余必须被全局限流拦下",
+        pairing::PAIRING_GLOBAL_BURST
+    );
+}
+
+/// 同一 client_id 在节流窗口内重复请求必须被拒绝，避免配对弹窗轰炸。
+#[tokio::test]
+async fn test_pairing_manager_throttles_repeated_requests_from_same_client() {
+    let pairing_mgr = Arc::new(pairing::PairingManager::new());
+
+    // 首次请求成功
+    assert!(matches!(
+        pairing_mgr
+            .create_session("flooder".to_string(), None)
+            .await,
+        pairing::CreateSessionOutcome::Created(_, _)
+    ));
+
+    // 紧随其后的重复请求必须被节流
+    assert_eq!(
+        pairing_mgr
+            .create_session("flooder".to_string(), None)
+            .await,
+        pairing::CreateSessionOutcome::Throttled,
+        "同一 client_id 的密集重复请求必须被节流"
+    );
+}
+
+/// 同一 client_id 重复请求应复用既有会话，而不是让扩展把自己的会话作废。
+#[tokio::test]
+async fn test_pairing_manager_reuses_existing_session_for_same_client() {
+    let pairing_mgr = Arc::new(pairing::PairingManager::new());
+
+    let first = match pairing_mgr
+        .create_session("client-x".to_string(), None)
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, _) => id,
+        other => panic!("首次创建应成功，实际 {other:?}"),
+    };
+
+    // 越过节流窗口后再请求，应拿到同一个 session_id（复用而非新建）
+    tokio::time::sleep(std::time::Duration::from_secs(
+        pairing::PAIRING_MIN_REQUEST_INTERVAL_SECS + 1,
+    ))
+    .await;
+
+    let second = match pairing_mgr
+        .create_session("client-x".to_string(), None)
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, _) => id,
+        other => panic!("复用请求应返回会话，实际 {other:?}"),
+    };
+
+    assert_eq!(first, second, "同一 client_id 必须复用既有未决会话");
 }
 
 #[tokio::test]

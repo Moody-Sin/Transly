@@ -182,3 +182,49 @@ test('富文本占位重复校验：重复 Token 顶替缺失占位符时严格�
   )
   assert.equal(restored, null, '存在重复占位符时必须严格返回 null 触发安全回退')
 })
+
+test('富文本文语序调换校验：占位符顺序被打乱时返回 null 而非错配回填', () => {
+  // 原文: 'Please visit [our site] before you [download] the app.'
+  const parts: TextPart[] = [
+    { id: 'p0', text: 'Please visit ', isInline: false },
+    { id: 'p1', text: 'our site', isInline: true },
+    { id: 'p2', text: ' before you ', isInline: false },
+    { id: 'p3', text: 'download', isInline: true },
+    { id: 'p4', text: ' the app.', isInline: false },
+  ]
+  const comp = buildRichTextComposite(parts, true)
+  const placeholderToId = new Map<string, string>()
+  for (const [id, ph] of comp.idToPlaceholder) placeholderToId.set(ph, id)
+
+  // 引擎倒装：把 ⟦T_3⟧ 块整体挪到 ⟦T_1⟧ 之前
+  const reordered = '请⟦T_3⟧下载⟦/T_3⟧应用前，先访问⟦T_1⟧我们的站点⟦/T_1⟧。'
+  const restored = restoreRichTextComposite(reordered, comp.baseSlots || [], placeholderToId)
+
+  assert.equal(
+    restored,
+    null,
+    '语序被打乱时必须返回 null 触发安全回退，避免把前半段译文填进后半段 DOM 槽位',
+  )
+})
+
+test('富文本正常语序不受语序校验影响（回归护栏）', () => {
+  // 与上一用例相同的原文结构，但引擎**未**调换顺序 —— 必须正常还原
+  const parts: TextPart[] = [
+    { id: 'p0', text: 'Please visit ', isInline: false },
+    { id: 'p1', text: 'our site', isInline: true },
+    { id: 'p2', text: ' before you ', isInline: false },
+    { id: 'p3', text: 'download', isInline: true },
+    { id: 'p4', text: ' the app.', isInline: false },
+  ]
+  const comp = buildRichTextComposite(parts, true)
+  const placeholderToId = new Map<string, string>()
+  for (const [id, ph] of comp.idToPlaceholder) placeholderToId.set(ph, id)
+
+  const translated = '请访问⟦T_1⟧我们的站点⟦/T_1⟧之后，请在⟦T_3⟧下载⟦/T_3⟧应用前操作。'
+  const restored = restoreRichTextComposite(translated, comp.baseSlots || [], placeholderToId)
+
+  assert.ok(restored)
+  assert.equal(restored.get('p0'), '请访问')
+  assert.equal(restored.get('p2'), '之后，请在')
+  assert.equal(restored.get('p4'), '应用前操作。')
+})

@@ -81,10 +81,11 @@ pub fn validate_translation_input(
     if text.is_empty() {
         return Err(crate::Error::Input("翻译文本不能为空".into()));
     }
-    if text.chars().count() > 10_000 {
-        return Err(crate::Error::Input(
-            "翻译文本过长 (单次最大限制 10,000 字符)".into(),
-        ));
+    if text.chars().count() > crate::MAX_ITEM_CHARS {
+        return Err(crate::Error::Input(format!(
+            "翻译文本过长 (单次最大限制 {} 字符)",
+            crate::MAX_ITEM_CHARS
+        )));
     }
     validate_language_pair(source_lang, target_lang)
 }

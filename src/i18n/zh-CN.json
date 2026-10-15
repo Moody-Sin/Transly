@@ -192,6 +192,7 @@
     "proxyUrlPlaceholder": "例如: http://127.0.0.1:7890",
     "btnSaveProxy": "保存代理",
     "statusProxySaved": "网络代理设置已保存并生效！",
-    "statusProxySaveFailed": "保存网络代理设置失败"
+    "statusProxySaveFailed": "保存网络代理设置失败",
+    "glossarySearchPlaceholder": "搜索已保存术语 (源词 / 译词)..."
   }
 }

@@ -178,5 +178,13 @@
   },
   "siteRuleAuto": {
     "message": "Auto-translate this site"
+  },
+  "selectionHoverIcon": {
+    "message": "T",
+    "description": "划词后悬浮微型图标上的字符（建议单字符）"
+  },
+  "tooltipOriginalBadge": {
+    "message": "Original",
+    "description": "悬停查看原文浮层的标题徽标文案"
   }
 }

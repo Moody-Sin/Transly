@@ -192,6 +192,7 @@
     "proxyUrlPlaceholder": "e.g., http://127.0.0.1:7890",
     "btnSaveProxy": "Save Proxy",
     "statusProxySaved": "Proxy settings saved successfully!",
-    "statusProxySaveFailed": "Failed to save proxy settings"
+    "statusProxySaveFailed": "Failed to save proxy settings",
+    "glossarySearchPlaceholder": "Search saved terms (source / target)..."
   }
 }

@@ -135,6 +135,33 @@ struct StreamChatCompletionResponse {
     choices: Vec<StreamChatChoice>,
 }
 
+/// 聚合批量失败的**性质**，决定是否可以安全降级为逐项翻译。
+///
+/// 区分二者是必须的：若聚合请求因鉴权失败、配额耗尽或限流（401/402/403/429）而失败，
+/// 降级为逐项并发只会把 1 次请求放大成最多 30 次（每项内部还各自重试一次），
+/// 在 429 场景下更会进一步恶化限流、招致服务商封禁 API Key 或 IP。
+/// 只有内容层的格式异常（模型没按 JSON 输出）才值得换逐项方式重试。
+enum AggregateFailure {
+    /// 致命错误：重试逐项无意义且有害，必须立即向整批返回错误。
+    Fatal(Error),
+    /// 内容层格式错误：模型输出不符合约定，可降级为逐项翻译隔离故障项。
+    Format,
+}
+
+/// 网络层错误（`send_with_retry` 已退避重试过一次）与序列化错误一律按致命处理：
+/// 再拆成 30 项并发重发只会放大请求量，且必然同样失败。
+impl From<reqwest::Error> for AggregateFailure {
+    fn from(e: reqwest::Error) -> Self {
+        AggregateFailure::Fatal(Error::Network(e))
+    }
+}
+
+impl From<serde_json::Error> for AggregateFailure {
+    fn from(e: serde_json::Error) -> Self {
+        AggregateFailure::Fatal(Error::Serialization(e))
+    }
+}
+
 impl OpenAIEngine {
     fn refresh_engine_id(&mut self) {
         self.engine_id = format!("{}:{}", self.prefix_id, self.style.as_str());
@@ -262,15 +289,19 @@ impl OpenAIEngine {
     async fn try_translate_batch_aggregated(
         &self,
         requests: &[TranslationRequest],
-    ) -> Result<Vec<TranslationResponse>> {
+    ) -> std::result::Result<Vec<TranslationResponse>, AggregateFailure> {
         if self.api_key.trim().is_empty() && !Self::is_local_endpoint(&self.base_url) {
-            return Err(Error::MissingCredentials("API Key 不能为空".into()));
+            return Err(AggregateFailure::Fatal(Error::MissingCredentials(
+                "API Key 不能为空".into(),
+            )));
         }
 
         let first_target = &requests[0].target_lang;
         let is_homogeneous = requests.iter().all(|r| &r.target_lang == first_target);
         if !is_homogeneous {
-            return Err(Error::Input("批量请求目标语言不一致".into()));
+            return Err(AggregateFailure::Fatal(Error::Input(
+                "批量请求目标语言不一致".into(),
+            )));
         }
 
         let items: Vec<BatchJsonItem> = requests
@@ -282,8 +313,9 @@ impl OpenAIEngine {
             })
             .collect();
 
-        let json_input = serde_json::to_string(&items)
-            .map_err(|e| Error::Internal(format!("序列化批量输入失败: {e}")))?;
+        let json_input = serde_json::to_string(&items).map_err(|e| {
+            AggregateFailure::Fatal(Error::Internal(format!("序列化批量输入失败: {e}")))
+        })?;
 
         let system_prompt = self.build_batch_system_prompt(first_target);
 
@@ -322,10 +354,10 @@ impl OpenAIEngine {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            return Err(Error::Engine {
+            return Err(AggregateFailure::Fatal(Error::Engine {
                 engine: self.id().to_string(),
                 message: format!("LLM API 聚合批量响应错误 ({status})"),
-            });
+            }));
         }
 
         let data: ChatCompletionResponse = resp.json().await?;
@@ -334,27 +366,14 @@ impl OpenAIEngine {
             .into_iter()
             .next()
             .and_then(|c| c.message.content)
-            .ok_or_else(|| Error::Engine {
-                engine: self.id().to_string(),
-                message: "LLM 批量返回内容为空".to_string(),
-            })?;
+            .ok_or(AggregateFailure::Format)?;
 
         let cleaned = extract_json_payload(&content);
         let parsed: Vec<BatchJsonItem> =
-            serde_json::from_str(cleaned).map_err(|e| Error::Engine {
-                engine: self.id().to_string(),
-                message: format!("解析 LLM 聚合批量 JSON 失败: {e}"),
-            })?;
+            serde_json::from_str(cleaned).map_err(|_| AggregateFailure::Format)?;
 
         if parsed.len() != requests.len() {
-            return Err(Error::Engine {
-                engine: self.id().to_string(),
-                message: format!(
-                    "LLM 聚合批量返回项数不匹配：期望 {} 项，实际 {} 项",
-                    requests.len(),
-                    parsed.len()
-                ),
-            });
+            return Err(AggregateFailure::Format);
         }
 
         let mut item_map: std::collections::HashMap<usize, String> =
@@ -372,10 +391,7 @@ impl OpenAIEngine {
                     engine: self.id().to_string(),
                 });
             } else {
-                return Err(Error::Engine {
-                    engine: self.id().to_string(),
-                    message: format!("LLM 聚合批量缺失 ID: {idx}"),
-                });
+                return Err(AggregateFailure::Format);
             }
         }
 
@@ -683,12 +699,34 @@ impl TranslateEngine for OpenAIEngine {
             return vec![self.translate(&requests[0]).await];
         }
 
-        // 优先尝试单次聚合批量 Prompting 优化（消除 90%+ 网络往返与 Token 浪费）
-        if let Ok(aggregated) = self.try_translate_batch_aggregated(requests).await {
-            return aggregated.into_iter().map(Ok).collect();
+        // 优先尝试单次聚合批量 Prompting 优化（消除 90%+ 网络往返与 Token 浪费）。
+        //
+        // 失败时**不能**无差别回退逐项：聚合若因鉴权失效、额度耗尽或限流失败，
+        // 拆成 30 项并发重发会把 1 次请求放大成最多 61 次（每项内部还各自退避重试一次），
+        // 在 429 场景下更会加剧限流、招致服务商封禁 API Key 或 IP。
+        // 因此只有内容层格式异常才降级，致命错误直接向整批返回。
+        let aggregate = self.try_translate_batch_aggregated(requests).await;
+        match aggregate {
+            Ok(aggregated) => return aggregated.into_iter().map(Ok).collect(),
+            Err(AggregateFailure::Fatal(e)) => {
+                // 整批同一原因失败：逐项重试只会放大请求量且必然同样失败。
+                // 错误不可 Clone，故逐项构造同一语义的错误（保留原始 message 供 UI 展示）。
+                let message = e.to_string();
+                return (0..requests.len())
+                    .map(|_| {
+                        Err(Error::Engine {
+                            engine: self.id().to_string(),
+                            message: message.clone(),
+                        })
+                    })
+                    .collect();
+            }
+            Err(AggregateFailure::Format) => {
+                // 模型没按约定输出 JSON：降级为逐项翻译，隔离出真正有问题的项
+            }
         }
 
-        // 容错降级：若聚合批量失败（如部分第三方网关格式异常或网络波动），安全回退至逐项并发隔离翻译
+        // 容错降级：逐项并发隔离翻译
         use futures::stream::{self, StreamExt};
         let concurrency = 5;
         let futures: Vec<_> = requests
@@ -858,8 +896,89 @@ mod tests {
         assert!(business_prompt.contains("professional, polite, and executive business tone"));
     }
 
-    #[test]
-    fn test_extract_json_payload() {
+    /// 回归：致命错误（401/429 等）绝不可降级为逐项并发翻译。
+    ///
+    /// 复现的缺陷：旧实现在聚合失败时无差别回退逐项并发（并发度 5，每项内部还各自
+    /// 退避重试一次），把 1 次请求放大为最多 30 项 × 2 = 61 次 HTTP 请求。
+    /// 若失败原因是 429 限流，进一步倾泻请求会加剧限流，可能导致 API Key 或 IP 被封禁。
+    ///
+    /// 判定必须**统计真实 HTTP 请求数**：仅断言「结果都是 Err」无法区分两条路径
+    /// （无 Key 等场景下逐项翻译同样不会发请求），那样的测试对缺陷毫无拦截力。
+    /// 这里启动一个返回 429 的本地桩服务，直接数它被调用了多少次。
+    #[tokio::test]
+    async fn test_fatal_aggregate_failure_does_not_fan_out_to_per_item_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = Arc::clone(&hits);
+
+        // 极简 HTTP 桩：任何请求一律回 429（可重试的限流状态），并计数
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("应能绑定本地回环端口");
+        let addr = listener.local_addr().expect("应能取得本地地址");
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let hits = Arc::clone(&hits_srv);
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 4096];
+                    // 读掉请求（不解析内容，只需确保客户端已发完）
+                    let _ = sock.read(&mut buf).await;
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let body = r#"{"error":{"message":"rate limited"}}"#;
+                    let resp = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.flush().await;
+                });
+            }
+        });
+
+        // 注意：base_url 指向本地桩，故 is_local_endpoint 为真 → 不要求 API Key，
+        // 请求会真实发出并拿到 429。
+        let engine = OpenAIEngine::new(
+            "",
+            Some(format!("http://127.0.0.1:{}", addr.port())),
+            Some("stub-model".to_string()),
+        );
+
+        let requests: Vec<TranslationRequest> = (0..10)
+            .map(|i| TranslationRequest {
+                text: format!("text {i}"),
+                source_lang: "en".to_string(),
+                target_lang: "zh-CN".to_string(),
+            })
+            .collect();
+
+        let results = engine.translate_batch_tolerant(&requests).await;
+
+        // 结果条数必须与请求一一对应
+        assert_eq!(results.len(), 10, "必须为每项返回结果");
+        assert!(
+            results.iter().all(|r| r.is_err()),
+            "429 属致命错误，整批都应失败"
+        );
+
+        // 关键断言：429 是致命错误，**不得**降级为逐项并发。
+        // 旧实现会产生 1 次聚合 + 10 项 × 2 次（含重试）= 21 次请求。
+        let total = hits.load(Ordering::SeqCst);
+        assert!(
+            total <= 2,
+            "429 致命错误下不得降级为逐项翻译（旧实现会放大到 21 次），实际请求 {total} 次"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extract_json_payload() {
         let raw = r#"[{"id":0,"text":"你好"}]"#;
         assert_eq!(extract_json_payload(raw), raw);
 

@@ -67,10 +67,16 @@ export default function HistoryPanel({ t, locale }: Props) {
     return () => clearTimeout(timer)
   }, [load, searchKeyword])
 
-  // 卸载时作废全部在途代际
+  // 复制/导出提示的定时器句柄：卸载时必须清理，否则组件销毁后仍会 setState
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const exportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 卸载时作废全部在途代际，并清掉两个提示定时器
   useEffect(
     () => () => {
       genRef.current += 1
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+      if (exportTimerRef.current) clearTimeout(exportTimerRef.current)
     },
     [],
   )
@@ -80,7 +86,11 @@ export default function HistoryPanel({ t, locale }: Props) {
       .writeText(entry.translated_text)
       .then(() => {
         setCopiedKey(entry.cache_key)
-        setTimeout(() => setCopiedKey(null), 1500)
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+        copiedTimerRef.current = setTimeout(() => {
+          copiedTimerRef.current = null
+          setCopiedKey(null)
+        }, 1500)
       })
       .catch((e: unknown) => {
         // 剪贴板写入失败时不得显示「已复制」
@@ -114,7 +124,11 @@ export default function HistoryPanel({ t, locale }: Props) {
       const res = await commands.exportTranslationHistory(format, searchKeyword.trim() || null)
       if (res.status === 'ok') {
         setExportNotice(`${t.history.exportSuccess}: ${res.data.file_path} (${res.data.count})`)
-        setTimeout(() => setExportNotice(null), 5000)
+        if (exportTimerRef.current) clearTimeout(exportTimerRef.current)
+        exportTimerRef.current = setTimeout(() => {
+          exportTimerRef.current = null
+          setExportNotice(null)
+        }, 5000)
       } else {
         setError(`${t.history.exportFailed}: ${res.error}`)
       }
@@ -208,7 +222,7 @@ export default function HistoryPanel({ t, locale }: Props) {
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
             placeholder={t.history.searchPlaceholder}
-            className="w-full rounded border border-slate-200 bg-slate-50/50 py-1 pl-8 pr-3 text-xs text-slate-700 outline-none focus:border-indigo-500 focus:bg-white transition-colors"
+            className="w-full rounded border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 py-1 pl-8 pr-3 text-xs text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-800 transition-colors"
           />
         </div>
       </div>
@@ -251,14 +265,14 @@ export default function HistoryPanel({ t, locale }: Props) {
                   <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                     <button
                       onClick={() => handleSpeak(entry.source_text, entry.source_lang)}
-                      className="rounded p-1 text-slate-400 hover:bg-white hover:text-indigo-600"
+                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600"
                       title={t.history.speak}
                     >
                       <Volume2 className="h-3.5 w-3.5" />
                     </button>
                     <button
                       onClick={() => handleCopy(entry)}
-                      className="rounded p-1 text-slate-400 hover:bg-white hover:text-indigo-600"
+                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600"
                       title={t.history.copy}
                     >
                       {copiedKey === entry.cache_key ? (
@@ -269,7 +283,7 @@ export default function HistoryPanel({ t, locale }: Props) {
                     </button>
                     <button
                       onClick={() => handleDelete(entry)}
-                      className="rounded p-1 text-slate-400 hover:bg-white hover:text-rose-600"
+                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-rose-600"
                       title={t.history.delete}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -277,12 +291,12 @@ export default function HistoryPanel({ t, locale }: Props) {
                   </div>
                 </div>
                 <div className="flex items-start justify-between gap-2">
-                  <span className="line-clamp-2 flex-1 text-sm text-slate-800">
+                  <span className="line-clamp-2 flex-1 text-sm text-slate-800 dark:text-slate-100">
                     {entry.translated_text}
                   </span>
                   <button
                     onClick={() => handleSpeak(entry.translated_text, entry.target_lang)}
-                    className="shrink-0 rounded p-1 text-slate-400 opacity-0 group-hover:opacity-100 hover:bg-white hover:text-indigo-600"
+                    className="shrink-0 rounded p-1 text-slate-400 opacity-0 group-hover:opacity-100 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600"
                     title={t.history.speak}
                   >
                     <Volume2 className="h-3.5 w-3.5" />
@@ -304,7 +318,7 @@ export default function HistoryPanel({ t, locale }: Props) {
               <button
                 onClick={() => load(entries.length, searchKeyword)}
                 disabled={loading}
-                className="mt-1 rounded border border-slate-200 bg-white py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                className="mt-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50"
               >
                 {loading ? t.history.loading : t.history.loadMore}
               </button>

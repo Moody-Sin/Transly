@@ -16,6 +16,8 @@ struct TermMeta {
 struct Compiled {
     ac: AhoCorasick,
     metas: Vec<TermMeta>,
+    /// 全部词条的**目标词**集合，供译文端后替换判定「该片段已是期望产出」。
+    targets: std::collections::HashSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -163,10 +165,33 @@ impl Glossary {
             .build(&patterns)
             .ok()?;
 
-        Some(Compiled { ac, metas })
+        let targets = metas.iter().map(|m| m.target.clone()).collect();
+
+        Some(Compiled { ac, metas, targets })
     }
 
+    /// 在源文本上应用术语库（预替换）。
+    ///
+    /// 把外文源术语提前替换为目标术语，确保引擎不会把源术语译成别的词并固化进缓存。
     pub fn apply(&self, text: &str) -> String {
+        self.apply_with(text, false)
+    }
+
+    /// 在引擎译文上应用术语库（后替换）。
+    ///
+    /// 与 [`Self::apply`] 的唯一区别：**跳过已经是某个术语目标词的片段**。
+    ///
+    /// 为什么必须跳过：`apply` 本身是方向无关的，若词库中同时存在互为反向的词条
+    /// （如 `apple` → `苹果` 与 `苹果` → `Apple`），英译中流程会先做源端预替换
+    /// （`I like apple` → `I like 苹果`），引擎译出 `我喜欢苹果`，再做译文端后替换时
+    /// 命中反向词条 `苹果` → `Apple`，最终产出 `我喜欢Apple` —— 正确译文被反向改写。
+    ///
+    /// 译文里出现的「苹果」正是本轮期望的产出，属于已正确的片段，不应再次改写。
+    pub fn apply_to_translation(&self, text: &str) -> String {
+        self.apply_with(text, true)
+    }
+
+    fn apply_with(&self, text: &str, skip_existing_targets: bool) -> String {
         if self.terms.is_empty() || text.is_empty() {
             return text.to_string();
         }
@@ -175,7 +200,7 @@ impl Glossary {
             Some(c) => c,
             None => return text.to_string(),
         };
-        let Compiled { ac, metas } = &*compiled;
+        let Compiled { ac, metas, targets } = &*compiled;
 
         struct CandidateMatch<'a> {
             start: usize,
@@ -193,6 +218,19 @@ impl Glossary {
 
             // 1. 若要求区分大小写，检查是否与原始定义完全匹配
             if meta.match_case && matched_slice != meta.source.as_str() {
+                continue;
+            }
+
+            // 1.5 译文端后替换：若**当前命中词条的源词**本身已是某个术语的目标词，
+            //     则说明拿它做替换是在反向改写已经正确的译文（引擎译对或源端已预替换），
+            //     必须跳过。
+            //
+            // 判据必须是「词条的 source 是否属于 targets」，而非「命中的片段是否属于 targets」：
+            // 后者会把「引擎未翻译的源术语」一并跳过 —— 例如词库含 `apple→苹果`
+            // 与 `苹果→Apple` 时，若引擎吐回 `我想要 apple`，本应纠正为 `我想要苹果`，
+            // 但 apple（小写）会命中 targets 里的 Apple（经大小写折叠）而被误跳过。
+            // 同时 targets 必须大小写敏感，否则 Apple 与 apple 会被错误等同。
+            if skip_existing_targets && targets.contains(&meta.source) {
                 continue;
             }
 
@@ -267,6 +305,61 @@ mod tests {
         let text = "Pay in USD now";
         let result = glossary.apply(text);
         assert_eq!(result, "Pay in $100 now");
+    }
+    /// 回归：互为反向的词条不得在译文端把正确译文改写回去。
+    ///
+    /// 复现的缺陷：词库同时含 `apple` → `苹果` 与 `苹果` → `Apple` 时，
+    /// 英译中流程做源端预替换得到 `I like 苹果`，引擎译出 `我喜欢苹果`，
+    /// 译文端后替换再命中反向词条 `苹果` → `Apple`，产出错误的 `我喜欢Apple`。
+    #[test]
+    fn test_translation_apply_skips_reverse_term_rewrite() {
+        let mut g = Glossary::new();
+        g.insert("apple", "苹果");
+        g.insert("苹果", "Apple");
+
+        // 源端预替换仍然照常工作（把源术语提前换成目标术语）
+        assert_eq!(g.apply("I like apple"), "I like 苹果");
+
+        // 译文端后替换必须跳过「已是目标词」的片段，保持正确译文不被改写
+        assert_eq!(g.apply_to_translation("我喜欢苹果"), "我喜欢苹果");
+
+        // 关键回归点：引擎**未**翻译源词时，后替换仍须把它纠正为目标术语。
+        // 早期实现用「命中的片段是否属于全部 targets」判定且做了大小写折叠，
+        // 导致 apple 命中 Apple 而被误跳过、永远无法纠正。
+        assert_eq!(
+            g.apply_to_translation("I like apple"),
+            "I like 苹果",
+            "未翻译的源术语在译文端必须仍能被纠正"
+        );
+    }
+
+    /// 完全对称的双向词条（互为反义词条）在译文端保守跳过，不产生循环改写。
+    ///
+    /// `苹果→Apple` 与 `Apple→苹果` 同时存在时，任一方向都无法判定哪个是「期望产出」，
+    /// 此时宁可不替换，也不能来回改写。这是**词条定义自相矛盾**的固有边界，
+    /// 与单向/非对称场景（见上一条测试）的纠正能力无关。
+    #[test]
+    fn test_translation_apply_skips_fully_symmetric_term_pairs() {
+        let mut g = Glossary::new();
+        g.insert("苹果", "Apple");
+        g.insert("Apple", "苹果");
+
+        // 两个方向均保持原样，不做循环改写
+        assert_eq!(g.apply_to_translation("我想要苹果"), "我想要苹果");
+        assert_eq!(g.apply_to_translation("I want Apple"), "I want Apple");
+    }
+
+    /// 译文端后替换仍须对「引擎未译到的源术语」生效，不能因跳过逻辑而失效。
+    #[test]
+    fn test_translation_apply_still_replaces_untranslated_source_term() {
+        let mut g = Glossary::new();
+        g.insert("pipeline", "流水线");
+
+        // 引擎把 pipeline 原样吐回（未翻译），后替换应纠正为约定术语
+        assert_eq!(
+            g.apply_to_translation("配置 pipeline 后重试"),
+            "配置 流水线 后重试"
+        );
     }
 
     #[test]

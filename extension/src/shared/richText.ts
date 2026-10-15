@@ -106,6 +106,27 @@ export function restoreRichTextComposite(
     return null
   }
 
+  // 语序校验：占位符在译文中的出现顺序必须与原文一致。
+  //
+  // 占位符编号即原文中的位置序号（`⟦T_i⟧` 的 i 随原文 part 下标递增），
+  // 而 `baseIds` 是**按原文顺序**排列的非行内文本槽位。下方回填逻辑以
+  // 「线性推进 slotIndex」消费 baseIds，这个前提只在占位符顺序未被改动时成立。
+  //
+  // 若引擎调换了占位符顺序（德语/日语等倒装语序下并不罕见），线性消费会把
+  // 属于前半段的文本槽位填进后半段的译文切片，造成同段落内词序错乱。
+  // 这种情形无法从译文本身唯一还原槽位归属，必须安全回退：
+  // 调用方（content/index.ts）会记录 rich_text_mismatch 并保留原文 DOM 结构。
+  const expectedOrder = [...tokens].sort((a, b) => {
+    const na = Number(a.replace(/⟦T_(\d+)⟧/, '$1'))
+    const nb = Number(b.replace(/⟦T_(\d+)⟧/, '$1'))
+    return na - nb
+  })
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i] !== expectedOrder[i]) {
+      return null
+    }
+  }
+
   const result = new Map<string, string>()
   let remaining = normalized
   let slotIndex = 0

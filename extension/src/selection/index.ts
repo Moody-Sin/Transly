@@ -524,7 +524,8 @@ document.addEventListener('mouseup', (e) => {
   btn.style.fontSize = '12px'
   btn.style.fontWeight = 'bold'
   btn.style.userSelect = 'none'
-  btn.textContent = '译'
+  // 走 chrome.i18n，避免英文环境下仍显示中文「译」
+  btn.textContent = t('selectionHoverIcon')
 
   btn.addEventListener('mousedown', (ev) => {
     ev.preventDefault()

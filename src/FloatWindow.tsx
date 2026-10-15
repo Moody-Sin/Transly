@@ -6,16 +6,29 @@ import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import { speakText } from './utils/speech'
-import { parseThemePreference } from './utils/prefs'
+import { parseLocalePreference, parseThemePreference, LOCALE_STORAGE_KEY } from './utils/prefs'
 
 export default function FloatWindow() {
-  const [locale] = useState<Locale>('zh-CN')
+  const [locale, setLocale] = useState<Locale>(() =>
+    parseLocalePreference(localStorage.getItem(LOCALE_STORAGE_KEY)),
+  )
   const t = getTranslation(locale)
   const [targetLang, setTargetLang] = useState('zh-CN')
   const [engine, setEngine] = useState('google')
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
   const [isFloatPinned, setIsFloatPinned] = useState(false)
+
+  // 跟随主窗口切换界面语言：悬浮窗是独立窗口，状态不共享，
+  // 原先 locale 直接写死 zh-CN，主窗口切成英文后浮窗仍是中文。
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== LOCALE_STORAGE_KEY) return
+      setLocale(parseLocalePreference(e.newValue))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   // 同步暗黑模式主题类名（并监听主窗口切换主题时的 localStorage 变化）
   useEffect(() => {
@@ -146,7 +159,11 @@ export default function FloatWindow() {
             onChange={(e) => {
               const newEng = e.target.value
               setEngine(newEng)
-              if (runner.snapshot.sourceText && !isTranslating) {
+              // 不再用 `!isTranslating` 拦截：翻译进行中用户改用其他引擎
+              // （例如等云端 LLM 太久想换 Google）正是最需要生效的时刻，
+              // 拦截会让切换静默失效、旧引擎结果照旧覆盖上来。
+              // runner.run 内部已递增代际并 cancelStreamTask，旧任务会被正确作废。
+              if (runner.snapshot.sourceText) {
                 // 同步传入新引擎：setEngine 是异步的，此刻 runner 内部 ref 仍是旧值
                 runner.run(runner.snapshot.sourceText, { engine: newEng })
               }

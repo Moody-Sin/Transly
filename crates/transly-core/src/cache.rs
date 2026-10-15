@@ -79,6 +79,12 @@ enum CacheBackend {
     File {
         writer: Mutex<Connection>,
         reader: Mutex<Connection>,
+        /// 数据库文件路径，供大体量导出开启独立只读连接。
+        ///
+        /// 导出会持续数秒并伴随磁盘 I/O，若复用共享 `reader`（全局唯一互斥锁），
+        /// 期间所有缓存查询、划词查词与插件整页翻译都会被阻塞。
+        /// WAL 模式下独立只读连接与主连接互不干扰，故专门保留此路径。
+        path: std::path::PathBuf,
     },
     Memory {
         conn: Mutex<Connection>,
@@ -147,6 +153,7 @@ impl TranslationCache {
             backend: CacheBackend::File {
                 writer: Mutex::new(writer),
                 reader: Mutex::new(reader),
+                path: p.to_path_buf(),
             },
             l1: Mutex::new(L1Cache::new(4096)),
         })
@@ -742,7 +749,34 @@ impl TranslationCache {
         let is_csv = format.eq_ignore_ascii_case("csv");
         let kw = keyword.map(|s| s.trim()).filter(|s| !s.is_empty());
 
-        self.with_reader(|conn| {
+        // 导出全程独占一个**独立**只读连接，绝不占用共享 reader。
+        //
+        // 共享 `reader` 是全应用唯一的读连接互斥锁：缓存查询、划词查词、插件整页
+        // 批量查询都走它。导出 10 万条会持续数秒并夹杂磁盘 I/O，若占用共享锁，
+        // 期间上述链路全部排队阻塞（表现为界面与插件翻译假死）。
+        // WAL 模式下独立只读连接与主读写连接互不干扰，因此这里单独开一个。
+        let dedicated = match &self.backend {
+            CacheBackend::File { path, .. } => {
+                let conn = Connection::open_with_flags(
+                    path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )?;
+                // 必须与主连接一致地设置 busy_timeout：默认 0ms 会让只读连接在
+                // 写事务/WAL checkpoint 的竞争瞬间直接抛 `database is locked`，
+                // 导致导出中途失败。query_only 则是只读连接的纵深防御。
+                conn.execute_batch(
+                    r#"
+                    PRAGMA busy_timeout = 5000;
+                    PRAGMA query_only = ON;
+                    "#,
+                )?;
+                Some(conn)
+            }
+            CacheBackend::Memory { .. } => None,
+        };
+
+        let mut run_export = |conn: &Connection| -> Result<usize> {
             let mut count = 0usize;
             if is_csv {
                 // 写入 UTF-8 BOM，确保 Excel 等软件打开中文不乱码
@@ -856,7 +890,12 @@ impl TranslationCache {
                 .flush()
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             Ok(count)
-        })
+        };
+
+        match dedicated.as_ref() {
+            Some(conn) => run_export(conn),
+            None => self.with_reader(run_export),
+        }
     }
 }
 
@@ -1132,6 +1171,124 @@ mod tests {
         assert_eq!(val, Some("先验".to_string()));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// 回归：文件后端下导出必须走**独立只读连接**，不得占用共享 reader。
+    ///
+    /// 复现的缺陷：导出循环整个包在 `with_reader` 闭包内，全程独占全局唯一的读连接
+    /// 互斥锁；导出十万条期间缓存查询、划词查词与插件整页翻译全部排队阻塞。
+    /// 内存后端不经过该分支，故必须在文件后端下覆盖。
+    ///
+    /// 判定方式必须是**确定性**的，不能靠计时：这里注入一个受控 Writer，
+    /// 让导出在「持锁期间」停住不动，再从另一线程发起一次必定落到 SQLite 的读取
+    /// （L1 为空，见下方说明）。若导出仍占用共享 reader，该读取会被阻塞到超时；
+    /// 走独立连接则能立即返回。
+    #[test]
+    fn test_export_uses_dedicated_connection_without_blocking_reads() {
+        use std::io::Write;
+        use std::sync::mpsc;
+
+        let dir = std::env::temp_dir().join(format!(
+            "transly_test_export_dedicated_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("cache.db");
+
+        // 用独立实例写入数据，使被测实例的 L1 保持为空 —— 否则 `get()` 会命中
+        // L1 内存缓存而根本不碰 reader 锁，测试就永远无法反映真实争用。
+        {
+            let writer_cache = TranslationCache::new(&db_path).unwrap();
+            for i in 0..20 {
+                writer_cache
+                    .set(
+                        &format!("src{i}"),
+                        &format!("译文{i}"),
+                        "en",
+                        "zh-CN",
+                        "google",
+                    )
+                    .unwrap();
+            }
+        }
+
+        let cache = std::sync::Arc::new(TranslationCache::new(&db_path).unwrap());
+
+        // 受控 Writer：写出表头后即通知主线程「导出已持锁」，并等待放行信号。
+        struct BlockingWriter {
+            started: Option<mpsc::Sender<()>>,
+            release: Option<mpsc::Receiver<()>>,
+            buf: Vec<u8>,
+        }
+        impl Write for BlockingWriter {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.buf.extend_from_slice(data);
+                // 只在**首次**写出时握手并停住，把导出钉在持锁区间内；
+                // 后续写出必须畅通，否则导出永远走不到结束。
+                if let (Some(tx), Some(rx)) = (self.started.take(), self.release.take()) {
+                    let _ = tx.send(());
+                    let _ = rx.recv();
+                }
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let mut writer = BlockingWriter {
+            started: Some(started_tx),
+            release: Some(release_rx),
+            buf: Vec::new(),
+        };
+
+        let export_cache = std::sync::Arc::clone(&cache);
+        let exporter = std::thread::spawn(move || {
+            let n = export_cache
+                .export_history_to_writer(&mut writer, "csv", None)
+                .unwrap();
+            (n, writer.buf)
+        });
+
+        // 等导出真正进入持锁状态
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("导出应已开始并写出表头");
+
+        // 此时导出仍停在持锁区间内，发起一次必定落到 SQLite 的读取
+        let (read_tx, read_rx) = mpsc::channel();
+        let read_cache = std::sync::Arc::clone(&cache);
+        std::thread::spawn(move || {
+            let v = read_cache.get("src7", "en", "zh-CN", "google");
+            let _ = read_tx.send(v);
+        });
+
+        let read_result = read_rx.recv_timeout(std::time::Duration::from_secs(3));
+
+        // 无论结果如何都要放行导出，避免测试失败时挂死线程
+        let _ = release_tx.send(());
+
+        let read_value = read_result
+            .expect("导出进行期间读取不得被阻塞（共享 reader 被独占即会超时）")
+            .expect("读取不应报错");
+        assert_eq!(
+            read_value,
+            Some("译文7".to_string()),
+            "导出期间共享读连接必须仍然可用且数据正确"
+        );
+
+        let (count, buf) = exporter.join().unwrap();
+        assert_eq!(count, 20, "导出必须覆盖全部条目");
+        let csv = String::from_utf8(buf).unwrap();
+        assert!(csv.contains("\"src7\",\"译文7\""), "导出内容必须完整");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

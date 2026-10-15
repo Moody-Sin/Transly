@@ -27,7 +27,9 @@ import { downloadBlob } from './utils/download'
 import { formatGlossaryCsv, parseGlossaryCsv } from './utils/csv'
 import { useDialogFocus } from './utils/useDialogFocus'
 import {
+  LOCALE_STORAGE_KEY,
   parseLlmStylePreference,
+  parseLocalePreference,
   parseThemePreference,
   THEME_VALUES,
   type LlmStylePreference,
@@ -57,8 +59,25 @@ const ENGINE_OPTIONS = [
 ] as const satisfies ReadonlyArray<{ id: string; labelKey: keyof I18nSchema['translation'] }>
 
 export default function App() {
-  const [locale, setLocale] = useState<Locale>('zh-CN')
+  // localStorage 属不可信输入：历史遗留或被改写的值一律回退默认语言
+  const [locale, setLocale] = useState<Locale>(() =>
+    parseLocalePreference(localStorage.getItem(LOCALE_STORAGE_KEY)),
+  )
   const t = getTranslation(locale)
+
+  // 持久化并广播语言偏好：悬浮窗是独立窗口，靠 storage 事件实现同步
+  useEffect(() => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, locale)
+  }, [locale])
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== LOCALE_STORAGE_KEY) return
+      setLocale(parseLocalePreference(e.newValue))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   const [sourceText, setSourceText] = useState('')
   const [targetLang, setTargetLang] = useState('zh-CN')
@@ -123,6 +142,14 @@ export default function App() {
       setToastError(null)
     }, 3000)
   }
+
+  // 卸载时清理 Toast 定时器，避免组件销毁后仍触发 setState
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    },
+    [],
+  )
 
   // localStorage 属不可信输入：历史遗留或被改写的值会让主题/风格下拉与说明文案整块空白
   const [theme, setTheme] = useState<ThemePreference>(() =>
@@ -502,6 +529,7 @@ export default function App() {
     // 启动需要时间，故轮询数次直到脱离 starting 态。
     let cancelled = false
     let attempts = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
     const poll = () => {
       commands
         .getServerStatus()
@@ -510,7 +538,7 @@ export default function App() {
           setServerStatus(status)
           attempts += 1
           if (status.state === 'starting' && attempts < 10) {
-            setTimeout(poll, 500)
+            timer = setTimeout(poll, 500)
           }
         })
         .catch((err) => {
@@ -520,6 +548,8 @@ export default function App() {
     poll()
     return () => {
       cancelled = true
+      // 卸载时清掉待触发的下一次轮询，避免残留定时器持续发起 IPC
+      if (timer) clearTimeout(timer)
     }
   }, [])
 
@@ -931,7 +961,20 @@ export default function App() {
                 <div className="flex items-center gap-1.5">
                   <select
                     value={targetLang}
-                    onChange={(e) => setTargetLang(e.target.value)}
+                    onChange={(e) => {
+                      const newLang = e.target.value
+                      setTargetLang(newLang)
+                      // 已有文本时立即用新语言重跑：setState 是异步的，
+                      // 必须把新值随调用同步传入并锁死（forceTargetLang），
+                      // 否则会沿用旧语言，或让「中译中」润色被智能对转改写成英文。
+                      if (sourceText.trim()) {
+                        runner.run(sourceText, {
+                          source: 'input',
+                          targetLang: newLang,
+                          forceTargetLang: true,
+                        })
+                      }
+                    }}
                     className="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 shadow-sm focus:border-indigo-500 focus:outline-none cursor-pointer"
                   >
                     <option value="zh-CN">{t.languages['zh-CN']}</option>
@@ -959,7 +1002,18 @@ export default function App() {
                 </span>
                 <select
                   value={engine}
-                  onChange={(e) => setEngine(e.target.value)}
+                  onChange={(e) => {
+                    const newEng = e.target.value
+                    setEngine(newEng)
+                    // 已有文本时立即用新引擎重跑（setState 异步，须同步传入新值）
+                    if (sourceText.trim()) {
+                      runner.run(sourceText, {
+                        source: 'input',
+                        engine: newEng,
+                        forceTargetLang: true,
+                      })
+                    }
+                  }}
                   className="rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-xs text-slate-700 dark:text-slate-200 shadow-sm focus:border-indigo-500 focus:outline-none cursor-pointer"
                 >
                   {ENGINE_OPTIONS.map(({ id, labelKey }) => (
@@ -1063,7 +1117,14 @@ export default function App() {
                       </button>
                     )}
                     <button
-                      onClick={() => runner.run(sourceText, { source: 'input' })}
+                      onClick={() =>
+                        runner.run(sourceText, {
+                          source: 'input',
+                          // 用户已在下拉框显式选定目标语言，必须锁死它：
+                          // 否则「中译中」润色场景会被智能对转逻辑改写成英文。
+                          forceTargetLang: true,
+                        })
+                      }
                       disabled={isTranslating || !sourceText.trim()}
                       className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
                     >
@@ -1217,7 +1278,7 @@ export default function App() {
                         ? t.settings.keyPlaceholderOverwrite
                         : t.settings.keyPlaceholderDeepl
                     }
-                    className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                    className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
@@ -1244,7 +1305,7 @@ export default function App() {
                         ? t.settings.keyPlaceholderOverwrite
                         : t.settings.keyPlaceholderDeepseek
                     }
-                    className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                    className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
                   />
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {t.settings.deepseekCustomTitle}
@@ -1255,14 +1316,14 @@ export default function App() {
                       value={deepseekBaseUrl}
                       onChange={(e) => setDeepseekBaseUrl(e.target.value)}
                       placeholder={t.settings.deepseekBaseUrlPlaceholder}
-                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                      className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                     <input
                       type="text"
                       value={deepseekModel}
                       onChange={(e) => setDeepseekModel(e.target.value)}
                       placeholder={t.settings.deepseekModelPlaceholder}
-                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                      className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                   </div>
                 </div>
@@ -1290,7 +1351,7 @@ export default function App() {
                         ? t.settings.keyPlaceholderOverwrite
                         : t.settings.keyPlaceholderOpenai
                     }
-                    className="w-full rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                    className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
                   />
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {t.settings.openaiCustomTitle}
@@ -1301,14 +1362,14 @@ export default function App() {
                       value={openaiBaseUrl}
                       onChange={(e) => setOpenaiBaseUrl(e.target.value)}
                       placeholder={t.settings.openaiBaseUrlPlaceholder}
-                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                      className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                     <input
                       type="text"
                       value={openaiModel}
                       onChange={(e) => setOpenaiModel(e.target.value)}
                       placeholder={t.settings.openaiModelPlaceholder}
-                      className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none focus:border-indigo-500"
+                      className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                   </div>
                   <div className="mt-1 flex items-center justify-between">
@@ -1698,14 +1759,14 @@ export default function App() {
                     value={glossarySource}
                     onChange={(e) => setGlossarySource(e.target.value)}
                     placeholder={t.settings.glossarySourcePlaceholder}
-                    className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
                   />
                   <input
                     type="text"
                     value={glossaryTarget}
                     onChange={(e) => setGlossaryTarget(e.target.value)}
                     placeholder={t.settings.glossaryTargetPlaceholder}
-                    className="rounded border border-slate-200 bg-white px-2.5 py-1.5 text-slate-800 outline-none focus:border-indigo-500"
+                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div className="flex items-center justify-between pt-1">
@@ -1734,7 +1795,7 @@ export default function App() {
                       type="text"
                       value={glossarySearch}
                       onChange={(e) => setGlossarySearch(e.target.value)}
-                      placeholder="搜索已保存术语 (源词 / 译词)..."
+                      placeholder={t.settings.glossarySearchPlaceholder}
                       className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-800 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                     <div className="max-h-36 overflow-y-auto flex flex-col gap-1.5">
@@ -1806,17 +1867,20 @@ export default function App() {
             aria-modal="true"
             aria-labelledby={PAIRING_DIALOG_TITLE_ID}
             tabIndex={-1}
-            className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl border border-indigo-100 flex flex-col gap-4"
+            className="w-full max-w-sm rounded-xl bg-white dark:bg-slate-900 p-5 shadow-2xl border border-indigo-100 dark:border-indigo-900 flex flex-col gap-4"
           >
             <div className="flex items-start gap-3">
-              <div className="rounded-full bg-indigo-50 p-2 text-indigo-600">
+              <div className="rounded-full bg-indigo-50 dark:bg-indigo-950/60 p-2 text-indigo-600 dark:text-indigo-400">
                 <Key className="h-6 w-6" />
               </div>
               <div className="flex-1">
-                <h3 id={PAIRING_DIALOG_TITLE_ID} className="font-semibold text-slate-800 text-sm">
+                <h3
+                  id={PAIRING_DIALOG_TITLE_ID}
+                  className="font-semibold text-slate-800 dark:text-slate-100 text-sm"
+                >
                   {t.app.pairingModalTitle}
                 </h3>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
                   {t.app.pairingModalDesc}
                 </p>
                 {pairingRequest.browserHint && (
@@ -1871,18 +1935,24 @@ export default function App() {
             aria-labelledby={OCR_DIALOG_TITLE_ID}
             aria-describedby={OCR_DIALOG_DESC_ID}
             tabIndex={-1}
-            className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+            className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-xl"
           >
-            <h3 id={OCR_DIALOG_TITLE_ID} className="text-sm font-semibold text-slate-800">
+            <h3
+              id={OCR_DIALOG_TITLE_ID}
+              className="text-sm font-semibold text-slate-800 dark:text-slate-100"
+            >
               {t.translation.ocrOverwriteTitle}
             </h3>
-            <p id={OCR_DIALOG_DESC_ID} className="text-xs leading-relaxed text-slate-500">
+            <p
+              id={OCR_DIALOG_DESC_ID}
+              className="text-xs leading-relaxed text-slate-500 dark:text-slate-400"
+            >
               {t.translation.ocrOverwriteDesc.replace('{n}', String(sourceText.length))}
             </p>
-            <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
               <button
                 onClick={closeOcrConfirm}
-                className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100"
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 {t.task.btnCancel}
               </button>

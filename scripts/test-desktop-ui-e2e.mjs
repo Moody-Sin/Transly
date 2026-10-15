@@ -103,7 +103,10 @@ const TAURI_MOCK_INIT_SCRIPT = `
         source_lang: "en",
         target_lang: "zh-CN",
         engine: "google",
-        created_at: new Date(Date.now() - 3600000).toISOString()
+        // 契约：CacheEntry.created_at 是 Unix 秒级时间戳整数（见 src/bindings.ts）。
+        // 曾误传 ISO 字符串，HistoryPanel 会把它乘 1000 得到 NaN 并渲染成
+        // Invalid Date，而旧断言只检查文案包含关系，把该缺陷放了过去。
+        created_at: Math.floor((Date.now() - 3600000) / 1000)
       },
       {
         cache_key: "history_2",
@@ -112,7 +115,7 @@ const TAURI_MOCK_INIT_SCRIPT = `
         source_lang: "en",
         target_lang: "zh-CN",
         engine: "deepl",
-        created_at: new Date().toISOString()
+        created_at: Math.floor(Date.now() / 1000)
       }
     ],
     isPinned: false
@@ -441,20 +444,18 @@ async function runDesktopUiE2E() {
 
     // 切换到深色模式（通过点击主题模式按钮）
     const darkBtn = page.getByRole('button', { name: '深色' })
-    if (await darkBtn.isVisible()) {
-      await darkBtn.click()
-      await page.waitForTimeout(200)
-      const isDark = await page.evaluate(() => document.documentElement.classList.contains('dark'))
-      assert.equal(isDark, true, '切换深色主题后 html 根节点必须包含 dark class')
+    await darkBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await darkBtn.click()
+    await page.waitForTimeout(200)
+    const isDark = await page.evaluate(() => document.documentElement.classList.contains('dark'))
+    assert.equal(isDark, true, '切换深色主题后 html 根节点必须包含 dark class')
 
-      const lightBtn = page.getByRole('button', { name: '浅色' })
-      await lightBtn.click()
-      await page.waitForTimeout(200)
-      const isLight = await page.evaluate(
-        () => !document.documentElement.classList.contains('dark'),
-      )
-      assert.equal(isLight, true, '切换浅色主题后 html 根节点不得包含 dark class')
-    }
+    const lightBtn = page.getByRole('button', { name: '浅色' })
+    await lightBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await lightBtn.click()
+    await page.waitForTimeout(200)
+    const isLight = await page.evaluate(() => !document.documentElement.classList.contains('dark'))
+    assert.equal(isLight, true, '切换浅色主题后 html 根节点不得包含 dark class')
 
     // 关闭设置弹窗
     const closeSettingsBtn = page.locator('button[aria-label="关闭"]').first()
@@ -481,18 +482,17 @@ async function runDesktopUiE2E() {
       .locator('select')
       .filter({ has: page.locator('option[value="zh-CN"]') })
       .first()
-    if (await targetLangSelect.isVisible()) {
-      await targetLangSelect.selectOption('en')
-    }
+    await targetLangSelect.waitFor({ state: 'visible', timeout: 5000 })
+    await targetLangSelect.selectOption('en')
 
-    // 点击翻译按钮或等待防抖
+    // 点击翻译按钮（防抖之外再显式触发一次，确保链路被真实点击驱动）
     const translateButton = page
       .locator('button')
       .filter({ hasText: /^翻译$/ })
       .last()
-    if ((await translateButton.isVisible()) && (await translateButton.isEnabled())) {
-      await translateButton.click()
-    }
+    await translateButton.waitFor({ state: 'visible', timeout: 5000 })
+    assert(await translateButton.isEnabled(), '翻译按钮在有输入时必须可用')
+    await translateButton.click()
 
     // 等待翻译结果区域渲染
     await page.waitForFunction(
@@ -511,11 +511,12 @@ async function runDesktopUiE2E() {
     )
 
     // 复制译文按钮测试
+    // 断言必须显式：`if (await x.isVisible())` 在选择器漂移或组件未挂载时只会
+    // 静默跳过，用例照样打勾通过，等于把缺陷留给用户。
     const copyButton = page.locator('button').filter({ hasText: /复制/ }).first()
-    if (await copyButton.isVisible()) {
-      await copyButton.click()
-      await page.waitForTimeout(200)
-    }
+    await copyButton.waitFor({ state: 'visible', timeout: 5000 })
+    await copyButton.click()
+    await page.waitForTimeout(200)
     console.log('✔ [用例 3] 文本输入、防抖调度、IPC 调用与译文回填全链路正常')
 
     // ==========================================
@@ -523,31 +524,35 @@ async function runDesktopUiE2E() {
     // ==========================================
     console.log('[UI-E2E] 正在测试 [用例 4: 历史记录面板检索、管理与导出]...')
     const historyTab = page.getByRole('button', { name: '历史' })
-    if (await historyTab.isVisible()) {
-      await historyTab.click()
-      await page.waitForTimeout(400)
+    await historyTab.waitFor({ state: 'visible', timeout: 5000 })
+    await historyTab.click()
+    await page.waitForTimeout(400)
 
-      // 验证历史记录项呈现
-      const historyContent = await page.textContent('body')
-      assert(
-        historyContent.includes('Continuous Integration') || historyContent.includes('持续集成'),
-        '历史记录列表应展示初始历史条目',
-      )
+    // 验证历史记录项呈现
+    const historyContent = await page.textContent('body')
+    assert(
+      historyContent.includes('Continuous Integration') || historyContent.includes('持续集成'),
+      '历史记录列表应展示初始历史条目',
+    )
+    // 时间戳必须是可解析的合法时间：Mock 曾误传 ISO 字符串，渲染成 Invalid Date
+    // 却因断言只查文案而漏过。此处显式守护契约类型。
+    assert(
+      !historyContent.includes('Invalid Date'),
+      '历史记录时间必须渲染为合法时间（created_at 须为 Unix 秒级整数）',
+    )
 
-      // 搜索框过滤测试
-      const searchInput = page.locator('input[placeholder*="搜索"], input[type="search"]').first()
-      if (await searchInput.isVisible()) {
-        await searchInput.fill('Continuous')
-        await page.waitForTimeout(400)
-        const filteredContent = await page.textContent('body')
-        assert(filteredContent.includes('Continuous Integration'), '搜索结果必须包含匹配条目')
-      }
+    // 搜索框过滤测试
+    const searchInput = page.locator('input[placeholder*="搜索"], input[type="search"]').first()
+    await searchInput.waitFor({ state: 'visible', timeout: 5000 })
+    await searchInput.fill('Continuous')
+    await page.waitForTimeout(400)
+    const filteredContent = await page.textContent('body')
+    assert(filteredContent.includes('Continuous Integration'), '搜索结果必须包含匹配条目')
 
-      // 切换回主翻译 Tab
-      const translateTab = page.getByRole('button', { name: '翻译' })
-      await translateTab.click()
-      await page.waitForTimeout(300)
-    }
+    // 切换回主翻译 Tab
+    const translateTab = page.getByRole('button', { name: '翻译' })
+    await translateTab.click()
+    await page.waitForTimeout(300)
     console.log('✔ [用例 4] 历史记录检索、过滤与交互闭环正常')
 
     // ==========================================
@@ -558,23 +563,25 @@ async function runDesktopUiE2E() {
     await page.waitForSelector('#transly-settings-dialog-title', { timeout: 5000 })
 
     // 术语库输入框测试
+    // 选择器必须匹配真实 placeholder（i18n 文案为「源术语 (如: LLM)」）。
+    // 旧选择器写的是 `placeholder*="原文"`，从未匹配成功，而外层 `if (isVisible())`
+    // 守卫让整段术语库用例静默跳过 —— 这就是典型的「假通过」。
     const glossarySourceInput = page
-      .locator('input[placeholder*="原文"], input[placeholder*="Apple"]')
+      .locator('input[placeholder*="源术语"], input[placeholder*="Source term"]')
       .first()
-    if (await glossarySourceInput.isVisible()) {
-      await glossarySourceInput.fill('E2ETerm')
-      const targetInput = page
-        .locator('input[placeholder*="译文"], input[placeholder*="苹果"]')
-        .first()
-      if (await targetInput.isVisible()) {
-        await targetInput.fill('端到端术语')
-      }
-      const addGlossaryBtn = page.getByRole('button', { name: '添加规则' })
-      if ((await addGlossaryBtn.isVisible()) && (await addGlossaryBtn.isEnabled())) {
-        await addGlossaryBtn.click()
-        await page.waitForTimeout(300)
-      }
-    }
+    await glossarySourceInput.waitFor({ state: 'visible', timeout: 5000 })
+    await glossarySourceInput.fill('E2ETerm')
+    const targetInput = page
+      .locator('input[placeholder*="目标译文"], input[placeholder*="Target"]')
+      .first()
+    await targetInput.waitFor({ state: 'visible', timeout: 5000 })
+    await targetInput.fill('端到端术语')
+    // 按钮真实文案为「添加术语」（i18n: settings.btnAddGlossary）
+    const addGlossaryBtn = page.getByRole('button', { name: '添加术语' })
+    await addGlossaryBtn.waitFor({ state: 'visible', timeout: 5000 })
+    assert(await addGlossaryBtn.isEnabled(), '添加规则按钮在填入术语后必须可用')
+    await addGlossaryBtn.click()
+    await page.waitForTimeout(300)
 
     // 关闭设置弹窗
     const closeBtn2 = page.locator('button[aria-label="关闭"]').first()
@@ -655,14 +662,13 @@ async function runDesktopUiE2E() {
     const floatResult = await floatPage.textContent('body')
     assert(floatResult.includes('[E2E译文:'), '悬浮窗必须自动触发划词翻译并展示译文')
 
-    // 置顶图钉切换测试
+    // 置顶图钉切换测试：图钉是悬浮窗的必备控件，缺失即视为缺陷
     const pinBtn = floatPage
       .locator('button[title*="置顶"], button[title*="固定"], button[title*="Pin"]')
       .first()
-    if (await pinBtn.isVisible()) {
-      await pinBtn.click()
-      await floatPage.waitForTimeout(200)
-    }
+    await pinBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await pinBtn.click()
+    await floatPage.waitForTimeout(200)
 
     await floatPage.close()
     console.log('✔ [用例 7] 迷你悬浮窗 (#float) 路由隔离、选区事件响应与交互成功')

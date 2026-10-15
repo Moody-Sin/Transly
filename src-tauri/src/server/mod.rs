@@ -359,10 +359,19 @@ async fn pair_request_handler(
     if client_id.is_empty() || client_id.len() > 128 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let (session_id, expires_in) = state
+    let (session_id, expires_in) = match state
         .pairing_manager
         .create_session(client_id.to_string(), payload.browser_hint.clone())
-        .await;
+        .await
+    {
+        pairing::CreateSessionOutcome::Created(id, ttl) => (id, ttl),
+        // 同一 client_id 请求过于频繁：明确告知被节流，而非静默换发新会话
+        pairing::CreateSessionOutcome::Throttled => return Err(StatusCode::TOO_MANY_REQUESTS),
+        // 未决会话已满：拒绝新请求，不淘汰他人有效会话（否则构成配对 DoS）
+        pairing::CreateSessionOutcome::AtCapacity => {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+    };
 
     // 若注册了事件钩子（如 Tauri AppHandle），立即广播通知前端（携带服务端权威 expires_in）
     if let Some(ref hook) = state.pairing_notify_hook {
@@ -662,7 +671,7 @@ async fn translate_batch_handler(
 
         if let BatchItemResult::Success { ref mut text, .. } = item {
             if !g.is_empty() {
-                *text = g.apply(text);
+                *text = g.apply_to_translation(text);
             }
             final_translations.push(text.clone());
         } else {

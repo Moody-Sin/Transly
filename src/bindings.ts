@@ -63,10 +63,22 @@ export const commands = {
 	startScreenshotTranslation: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("start_screenshot_translation")),
 	/**  读取当前截图会话。幂等读，供覆盖窗挂载（含 StrictMode 二次执行）使用。 */
 	getScreenshotSession: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("get_screenshot_session")),
-	/**  提交框选区域。阶段 2 返回空块（OCR 在阶段 3），仅完成选区钳制与代际校验。 */
+	/**  提交框选区域，返回归一化到整张冻结帧的 OCR 块。 */
 	recognizeScreenshotSelection: (rect: NormRect, generation: number) => typedError<OcrBlockDto[], OcrErrorDto>(__TAURI_INVOKE("recognize_screenshot_selection", { rect, generation })),
 	/**  取消并关闭覆盖窗。 */
 	cancelScreenshotTranslation: () => typedError<null, string>(__TAURI_INVOKE("cancel_screenshot_translation")),
+	/**  探测当前环境的截图翻译能力。 */
+	getScreenshotCapability: () => __TAURI_INVOKE<ScreenshotCapabilityDto>("get_screenshot_capability"),
+	/**  读取截图翻译快捷键。 */
+	getScreenshotShortcut: () => typedError<string, string>(__TAURI_INVOKE("get_screenshot_shortcut")),
+	/**
+	 *  设置截图翻译快捷键。
+	 * 
+	 *  与既有 `set_shortcut` / `set_replace_shortcut` 同构的四段式：
+	 *  注销旧键 → 注册新键 → 失败则回滚重注旧键 → 持久化（持久化失败也回滚）。
+	 *  注册失败必须原子回滚，否则快捷键状态会永久丢失（用户既用不了新键也丢了旧键）。
+	 */
+	setScreenshotShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_screenshot_shortcut", { shortcut })),
 };
 
 /* Types */
@@ -182,6 +194,22 @@ export type ProxyMode =
 "none";
 
 /**
+ *  截图翻译的可用性探测结果。
+ * 
+ *  供 UI 在**真正尝试之前**就告知用户环境是否支持，避免用户按了快捷键
+ *  却只得到一个失败提示。探测只回答「理论上能不能」，**不真的去捕获屏幕**
+ *  （那会闪一下且开销大，且权限类问题只能在捕获时才能确定）。
+ */
+export type ScreenshotCapabilityDto = {
+	/**  当前环境是否支持框选截图 */
+	supported: boolean,
+	/**  不支持时的**可执行**原因（直接展示给用户，UI 不要自己再拼文案） */
+	reason: string | null,
+	/**  OCR 后端是否可用（Linux 依赖外部 tesseract，Windows/macOS 为系统原生） */
+	ocr_available: boolean,
+};
+
+/**
  *  一次截图翻译会话（跨 IPC 边界传递的元数据，**不含图像字节**）。
  * 
  *  图像走自定义 URI 协议，故本结构只携带定位与状态信息。
@@ -220,19 +248,21 @@ export type ServerStatus =
 /**
  *  全局快捷键的注册状态。
  * 
- *  `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
- *  格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
- *  莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+ *  `Alt+Shift+D` / `Alt+Shift+R` / `Alt+Shift+S` 是极易被其他软件占用的组合，
+ *  注册失败（被占用 / 格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，
+ *  用户只会看到「功能莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
  */
 export type ShortcutStatusDto = {
-	/**  两个快捷键是否都注册成功 */
+	/**  三个快捷键是否都注册成功 */
 	ok: boolean,
-	/**  聚合失败原因（兼容旧字段，注册成功时为 None） */
+	/**  聚合失败原因（兼容旧字段，全部成功时为 None） */
 	reason: string | null,
 	/**  划词翻译快捷键注册失败原因（注册成功时为 None） */
 	translate_error: string | null,
 	/**  划词原地替换快捷键注册失败原因（注册成功时为 None） */
 	replace_error: string | null,
+	/**  截图翻译快捷键注册失败原因（注册成功时为 None） */
+	screenshot_error: string | null,
 };
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */

@@ -80,6 +80,9 @@ const TAURI_MOCK_INIT_SCRIPT = `
     clipboardMonitor: false,
     shortcut: "Alt+Shift+D",
     replaceShortcut: "Alt+Shift+R",
+    screenshotShortcut: "Alt+Shift+S",
+    screenshotShortcutError: null,
+    screenshotSupported: true,
     preferredReplaceEngine: "google",
     llmStyle: "general",
     apiKeys: {
@@ -238,8 +241,23 @@ const TAURI_MOCK_INIT_SCRIPT = `
             ok: true,
             reason: null,
             translate_error: null,
-            replace_error: null
+            replace_error: null,
+            screenshot_error: state.screenshotShortcutError
           };
+
+        case 'get_screenshot_capability':
+          return {
+            supported: state.screenshotSupported,
+            reason: state.screenshotSupported ? null : 'Wayland 会话下不支持框选截图',
+            ocr_available: true
+          };
+
+        case 'get_screenshot_shortcut':
+          return state.screenshotShortcut;
+
+        case 'set_screenshot_shortcut':
+          state.screenshotShortcut = args.shortcut;
+          return null;
 
         case 'get_shortcut':
           return state.shortcut;
@@ -791,6 +809,78 @@ async function runDesktopUiE2E() {
     await shotPage.close()
     console.log('✔ [用例 8] 截图覆盖窗框选、坐标归一化、译文层与取消闭环正常')
 
+    // ==========================================
+    // 用例 9: 截图翻译三入口与降级探测
+    // ==========================================
+    console.log('[UI-E2E] 正在测试 [用例 9: 截图翻译入口与降级探测]...')
+    const entryPage = await browser.newPage()
+    entryPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    entryPage.on('pageerror', (err) => consoleErrors.push(err.message))
+    await entryPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await entryPage.goto(`${baseUrl}/`, { waitUntil: 'networkidle' })
+
+    // 断言 1: 主窗口存在「截图翻译」按钮且可点击
+    const shotBtn = entryPage.getByRole('button', { name: /截图翻译|Screenshot translate/ }).first()
+    await shotBtn.waitFor({ state: 'visible', timeout: 5000 })
+    assert(!(await shotBtn.isDisabled()), '支持环境下截图按钮不应被禁用')
+
+    // 断言 2: 点击后必须调用 start_screenshot_translation（入口真的接通）
+    await shotBtn.click()
+    await entryPage.waitForTimeout(500)
+    const shotLogs = await entryPage.evaluate(() => window.__INVOKE_LOGS || [])
+    assert(
+      shotLogs.some((l) => l.cmd === 'start_screenshot_translation'),
+      '点击截图按钮必须调用 start_screenshot_translation',
+    )
+
+    // 断言 3: 设置中心存在第三个快捷键录制器，且冲突提示独立
+    await entryPage.getByRole('button', { name: '设置' }).click()
+    await entryPage.waitForSelector('text=截图翻译快捷键', { timeout: 5000 })
+    const recorders = await entryPage.locator('[data-testid="shortcut-recorder"]').count()
+    assert(recorders >= 3, `设置中心应有至少 3 个快捷键录制器，实际 ${recorders}`)
+
+    // 断言 4: 降级探测 —— supported=false 时按钮必须禁用且展示原因
+    const degraded = await browser.newPage()
+    degraded.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    degraded.on('pageerror', (err) => consoleErrors.push(err.message))
+    await degraded.addInitScript(`
+      (() => {
+        const original = window.__TAURI_INTERNALS__ ? null : null;
+      })();
+    `)
+    await degraded.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    // 覆写 mock：强制返回不支持
+    await degraded.addInitScript(`
+      (() => {
+        const orig = window.__TAURI_INTERNALS__.invoke;
+        window.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+          if (cmd === 'get_screenshot_capability') {
+            return { supported: false, reason: 'Wayland 会话下不支持框选截图', ocr_available: true };
+          }
+          return orig(cmd, args);
+        };
+      })();
+    `)
+    await degraded.goto(`${baseUrl}/`, { waitUntil: 'networkidle' })
+    const degradedBtn = degraded
+      .getByRole('button', { name: /截图翻译|Screenshot translate/ })
+      .first()
+    await degradedBtn.waitFor({ state: 'visible', timeout: 5000 })
+    assert(await degradedBtn.isDisabled(), '不支持环境下截图按钮必须禁用')
+    const degradedText = await degraded.textContent('body')
+    assert(
+      degradedText.includes('Wayland') || degradedText.includes('不支持框选截图'),
+      '不支持时必须展示可执行的原因，而不是静默禁用',
+    )
+
+    await entryPage.close()
+    await degraded.close()
+    console.log('✔ [用例 9] 截图入口接通、三快捷键卡片与降级禁用提示均正确')
+
     // 检查控制台异常
     assert.equal(
       consoleErrors.length,
@@ -799,7 +889,7 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 8 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 9 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
     console.log(
       '⚠️ 覆盖范围声明：截图覆盖窗用例走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
         '不代表自定义协议 translyshot 链路与真实屏幕捕获已验证；那两项只能靠真机手动验收。',

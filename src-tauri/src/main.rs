@@ -345,6 +345,43 @@ fn main() {
                 }
             }
 
+            // 第三个快捷键：截图翻译。
+            // 既有两份**保持原样**（其回滚与竞态逻辑是历史踩坑的产物，动它们风险大于收益），
+            // 本份只沿用同一个四段式骨架。
+            let active_screenshot_shortcut = cache
+                .get_setting("custom_screenshot_shortcut")
+                .ok()
+                .flatten()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| commands::screenshot::DEFAULT_SCREENSHOT_SHORTCUT.to_string());
+
+            let shot_accel = active_screenshot_shortcut.clone();
+            let shot_slot = shortcut_status_slot.clone();
+            let shot_deps = app
+                .state::<Arc<commands::TranslationDependencies>>()
+                .inner()
+                .clone();
+            let shot_reg = app.global_shortcut().on_shortcut(
+                active_screenshot_shortcut.as_str(),
+                move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        commands::screenshot::trigger_screenshot_translation(
+                            _app.clone(),
+                            shot_deps.clone(),
+                        );
+                    }
+                },
+            );
+            match shot_reg {
+                Ok(()) => {
+                    shot_slot.set_screenshot_ok();
+                }
+                Err(err) => {
+                    eprintln!("[Shortcut Warning] 截图翻译快捷键 {shot_accel} 注册失败：{err}");
+                    shot_slot.set_screenshot_failed(format!("{shot_accel}: {err}"));
+                }
+            }
+
             // 启动后台剪贴板变动监听任务
             let clip_handle = app.handle().clone();
             let flag = monitor_flag.clone();
@@ -396,8 +433,9 @@ fn main() {
 
             // 构建系统托盘菜单
             let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let shot_i = MenuItem::with_id(app, "screenshot", "截图翻译", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "退出 Transly", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &shot_i, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
                 .tooltip("Transly 桌面翻译")
@@ -414,6 +452,21 @@ fn main() {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
+                    }
+                    "screenshot" => {
+                        // 必须延迟：此刻托盘菜单弹层仍在屏幕上，立即捕获会把菜单
+                        // 连同高亮项一起截进冻结帧。200–250ms 足以等弹层收起。
+                        let app_shot = app.clone();
+                        let deps_shot = app
+                            .state::<Arc<commands::TranslationDependencies>>()
+                            .inner()
+                            .clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                            commands::screenshot::trigger_screenshot_translation(
+                                app_shot, deps_shot,
+                            );
+                        });
                     }
                     "quit" => {
                         app.exit(0);

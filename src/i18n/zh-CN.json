@@ -44,7 +44,11 @@
     "ocrOverwriteDesc": "识别结果将替换输入框中已输入的 {n} 个字符，且无法撤销。",
     "ocrOverwriteConfirm": "覆盖并翻译",
     "exportGlossaryCsv": "导出 CSV",
-    "importGlossaryCsv": "导入 CSV"
+    "importGlossaryCsv": "导入 CSV",
+    "btnScreenshot": "截图翻译",
+    "screenshotUnsupported": "当前环境不支持框选截图",
+    "screenshotShortcutTitle": "截图翻译快捷键",
+    "screenshotShortcutDesc": "按此键框选屏幕区域并识别翻译"
   },
   "history": {
     "tabTranslate": "翻译",

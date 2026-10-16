@@ -44,7 +44,11 @@
     "ocrOverwriteDesc": "The recognized text will replace the {n} characters you already typed and cannot be undone.",
     "ocrOverwriteConfirm": "Replace & Translate",
     "exportGlossaryCsv": "Export CSV",
-    "importGlossaryCsv": "Import CSV"
+    "importGlossaryCsv": "Import CSV",
+    "btnScreenshot": "Screenshot translate",
+    "screenshotUnsupported": "Screenshot capture is not supported in this environment",
+    "screenshotShortcutTitle": "Screenshot shortcut",
+    "screenshotShortcutDesc": "Press to select a screen region and translate it"
   },
   "history": {
     "tabTranslate": "Translate",

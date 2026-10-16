@@ -74,7 +74,10 @@ macro_rules! app_command_builder {
             $crate::commands::screenshot::start_screenshot_translation,
             $crate::commands::screenshot::get_screenshot_session,
             $crate::commands::screenshot::recognize_screenshot_selection,
-            $crate::commands::screenshot::cancel_screenshot_translation
+            $crate::commands::screenshot::cancel_screenshot_translation,
+            $crate::commands::screenshot::get_screenshot_capability,
+            $crate::commands::screenshot::get_screenshot_shortcut,
+            $crate::commands::screenshot::set_screenshot_shortcut
         ])
     };
 }

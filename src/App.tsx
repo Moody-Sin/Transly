@@ -10,6 +10,7 @@ import {
   Save,
   Globe,
   Image as ImageIcon,
+  Camera,
   Volume2,
 } from 'lucide-react'
 import { commands } from './bindings'
@@ -126,6 +127,12 @@ export default function App() {
   const [shortcutConflict, setShortcutConflict] = useState<string>('')
   const [customReplaceShortcut, setCustomReplaceShortcut] = useState('Alt+Shift+R')
   const [replaceShortcutConflict, setReplaceShortcutConflict] = useState<string>('')
+  const [customScreenshotShortcut, setCustomScreenshotShortcut] = useState('Alt+Shift+S')
+  const [screenshotShortcutConflict, setScreenshotShortcutConflict] = useState<string>('')
+  const [screenshotCapability, setScreenshotCapability] = useState<{
+    supported: boolean
+    reason: string | null
+  } | null>(null)
   const [preferredReplaceEngine, setPreferredReplaceEngine] = useState('google')
   const [proxyMode, setProxyMode] = useState<ProxyMode>('auto')
   const [proxyUrl, setProxyUrl] = useState('')
@@ -351,9 +358,30 @@ export default function App() {
       .then((status) => {
         setShortcutConflict(status.translate_error || '')
         setReplaceShortcutConflict(status.replace_error || '')
+        setScreenshotShortcutConflict(status.screenshot_error || '')
       })
       .catch((err) => {
         console.warn('[Transly] 读取快捷键注册状态失败：', err)
+      })
+
+    // 探测截图能力：Wayland / 缺 tesseract 等环境下按钮应禁用并说明原因，
+    // 而不是让用户按了才发现不能用。
+    commands
+      .getScreenshotCapability()
+      .then((cap) =>
+        setScreenshotCapability({ supported: cap.supported, reason: cap.reason ?? null }),
+      )
+      .catch((err) => {
+        console.warn('[Transly] 读取截图能力失败：', err)
+      })
+
+    commands
+      .getScreenshotShortcut()
+      .then((res) => {
+        if (res.status === 'ok') setCustomScreenshotShortcut(res.data)
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取截图快捷键失败：', err)
       })
 
     commands
@@ -650,6 +678,25 @@ export default function App() {
     }
   }
 
+  const handleSaveScreenshotShortcut = async () => {
+    try {
+      const res = await commands.setScreenshotShortcut(customScreenshotShortcut.trim())
+      if (res.status === 'ok') {
+        setSaveStatus(t.settings.statusShortcutSaved)
+        setTimeout(() => setSaveStatus(null), 2000)
+        const status = await commands.getShortcutStatus()
+        setScreenshotShortcutConflict(status.screenshot_error || '')
+      } else {
+        setSaveStatus(res.error, true)
+      }
+    } catch (err) {
+      setSaveStatus(
+        err instanceof Error && err.message ? err.message : t.settings.statusShortcutFailed,
+        true,
+      )
+    }
+  }
+
   const handleSavePreferredReplaceEngine = async (val: string) => {
     setPreferredReplaceEngine(val)
     try {
@@ -884,6 +931,20 @@ export default function App() {
     void runOcrClipboard()
   }
 
+  /** 触发截图翻译（主窗口按钮入口）。失败时用 t.ocrError 映射文案，不透传硬编码中文。 */
+  const handleScreenshot = async () => {
+    setOcrError(null)
+    try {
+      const res = await commands.startScreenshotTranslation()
+      if (res.status === 'error') {
+        const errMap = t.ocrError
+        setOcrError(errMap[res.error.kind] || res.error.message)
+      }
+    } catch (e) {
+      setOcrError(e instanceof Error && e.message ? e.message : String(e))
+    }
+  }
+
   return (
     <div className="flex h-screen flex-col bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100">
       {/* 顶部标题栏 */}
@@ -1065,6 +1126,11 @@ export default function App() {
                     )}
                   </div>
                 )}
+                {screenshotCapability && !screenshotCapability.supported && (
+                  <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-900">
+                    {t.translation.screenshotUnsupported}：{screenshotCapability.reason}
+                  </div>
+                )}
                 {ocrError && (
                   <div className="mt-1 flex items-center justify-between rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">
                     <span>{ocrError}</span>
@@ -1079,6 +1145,23 @@ export default function App() {
                 )}
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleScreenshot}
+                      disabled={
+                        isTranslating ||
+                        (screenshotCapability !== null && !screenshotCapability.supported)
+                      }
+                      className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+                      title={
+                        screenshotCapability && !screenshotCapability.supported
+                          ? (screenshotCapability.reason ?? t.translation.screenshotUnsupported)
+                          : t.translation.btnScreenshot
+                      }
+                    >
+                      <Camera className="h-3.5 w-3.5 text-indigo-500" />
+                      <span>{t.translation.btnScreenshot}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={handleOcrClipboard}
@@ -1435,6 +1518,29 @@ export default function App() {
                 {replaceShortcutConflict && (
                   <div role="alert" className="text-[11px] text-amber-700 dark:text-amber-400">
                     {t.settings.shortcutRegisterFailed}: {replaceShortcutConflict}
+                  </div>
+                )}
+              </div>
+
+              {/* 截图翻译快捷键设置 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
+                <div>
+                  <div className="font-medium text-slate-700 dark:text-slate-200">
+                    {t.translation.screenshotShortcutTitle}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {t.translation.screenshotShortcutDesc}
+                  </div>
+                </div>
+                <ShortcutRecorder
+                  value={customScreenshotShortcut}
+                  onChange={setCustomScreenshotShortcut}
+                  onSave={handleSaveScreenshotShortcut}
+                  t={t}
+                />
+                {screenshotShortcutConflict && (
+                  <div role="alert" className="text-[11px] text-amber-700 dark:text-amber-400">
+                    {t.settings.shortcutRegisterFailed}: {screenshotShortcutConflict}
                   </div>
                 )}
               </div>

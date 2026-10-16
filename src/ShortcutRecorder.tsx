@@ -60,7 +60,7 @@ export default function ShortcutRecorder({ value, onChange, onSave, t }: Shortcu
   }, [recording, onChange])
 
   return (
-    <div className="flex items-center gap-2">
+    <div data-testid="shortcut-recorder" className="flex items-center gap-2">
       <div
         className={`flex h-8 flex-1 items-center justify-between rounded border px-3 text-xs font-mono transition-all ${
           recording

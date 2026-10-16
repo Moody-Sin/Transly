@@ -111,7 +111,15 @@ export type OcrErrorDto = {
 	message: string,
 };
 
-export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "unsupported_platform" | "internal";
+export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "unsupported_platform" | 
+/**  缺少必要的系统组件或外部工具（如 Linux 未安装 tesseract） */
+"tool_missing" | 
+/**  屏幕捕获失败（受保护窗口、显示器休眠、系统限制） */
+"capture_failed" | 
+/**  系统未授予屏幕录制/捕获权限 */
+"permission_denied" | 
+/**  图像或选区超出处理预算 */
+"too_large" | "internal";
 
 export type PendingFloatResponse = {
 	has_request: boolean,

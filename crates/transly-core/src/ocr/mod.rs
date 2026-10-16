@@ -1,5 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+pub mod blocks;
+pub mod geom;
+pub mod screencap;
+pub mod tsv;
+
+pub use blocks::{
+    filter_blocks, merge_lines_into_paragraphs, merge_words_into_lines, plan_block_batches,
+    OcrBlockDto, PixelBox, MIN_BLOCK_CONFIDENCE,
+};
+pub use geom::{find_monitor_for_point, MonitorRect, NormRect};
+pub use screencap::{detect_wayland_session, map_capture_error, ScreenshotSessionDto};
+pub use tsv::{parse_tesseract_tsv, tesseract_lang_arg, OcrTsvError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum OcrErrorKind {
@@ -7,6 +20,14 @@ pub enum OcrErrorKind {
     NoLanguagePack,
     EmptyText,
     UnsupportedPlatform,
+    /// 缺少必要的系统组件或外部工具（如 Linux 未安装 tesseract）
+    ToolMissing,
+    /// 屏幕捕获失败（受保护窗口、显示器休眠、系统限制）
+    CaptureFailed,
+    /// 系统未授予屏幕录制/捕获权限
+    PermissionDenied,
+    /// 图像或选区超出处理预算
+    TooLarge,
     Internal,
 }
 
@@ -40,13 +61,52 @@ impl OcrErrorDto {
     }
 
     pub fn unsupported_platform() -> Self {
+        // Linux 已通过外呼 tesseract 提供 OCR（见 ocr/linux.rs），旧文案
+        // 「暂未支持平台原生 OCR」在 Linux 上不会出现——该平台走 tool_missing
+        // 与 unsupported_platform(Wayland) 两条路径，故此处仅覆盖 Win/mac 之外的系统。
         #[cfg(target_os = "linux")]
-        let msg =
-            "Linux 系统暂未集成平台原生 OCR 引擎，建议使用 Windows / macOS 原生系统或离线翻译";
+        let msg = "当前 Linux 会话不支持屏幕捕获（Wayland 下无法保证覆盖窗置顶），请改用『识别剪贴板图片』";
         #[cfg(not(target_os = "linux"))]
         let msg = "当前操作系统暂未支持平台原生 OCR";
 
         Self::new(OcrErrorKind::UnsupportedPlatform, msg)
+    }
+
+    /// Wayland 会话下的截图能力降级提示。
+    ///
+    /// 刻意不写「暂未支持」：那会误导用户以为永远不行。必须给出可执行的替代路径。
+    pub fn wayland_unsupported() -> Self {
+        Self::new(
+            OcrErrorKind::UnsupportedPlatform,
+            "Wayland 会话下不支持框选截图（无法保证覆盖窗置顶）。请登录 X11 会话，或改用「识别剪贴板图片」",
+        )
+    }
+
+    /// 缺少外部 OCR 工具（如 Linux 未安装 tesseract），必须给出可执行的安装指引。
+    pub fn tool_missing(tool: &str, hint: impl Into<String>) -> Self {
+        Self::new(
+            OcrErrorKind::ToolMissing,
+            format!("未找到 {tool}，{}", hint.into()),
+        )
+    }
+
+    /// 屏幕捕获失败（受保护窗口、DRM 内容、显示器休眠等系统级限制）。
+    pub fn capture_failed(msg: impl Into<String>) -> Self {
+        Self::new(OcrErrorKind::CaptureFailed, msg)
+    }
+
+    /// 未授予屏幕录制权限。文案须说明「授权后需重启应用」——macOS 的 TCC
+    /// 权限在进程存活期内不会重新生效。
+    pub fn permission_denied() -> Self {
+        Self::new(
+            OcrErrorKind::PermissionDenied,
+            "未授予屏幕录制权限。请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Transly，授权后需重启应用",
+        )
+    }
+
+    /// 图像或选区超出处理预算。
+    pub fn too_large() -> Self {
+        Self::new(OcrErrorKind::TooLarge, "所选区域过大，请缩小范围后重试")
     }
 
     pub fn internal(msg: impl Into<String>) -> Self {

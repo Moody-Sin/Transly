@@ -71,7 +71,11 @@
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",
     "no_language_pack": "系统未安装 OCR 语言包，请在 Windows 设置中安装",
     "empty_text": "未能从图片中识别到有效文字",
-    "unsupported_platform": "当前操作系统暂未支持图片识别",
+    "unsupported_platform": "当前系统环境不支持屏幕截图翻译",
+    "tool_missing": "缺少必要的 OCR 组件，请按提示安装后重试",
+    "capture_failed": "屏幕捕获失败，该区域可能包含受保护内容或被系统限制",
+    "permission_denied": "未授予屏幕录制权限，请在系统设置中允许 Transly 后重启应用",
+    "too_large": "所选区域过大，请缩小范围后重试",
     "internal": "图片识别内部异常，请重试"
   },
   "float": {

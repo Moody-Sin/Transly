@@ -64,8 +64,8 @@ impl OcrErrorDto {
     }
 
     pub fn unsupported_platform() -> Self {
-        // Linux 已通过外呼 tesseract 提供 OCR（见 ocr/linux.rs），旧文案
-        // 「暂未支持平台原生 OCR」在 Linux 上不会出现——该平台走 tool_missing
+        // Linux 已通过外呼 tesseract 提供 OCR（见 `src-tauri/src/ocr/` 的 linux 分支），
+        // 旧文案「暂未支持平台原生 OCR」在 Linux 上不会出现——该平台走 tool_missing
         // 与 unsupported_platform(Wayland) 两条路径，故此处仅覆盖 Win/mac 之外的系统。
         #[cfg(target_os = "linux")]
         let msg = "当前 Linux 会话不支持屏幕捕获（Wayland 下无法保证覆盖窗置顶），请改用『识别剪贴板图片』";

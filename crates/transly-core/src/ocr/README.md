@@ -38,7 +38,8 @@
 
 ### `tsv.rs` —— tesseract 输出解析
 
-- **parse_tesseract_tsv**：解析 `tesseract - - tsv` 的词级结果。**必须 `splitn(12, '\t')`**，`split('\t')` 会截断含制表符的文本列。
+- **parse_tesseract_tsv**：解析 tesseract 的 TSV 词级结果。**必须 `splitn(12, '\t')`**，`split('\t')` 会截断含制表符的文本列。
+  ⚠️ 命令行的 `tsv` 是**输出格式配置名，必须放在所有选项之后**（`tesseract - - -l chi_sim tsv`）。写成 `tesseract - - tsv -l chi_sim` 会被当成输入文件名解析，**不报错但输出乱码**（实测 `你好世界` → `Prof`）。详见 `LESSONS.md` 第 23 条。
 - **tesseract_lang_arg**：把目标语言映射为 `-l` 语言包名，绝不返回 `"system"`（那是 Windows 的语义）。
 
 ### `screencap.rs` —— 捕获的纯判定逻辑

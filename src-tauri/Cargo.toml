@@ -42,6 +42,15 @@ rand = "0.8"
 # 恒定时间比较：Bearer Token 鉴权防止计时侧信道
 subtle = "2.6"
 async-trait = "0.1"
+# 捕获结果是 image::RgbaImage，且需自行 PNG 编码，故三平台通用（原先仅 Windows 声明）。
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# 屏幕捕获按平台各自实现，刻意不引入 xcap：
+# 其 Linux 依赖链强制拉入 pipewire/libspa（非可选），而 libspa 无条件引用
+# `spa_video_info_raw.flags` 等 pipewire 1.0 才引入的字段，在 Ubuntu 22.04
+# （pipewire 0.3.48）上直接编译失败。这些依赖只服务于 Wayland 录屏/捕获，
+# 而 Wayland 本就不在本功能支持范围内（落临时文件 + compositor 不支持置顶）。
+# 各平台所需的系统库均已在对应依赖段声明，无需额外 crate。
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
@@ -52,14 +61,36 @@ windows = { version = "0.62", features = [
     "Win32_System_WinRT",
     "Win32_System_Registry",
     "Globalization",
+    # OcrWord::BoundingRect() 返回 Foundation::Rect；OcrLine::Words() 返回
+    # windows_collections::IVectorView，迭代需要 Foundation_Collections。
+    "Foundation",
+    "Foundation_Collections",
+    # 屏幕捕获（GDI BitBlt）所需：
+    # Win32_Graphics_Gdi → BitBlt / CreateCompatibleDC / CreateCompatibleBitmap / GetWindowDC
+    # Win32_UI_WindowsAndMessaging → GetDesktopWindow / GetSystemMetrics
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
 ] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
+# macOS Vision OCR（系统原生，支持中日韩）。坐标归一化且原点左下，见 NormRect::from_vision_norm。
+objc2 = "0.6"
+objc2-foundation = "0.3.2"
+objc2-vision = "0.3.2"
+# 屏幕捕获与录制权限预检：
+# CGDisplayCreateImage / CGDisplayBounds / CGMainDisplayID（按显示器 ID 捕获）
+# CGPreflightScreenCaptureAccess / CGRequestScreenCaptureAccess（权限两段式）
+# 注意：CGDisplayCreateImage 已被 Apple 标记 deprecated（建议 ScreenCaptureKit），
+# 但它是当前可用的稳定 API，且比 CGWindowListCreateImage 更贴合「按显示器捕获」需求。
+# 捕获全部封装在 screencap/macos.rs 单一函数内，将来换 ScreenCaptureKit 不影响上层。
+objc2-core-graphics = { version = "0.3.2", features = ["CGImage"] }
 
 [target.'cfg(all(not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
+# Linux X11 屏幕捕获：纯 Rust 实现（无 build.rs、不依赖系统头文件），
+# 故在 Ubuntu 22.04 与 24.04 上行为一致。randr 用于枚举显示器。
+xcb = { version = "1.7", features = ["randr"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

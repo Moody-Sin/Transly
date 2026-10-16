@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot-overlay",
+  "description": "截图翻译覆盖窗的权限。覆盖窗在运行时创建（label 形如 screenshot-<n>），无法登记进 default.json 的静态窗口列表；未登记窗口的 plugin:* 命令会被 ACL 静默拒绝。本窗只调用应用自有命令（不受 ACL 管控），窗体显示/定位/关闭全在 Rust 侧完成，故仅需事件通道。",
+  "windows": ["screenshot-*"],
+  "permissions": ["core:event:default"]
+}

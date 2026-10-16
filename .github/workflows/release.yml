@@ -43,7 +43,10 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring libxcb1-dev
+          # ↑ libxcb1-dev：截图翻译的 Linux X11 屏幕捕获直接依赖（crates: xcb）。
+          # 三处 apt 清单（ci.yml 的 rust-checks / frontend-checks、release.yml）须保持一致：
+          # frontend-checks 会完整编译 src-tauri 以生成 bindings，漏改即红。
 
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile

@@ -7,6 +7,16 @@
 
 ## [未发布]
 
+### 新增
+- **框选截图翻译（三平台）**：`Alt+Shift+S` / 托盘「截图翻译」/ 主窗口按钮三入口触发，屏幕冻结为覆盖窗后拖拽框选任意区域，自动 OCR 识别并**按原坐标叠加译文**（保排版），可一键「还原原文」；覆盖窗内可直接切换引擎与目标语言即时重译、复制全部译文、把识别/翻译结果发送到主窗口精修重译。
+  - **三平台自研屏幕捕获**（统一入口 `capture_monitor`）：Windows GDI `BitBlt`、macOS `CGDisplayCreateImage`、Linux X11 `xcb`。**刻意不引入 `xcap`** —— 其 Linux 依赖链强制拉入 pipewire/libspa（非 optional），而 `libspa 0.10.1` 无条件引用 pipewire 1.0 才引入的字段，在 Ubuntu 22.04 上编译直接失败；这些依赖只服务于 Wayland，而 Wayland 本就不在支持范围内。
+  - **三平台 OCR**（统一入口 `recognize_words`）：Windows `Windows.Media.Ocr`、macOS Vision、Linux 外呼 `tesseract`（`- - tsv` 管道，全流程内存零落盘）。
+  - **归一化坐标契约 `NormRect`**（原点左上，分量 ∈ `[0,1]`）为全链路唯一坐标语言：截图的物理像素与覆盖窗的 CSS 逻辑像素在任何 DPI 下都不相等，归一化后前端只需 `left: x*100%`，全链路零缩放系数，杜绝混合 DPI 下的漂移。
+  - **冻结帧走自定义 URI 协议 `translyshot`**，绝不走 IPC：4K 帧约 33 MB，走 IPC 需 base64 再 `JSON.parse`，JS 堆峰值可达图像 3 倍；`session_id` 不匹配即 404，防陈旧窗口读到新会话图。
+  - **降级探测**：`get_screenshot_capability` 提前告知环境是否支持（Wayland / 缺 tesseract），不支持时按钮禁用并显示**可执行**的原因，而不是让用户按了才发现不能用。
+  - **新增第三个全局快捷键** `Alt+Shift+S`（支持录制与冲突检测）；`ShortcutStatusSlot` 扩展为三个独立槽位，任一快捷键冲突只影响对应设置卡片。
+  - **Linux 剪贴板图片 OCR 顺带可用**：原先非 Windows 平台返回 `unsupported_platform`，而该文案在 Linux 上是「请改用『识别剪贴板图片』」——若剪贴板路径本身不可用，这句指引就是错的。现三平台统一走同一套 OCR 实现。
+
 ### 安全
 - **升级 `rustls` 至 0.23.46 修复 4 项 TLS 层已知漏洞**：依赖审计（`cargo audit`）暴露 `rustls 0.23.45` 命中 RUSTSEC-2026-0346（客户端会话 `Debug` 实现泄漏 TLS 密钥，中危）、RUSTSEC-2026-0347（ECH 拒绝后缓冲的应用数据仍发往外层服务器）、RUSTSEC-2026-0348（Brotli 证书解压在认证完成前最多可分配 1 GiB）、RUSTSEC-2026-0349（未认证的 ServerHello 可将后续连接降级到经典密钥交换）。四者均为 reqwest 传输路径（`hyper-rustls` / `tokio-rustls`）的上游依赖，翻译请求与本地服务均受其影响。升到 0.23.46 后 `cargo audit` 漏洞数归零（仅剩 3 条 unmaintained/unsound 警告，暂不影响）。
 

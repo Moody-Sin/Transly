@@ -20,6 +20,7 @@
 - **OcrErrorKind 与 OcrErrorDto**：跨平台统一错误类型，导出 TS 绑定供前端直接使用。含 `tool_missing` / `capture_failed` / `permission_denied` / `too_large` 四个截图链路专用变体。
 - **build_candidate_languages**：根据目标翻译语言智能推导 OCR 候选语言包优先级（Windows WinRT 专用；其 `"system"` 语义**不可**传给 tesseract `-l`）。
 - **rgba_to_bgra_in_place**：原地 RGBA8 转换为 BGRA8 字节序，消除平台 API 调用时的全量二次内存拷贝。
+- **bgrx_to_rgba_in_place**：原地 BGRX → RGBA8（交换 R/B 并把填充字节改写为不透明 alpha）。三个捕获后端给出的都是低位在前的 BGR 序缓冲；漏写 alpha 会编码出一张全透明 PNG，漏交换会得到红蓝互换的冻结帧（灰度界面上肉眼不可察觉）。
 - **MAX_OCR_SOURCE_PIXELS 与 is_within_ocr_pixel_budget**：4000 万像素防 OOM 硬预算拦截，在执行任何像素拷贝前把关剪贴板恶意或超大位图。
 - **clamp_dimensions**：等比下采样计算，确保位图尺寸符合系统 OCR 引擎最大尺寸上限。
 
@@ -34,7 +35,8 @@
 ### `blocks.rs` —— 文字块几何聚合
 
 - **merge_words_into_lines / merge_lines_into_paragraphs**：词 → 行 → 段的几何聚类。逐词送翻译会因上下文缺失导致语序崩坏。
-- **filter_blocks**：过滤空白、单字符、纯符号、低置信度块；**不过滤会让重复译文叠印**。
+- **words_to_blocks**：三平台共用的收口点 —— 词级框 → 行 → 段 → 归一化块（含聚合参数具名常量）。平台层只负责「拿到词」，聚合与归一化必须留在 core 才能获得测试覆盖（平台代码在非目标平台上会被 `cfg` 剔除）。⚠️ `img_w`/`img_h` 必须是**喂给 OCR 那张图**（裁剪后子图）的尺寸。
+- **filter_blocks**：过滤空白、单字符、纯符号、低置信度块；**不过滤会让重复译文叠印**。返回前会把 `index` 重排为与数组下标一致。
 - **plan_block_batches**：复用 `plan_batch_ranges` 切批，与扩展端共用同一份 `MAX_BATCH_*` 上限契约。
 
 ### `tsv.rs` —— tesseract 输出解析

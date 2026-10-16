@@ -987,8 +987,10 @@ async function runDesktopUiE2E() {
     console.log('\n========================================')
     console.log('🎉 全部 10 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
     console.log(
-      '⚠️ 覆盖范围声明：截图覆盖窗用例走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
-        '不代表自定义协议 translyshot 链路与真实屏幕捕获已验证；那两项只能靠真机手动验收。',
+      '⚠️ 覆盖范围声明：用例 8/9/10 走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
+        '只验证前端交互与状态流转，不代表真实屏幕捕获、自定义协议 translyshot、' +
+        '系统 OCR 与真实引擎翻译已验证——那四项需真机验收（Windows 侧已完成：' +
+        'GDI 捕获 + WinRT OCR + 真实 Google 引擎，含断网与代际闸门）。',
     )
     console.log('========================================\n')
   } catch (err) {

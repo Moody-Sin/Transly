@@ -19,10 +19,16 @@ pub const PAIRING_MIN_REQUEST_INTERVAL_SECS: u64 = 5;
 /// 16 个并发请求即可占满会话表，令正常扩展在整个 TTL 内无法配对。
 ///
 /// 采用「窗口内允许突发」而非固定最小间隔：正常用户可能有多个浏览器、
-/// 或需要立刻重试一次，固定间隔会误伤这些场景。窗口 10 秒内允许 3 个新会话，
-/// 足以覆盖正常使用；而灌满 16 个会话至少需要约 50 秒，其间早先的会话已过期，
-/// 无法形成有效的拒绝服务。
-pub const PAIRING_GLOBAL_WINDOW_SECS: u64 = 10;
+/// 或需要立刻重试一次，固定间隔会误伤这些场景。窗口 15 秒内允许 3 个新会话，
+/// 对真实用户与 10 秒窗口无感知差别，但把稳态容纳量压到了安全区。
+///
+/// **不变式（由 `tests.rs::test_pairing_global_throttle_steady_state_below_capacity` 守护）：**
+/// `burst / window × TTL < MAX_PENDING_SESSIONS`。
+/// 稳态下同时在世的会话数趋近「进入速率 × 存活时长」。若该值 ≥ 容量，
+/// 攻击者按窗口节奏持续请求即可占满全部槽位并长期保持，构成可反复触发的拒绝服务。
+/// 早期参数 `window=10s, burst=3, TTL=60s` 下该值为 18 > 16，正属此列
+/// （灌满仅需约 50 秒，而首个会话要到 60 秒才过期）。当前 3/15×60 = 12 < 16。
+pub const PAIRING_GLOBAL_WINDOW_SECS: u64 = 15;
 pub const PAIRING_GLOBAL_BURST: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -244,12 +244,18 @@ async function runTests() {
   let rustProcess = await startRustServer(targetPort)
   let mockServer = null
 
+  // 降级到 Mock 桩时，用例断言与真实服务一致，但覆盖不到真实 Rust 服务的
+  // 鉴权、CORS 与切批校验；此时结尾横幅必须如实标注，否则「真实环境 E2E 通过」
+  // 会在 Rust 服务启动失败时变成假绿。CI 在跑本脚本前已先编译 transly_test_server，
+  // 故 CI 中若落到 Mock 分支即意味着真实服务未能拉起，应引起注意。
+  const backendLabel = rustProcess ? '真实环境' : 'Mock 桩降级'
+
   if (rustProcess) {
     console.log(`[E2E] 成功启动【真实跨进程 Rust 本地 HTTP 服务】127.0.0.1:${targetPort}`)
   } else {
-    console.log(`[E2E] 正在启动本地 Mock 桩服务 127.0.0.1:${targetPort}...`)
+    console.warn(`[E2E] ⚠ 未能启动真实 Rust 服务，已降级为本地 Mock 桩 127.0.0.1:${targetPort}...`)
     mockServer = await startMockServer(targetPort)
-    console.log(`[E2E] Mock 桩服务已就绪: 127.0.0.1:${targetPort}`)
+    console.warn(`[E2E] ⚠ Mock 桩服务已就绪，本次运行未覆盖真实服务鉴权/CORS/切批校验`)
   }
 
   fs.mkdirSync(USER_DATA_DIR, { recursive: true })
@@ -491,7 +497,7 @@ async function runTests() {
     console.log('✔ [用例 7] 双语模式一键还原成功：兄弟译文节点彻底清除且原文保持完整')
 
     console.log('\n========================================')
-    console.log('🎉 全部 9 项浏览器插件真实环境端到端测试 100% 通过！')
+    console.log(`🎉 全部 9 项浏览器插件${backendLabel}端到端测试 100% 通过！`)
     console.log('========================================\n')
   } finally {
     if (context) await context.close()

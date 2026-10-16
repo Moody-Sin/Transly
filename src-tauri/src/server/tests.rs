@@ -880,6 +880,39 @@ async fn test_pairing_manager_global_throttle_blocks_random_client_id_flood() {
     );
 }
 
+/// 回归：全局限流的稳态容纳量必须**严格小于**会话表容量。
+///
+/// 复现的缺陷：限流只约束了瞬时突发，未约束「有耐心的攻击者」跨窗口的持续速率。
+/// 长期稳态下同时在世的会话数趋近于 `burst / window × TTL`（进入速率 × 存活时长）。
+/// 若该值 ≥ `MAX_PENDING_SESSIONS`，攻击者只需按窗口节奏稳定请求约 50 秒即可占满
+/// 全部槽位，此后正常浏览器扩展的每一次配对都会收到 429，而攻击者的会话在 TTL 内
+/// 持续在位——构成可反复触发的配对拒绝服务。
+///
+/// 历史参数 `window=10s, burst=3, TTL=60s` 下该值为 18 > 16，
+/// 故注释中「灌满 16 个会话至少需要约 50 秒，其间早先的会话已过期」的论断并不成立：
+/// 首个会话要到 60 秒才过期，而 50 秒时容量就已打满。
+///
+/// 本用例只做常量算术断言（不真实等待），因此是确定性的快速测试。
+#[test]
+fn test_pairing_global_throttle_steady_state_below_capacity() {
+    use pairing::{
+        MAX_PENDING_SESSIONS, PAIRING_GLOBAL_BURST, PAIRING_GLOBAL_WINDOW_SECS,
+        PAIRING_SESSION_TTL_SECS,
+    };
+
+    // 稳态上界：进入速率 (burst/window) × 存活时长 (TTL)
+    let steady_state_upper_bound =
+        PAIRING_GLOBAL_BURST as u64 * PAIRING_SESSION_TTL_SECS / PAIRING_GLOBAL_WINDOW_SECS;
+
+    assert!(
+        steady_state_upper_bound < MAX_PENDING_SESSIONS as u64,
+        "全局限流的稳态容纳量（{steady_state_upper_bound} = burst {PAIRING_GLOBAL_BURST} \
+         / window {PAIRING_GLOBAL_WINDOW_SECS}s × TTL {PAIRING_SESSION_TTL_SECS}s）\
+         必须严格小于会话表容量 {MAX_PENDING_SESSIONS}，否则攻击者跨窗口持续请求即可占满\
+         全部槽位，令正常扩展在 TTL 内无法配对。请调大 window 或调小 burst。"
+    );
+}
+
 /// 同一 client_id 在节流窗口内重复请求必须被拒绝，避免配对弹窗轰炸。
 #[tokio::test]
 async fn test_pairing_manager_throttles_repeated_requests_from_same_client() {

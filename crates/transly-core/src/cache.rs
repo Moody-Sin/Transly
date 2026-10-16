@@ -906,7 +906,12 @@ fn format_timestamp_iso(ts: i64) -> String {
     let z = days + 719468;
     let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
     let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1024 + doe / 1461 - doe / 142401) / 365;
+    // Howard Hinnant 民用历法算法（days-from-civil 的逆运算）。
+    // 三个修正除数分别对应「4 年一闰」「100 年不闰」「400 年再闰」，
+    // 必须是 1460 / 36524 / 146096，写成近似的 1024 / 1461 / 142401 会让 `yoe` 偏大 1，
+    // 进而在 `doy = doe - (365*yoe + yoe/4 - yoe/100)` 触发下溢：
+    // debug 构建 panic，release 构建产出 `1970-28071671-3435973839` 这类畸形时间戳。
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe as i64 + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
@@ -1469,6 +1474,61 @@ mod tests {
         // 4. 验证 format_timestamp_iso 边界与非负钳制
         assert_eq!(format_timestamp_iso(0), "1970-01-01T00:00:00Z");
         assert_eq!(format_timestamp_iso(-100), "1970-01-01T00:00:00Z");
+    }
+
+    /// 时间戳格式化必须与权威 UTC 日历一致。
+    ///
+    /// 期望值由独立可信来源（JS `Date.prototype.toISOString`）生成，
+    /// 而非从本函数当前输出反推——后者正是 LESSONS.md 第 11 条所警示的
+    /// 「迎合实现的假测试」。
+    #[test]
+    fn test_format_timestamp_iso_matches_calendar() {
+        // (unix 秒, 期望的 ISO-8601 UTC 串)；覆盖闰年、闰世纪、非闰世纪与日常日期
+        let cases = [
+            (0i64, "1970-01-01T00:00:00Z"),
+            (86_400, "1970-01-02T00:00:00Z"),
+            (777_600, "1970-01-10T00:00:00Z"),
+            (951_782_400, "2000-02-29T00:00:00Z"), // 闰世纪（400 年一闰）
+            (1_046_476_800, "2003-03-01T00:00:00Z"),
+            (1_708_992_000, "2024-02-27T00:00:00Z"), // 普通闰年 2 月
+            (1_709_942_400, "2024-03-09T00:00:00Z"),
+            (1_767_225_600, "2026-01-01T00:00:00Z"),
+            (1_769_990_399, "2026-02-01T23:59:59Z"), // 带时分秒
+            (1_798_761_600, "2027-01-01T00:00:00Z"),
+            (1_893_456_000, "2030-01-01T00:00:00Z"),
+        ];
+        for (ts, expected) in cases {
+            assert_eq!(
+                format_timestamp_iso(ts),
+                expected,
+                "时间戳 {ts} 的日历换算错误"
+            );
+        }
+        // 负数一律钳制到 epoch，绝不产生负年份
+        assert_eq!(format_timestamp_iso(-1), "1970-01-01T00:00:00Z");
+        assert_eq!(format_timestamp_iso(i64::MIN), "1970-01-01T00:00:00Z");
+    }
+
+    /// 连续 60 年逐日扫描：确保没有任何一天产出越界/下溢的畸形字段。
+    ///
+    /// 只测几个边界值无法捕获民用历法修正除数写错的缺陷
+    /// （错误实现下 `0` 与 `-100` 恰好也对），必须做全量扫描。
+    #[test]
+    fn test_format_timestamp_iso_no_malformed_field_over_decades() {
+        for day in 0..(60 * 365 + 15) {
+            let ts = day * 86_400;
+            let out = format_timestamp_iso(ts);
+            let date_part = &out[..10];
+            let (y, m, d) = (
+                date_part[0..4].parse::<u32>().expect("年份必须可解析"),
+                date_part[5..7].parse::<u32>().expect("月份必须可解析"),
+                date_part[8..10].parse::<u32>().expect("日必须可解析"),
+            );
+            assert!((1970..=2031).contains(&y), "年份越界: ts={ts} out={out}");
+            assert!((1..=12).contains(&m), "月份越界: ts={ts} out={out}");
+            assert!((1..=31).contains(&d), "日越界: ts={ts} out={out}");
+            assert!(out.contains("T00:00:00Z"), "时分秒段异常: {out}");
+        }
     }
 
     #[test]

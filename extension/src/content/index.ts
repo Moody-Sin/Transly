@@ -1148,10 +1148,13 @@ function broadcastTerminalState(expectedGen: number, failedBatches: number) {
 }
 
 async function retryFailedTranslations() {
-  const entries = Array.from(failedItemsMap.values()).map(({ node, text, id }) => ({
-    node,
-    text,
-    id,
+  // 必须整体浅拷贝而非只挑 node/text/id：富文本失败项的 `text` 是含 ⟦T_i⟧ 占位符的
+  // 复合文本，`compositeInfo` 才是把它还原回各子节点的唯一依据。若在此丢弃
+  // `compositeInfo`，`applyBatchResponse` 会走普通分支，把整段译文连同未还原的
+  // 占位符一起塞进第一个文本节点，造成「占位符泄漏 + 段落结构错乱」。
+  const entries = Array.from(failedItemsMap.values()).map((entry) => ({
+    ...entry,
+    errorKind: undefined,
   }))
   if (entries.length === 0) return
 

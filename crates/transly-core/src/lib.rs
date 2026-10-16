@@ -26,8 +26,8 @@ pub use ocr::{
     bgrx_to_rgba_in_place, build_candidate_languages, clamp_dimensions, detect_wayland_session,
     filter_blocks, find_monitor_for_point, is_capture_size_consistent, is_within_ocr_pixel_budget,
     map_capture_error, merge_lines_into_paragraphs, merge_words_into_lines, parse_tesseract_tsv,
-    plan_block_batches, rgba_to_bgra_in_place, tesseract_lang_arg, MonitorRect, NormRect,
-    OcrBlockDto, OcrErrorDto, OcrErrorKind, OcrTsvError, PixelBox, ScreenshotSessionDto,
+    plan_block_batches, rgba_to_bgra_in_place, tesseract_lang_arg, words_to_blocks, MonitorRect,
+    NormRect, OcrBlockDto, OcrErrorDto, OcrErrorKind, OcrTsvError, PixelBox, ScreenshotSessionDto,
     CAPTURE_SIZE_TOLERANCE, MIN_BLOCK_CONFIDENCE,
 };
 pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};

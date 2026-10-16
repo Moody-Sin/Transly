@@ -85,6 +85,9 @@ objc2-vision = "0.3.2"
 # 但它是当前可用的稳定 API，且比 CGWindowListCreateImage 更贴合「按显示器捕获」需求。
 # 捕获全部封装在 screencap/macos.rs 单一函数内，将来换 ScreenCaptureKit 不影响上层。
 objc2-core-graphics = { version = "0.3.2", features = ["CGImage"] }
+# macOS OCR 取像素需命名 `CFData` 类型（`CGDataProvider::with_cf_data`），
+# 按项目纪律（它是我们代码的直接依赖，不该靠别人的传递依赖）显式声明。
+objc2-core-foundation = { version = "0.3.2", features = ["CFData"] }
 
 [target.'cfg(all(not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }

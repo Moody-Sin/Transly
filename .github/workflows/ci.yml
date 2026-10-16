@@ -18,8 +18,11 @@ jobs:
       - name: Rust 依赖与系统库准备
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring libxcb1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring libxcb1-dev tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
           # ↑ libxcb1-dev：截图翻译的 Linux X11 屏幕捕获直接依赖（crates: xcb）。
+          # ↑ tesseract-ocr*：Linux OCR 路径外呼该工具，且 src-tauri 的 OCR 端到端
+          #   测试（tests/ocr_e2e.rs）会真实调用它并断言块坐标落点，故 CI 必须安装，
+          #   否则测试在 CI 上直接失败。
           # 三处 apt 清单（ci.yml 的 rust-checks / frontend-checks、release.yml）须保持一致：
           # frontend-checks 会完整编译 src-tauri 以生成 bindings，漏改即红。
       - name: 格式校验
@@ -83,8 +86,11 @@ jobs:
       - name: Rust 系统依赖（用于生成 bindings）
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring libxcb1-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev gnome-keyring libxcb1-dev tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng
           # ↑ libxcb1-dev：截图翻译的 Linux X11 屏幕捕获直接依赖（crates: xcb）。
+          # ↑ tesseract-ocr*：Linux OCR 路径外呼该工具，且 src-tauri 的 OCR 端到端
+          #   测试（tests/ocr_e2e.rs）会真实调用它并断言块坐标落点，故 CI 必须安装，
+          #   否则测试在 CI 上直接失败。
           # 三处 apt 清单（ci.yml 的 rust-checks / frontend-checks、release.yml）须保持一致：
           # frontend-checks 会完整编译 src-tauri 以生成 bindings，漏改即红。
       - name: 安装前端依赖

@@ -377,31 +377,83 @@ pub fn read_session(app: &AppHandle) -> Result<ScreenshotSessionDto, OcrErrorDto
 }
 
 /// 阶段 2 的识别入口：只做选区钳制与代际校验，**返回空块**（OCR 在阶段 3）。
+/// 对整图上的**指定区域**做 OCR，返回归一化到**整图**的块。
+///
+/// 从 [`recognize`] 抽出的纯逻辑（不依赖 `AppHandle`，故可被端到端测试覆盖）：
+/// 裁剪选区 → OCR → 把「裁剪图内归一化坐标」经 [`NormRect::map_from_subrect`]
+/// 映射回整图。不映射会让所有译文挤在选区左上角，且选区越靠右下偏移越大。
+pub fn recognize_in_region(
+    full: &image::RgbaImage,
+    region: NormRect,
+    target_lang: &str,
+) -> Result<Vec<OcrBlockDto>, OcrErrorDto> {
+    let clamped = region.clamped_unit();
+    let (cx, cy, cw, ch) = clamped.to_pixels_in(full.width(), full.height());
+    if cw == 0 || ch == 0 {
+        return Err(OcrErrorDto::empty_text());
+    }
+
+    let crop = image::imageops::crop_imm(full, cx, cy, cw, ch).to_image();
+    let blocks = crate::ocr::recognize_blocks(&crop, target_lang)?;
+
+    // 裁剪图尺寸是 `recognize_blocks` 用的归一化分母，这里把它映射回整图。
+    Ok(blocks
+        .into_iter()
+        .map(|mut b| {
+            let mapped = clamped.map_from_subrect(&NormRect::new(b.x, b.y, b.w, b.h));
+            b.x = mapped.x;
+            b.y = mapped.y;
+            b.w = mapped.w;
+            b.h = mapped.h;
+            b
+        })
+        .collect())
+}
+
+/// 对框选区域做 OCR，返回归一化到**整张冻结帧**的块。
+///
+/// 只对选区做 OCR（而非整屏）：面积小、识别快、且上下文聚焦在用户真正关心的区域。
+/// 但块最终要渲染在整张冻结帧上，故必须把坐标映射回全图（见 [`recognize_in_region`]）。
+///
+/// 同步阻塞（解码 PNG + OCR 均为秒级），由调用方派发到阻塞线程池。
 pub fn recognize(
     app: &AppHandle,
     rect: NormRect,
     generation: u32,
 ) -> Result<Vec<OcrBlockDto>, OcrErrorDto> {
     let session = app.state::<Arc<ScreenshotSession>>().inner().clone();
-    let mut st = session.lock();
 
-    if st.phase == Phase::Idle || st.session_id.is_empty() {
-        return Err(OcrErrorDto::no_image());
-    }
-    // 代际闸门：陈旧窗口的结果不得落到新会话上。
-    if st.generation != generation {
-        return Err(OcrErrorDto::no_image());
-    }
+    let (png, target_lang) = {
+        let mut st = session.lock();
 
-    // 选区越界的唯一权威钳制点。前端的钳制是 UX 便利，这里才是信任边界。
+        if st.phase == Phase::Idle || st.session_id.is_empty() {
+            return Err(OcrErrorDto::no_image());
+        }
+        // 代际闸门：陈旧窗口的结果不得落到新会话上。
+        if st.generation != generation {
+            return Err(OcrErrorDto::no_image());
+        }
+
+        // 选区越界的唯一权威钳制点。前端的钳制是 UX 便利，这里才是信任边界。
+        let clamped = rect.clamped_unit();
+        if clamped.is_degenerate(st.image_width, st.image_height, MIN_SELECTION_PX) {
+            // 轻点未拖拽不算错误：保持 Selecting 等待用户重新框选。
+            return Ok(Vec::new());
+        }
+
+        st.phase = Phase::Result;
+        (st.png.clone(), st.target_lang.clone())
+    };
+
     let clamped = rect.clamped_unit();
-    if clamped.is_degenerate(st.image_width, st.image_height, MIN_SELECTION_PX) {
-        // 轻点未拖拽不算错误：保持 Selecting 等待用户重新框选。
-        return Ok(Vec::new());
-    }
 
-    st.phase = Phase::Result;
-    Ok(Vec::new())
+    // 解码冻结帧：会话存 PNG 而非 RgbaImage 是为了省内存
+    //（4K 下 PNG ~500KB vs RGBA 33MB）。
+    let full = image::load_from_memory(&png)
+        .map_err(|e| OcrErrorDto::internal(format!("解码冻结帧失败: {e}")))?
+        .to_rgba8();
+
+    recognize_in_region(&full, clamped, &target_lang)
 }
 
 /// 取消并关闭覆盖窗，释放冻结帧内存。

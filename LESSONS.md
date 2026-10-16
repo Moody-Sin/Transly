@@ -116,3 +116,11 @@
   - 注释里**不要写无法证伪的断言**（如「原写法必然编译失败」）。这类注释一旦写错，会把错误认知固化成后人信赖的「契约」，比没有注释更糟——与第 11 条「断言错误行为比不写测试更危险」同源。
   - 想验证「某种写法是否编译得过」有零成本办法：写一个 5 行的**最小复现片段**单独试，而不是直接在业务代码里改一版赌它能过。本次连这步也没做，是纯粹的顺序错误。
   - 推论：工具链不可用时，正确动作是**做只读的核查与调研**（本次查清了 xcb 的 `GetImage`/randr `GetMonitors` 精确签名、`OpenAIEngine` 等长保证等事实），或**写新代码**（新代码无论如何都要编译验证），而不是「顺手整理」已有代码。
+
+### 18. `#[cfg]` 的字面门控 ≠ 实际是否启用；feature 是否开启只能问 cargo
+- **现象**：写阶段 2 交接单时，我看到 `objc2-core-graphics` 的 `mod.rs` 里 `CGDisplayCreateImage` 标着 `#[cfg(all(feature = "CGDirectDisplay", feature = "CGImage"))]`，而 `Cargo.toml` 只写了 `features = ["CGImage"]`，于是断言「必须补 `CGDirectDisplay`，否则 macOS 编译失败」，并把它列为「会导致编译失败的实际缺陷，必须顺带修掉」。**这是错的**：`CGImage` 所在 crate 的 `default` feature 列表**本身就含** `CGDirectDisplay`，而我们没设 `default-features = false`，两者本来就是开着的。`cargo tree --target aarch64-apple-darwin -e features -i objc2-core-graphics` 直接列出 `feature "CGDirectDisplay"` 已启用。若真按这条断言改了 `Cargo.toml`，就是给后人留一条无从证实的「必须」。
+- **教训**：
+  - **cargo feature 是跨依赖边求并集的**：看到某个 `#[cfg(feature = ...)]`，不能只看「我这一行写了什么」，还要看**同一 crate 的 default 列表**、以及**其他依赖方是否也声明了它**。判定的唯一可靠来源是 `cargo tree -e features`，不是阅读 `#[cfg]`。
+  - 引用上游 `#[cfg]` 门控作为「会编译失败」的证据时，**必须同时给出 feature 求并集后的实际状态**。只引 `#[cfg]` 是**片面的证据**，得不出结论。
+  - 这条是第 17 条的同型复发：**在无法执行验证的环境里，凭局部证据写下了强断言**。当时的正确动作就是跑那条 `cargo tree`——它零成本、只读、且立刻就给出了反证。**「差一步就能验证」不等于「无法验证」**，不许用后者为自己的推测免责。
+  - 附带查实的真实陷阱（替换掉了上面那条错的）：该函数带 `#[deprecated]`，**`-D warnings` 下必须 `#[allow(deprecated)]`**——这才是 macOS 分支真正会踩的坑。

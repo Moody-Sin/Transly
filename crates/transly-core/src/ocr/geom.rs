@@ -65,6 +65,37 @@ impl NormRect {
         (self.x, 1.0 - self.y - self.h, self.w, self.h)
     }
 
+    /// 把**子矩形内**的归一化矩形映射回父图（本矩形所在）的归一化坐标。
+    ///
+    /// # 为什么需要它
+    ///
+    /// 框选截图时只把选区那一块**裁剪**出来送 OCR（面积小、识别快、上下文聚焦），
+    /// 于是块坐标是**相对裁剪图**的归一化值。但块最终要渲染在整张冻结帧上，
+    /// 故必须按「选区在父图中的位置与尺寸」把坐标还原回全图。
+    /// **不还原会让所有译文块挤在选区左上角，且选区越靠右下、偏移越大**
+    /// ——偏移量恰好等于选区原点的归一化坐标，在右下角框选时肉眼可见。
+    ///
+    /// `self` 是选区在父图中的位置（调用方应已 `clamped_unit`），
+    /// `inner` 是子图内的归一化矩形。
+    ///
+    /// 退化选区（宽或高为 0/负/NaN）没有可映射的内部坐标空间，
+    /// 返回 [`NormRect::zero`]：负宽高会产出反向矩形，NaN 会污染后续全部
+    /// 几何计算（与 [`NormRect::clamped_unit`] 对 NaN 的立场一致），
+    /// 两者都比「什么都没有」更难排查。
+    pub fn map_from_subrect(&self, inner: &NormRect) -> NormRect {
+        // 写成 `!(w > 0.0 && h > 0.0)` 而非 `w <= 0.0`：NaN 与任何值比较均为 false，
+        // 故这一种写法同时兜住 0、负值、NaN 三种退化输入
+        if !(self.w > 0.0 && self.h > 0.0) {
+            return NormRect::zero();
+        }
+        Self::new(
+            self.x + inner.x * self.w,
+            self.y + inner.y * self.h,
+            inner.w * self.w,
+            inner.h * self.h,
+        )
+    }
+
     /// 映射回**指定尺寸图**上的像素矩形：钳制到图内，且宽高至少 1px。
     ///
     /// 取整后必须钳制，否则 `x+w` 恰好落在边界上时会越界导致裁剪 panic。
@@ -271,6 +302,127 @@ mod tests {
         assert!(approx(back.y, orig.y));
         assert!(approx(back.w, orig.w));
         assert!(approx(back.h, orig.h));
+    }
+
+    /// 选区就是整张图时，映射必须是恒等变换。
+    #[test]
+    fn test_map_from_subrect_full_image_is_identity() {
+        let full = NormRect::new(0.0, 0.0, 1.0, 1.0);
+        let inner = NormRect::new(0.1, 0.2, 0.3, 0.4);
+        let m = full.map_from_subrect(&inner);
+        assert!(approx(m.x, inner.x));
+        assert!(approx(m.y, inner.y));
+        assert!(approx(m.w, inner.w));
+        assert!(approx(m.h, inner.h));
+    }
+
+    /// 关键回归：选区在**右下角**时必须加上选区原点偏移、并按选区尺寸缩放。
+    ///
+    /// 漏加 `self.x`/`self.y` 会让所有块挤在选区左上角（本例应落在 0.8 而非 0.2）；
+    /// 漏乘 `self.w`/`self.h` 会让块尺寸按整图比例算（本例宽应为 0.2 而非 0.5）。
+    /// 选区越靠右下，漏加偏移的错位越明显。
+    #[test]
+    fn test_map_from_subrect_bottom_right_selection() {
+        let sel = NormRect::new(0.6, 0.6, 0.4, 0.4);
+
+        // 子图右下角的块 → 回到父图右下角
+        let corner = sel.map_from_subrect(&NormRect::new(0.5, 0.5, 0.5, 0.5));
+        assert!(approx(corner.x, 0.8), "漏加选区原点：{}", corner.x);
+        assert!(approx(corner.y, 0.8), "漏加选区原点：{}", corner.y);
+        assert!(approx(corner.w, 0.2), "漏乘选区宽：{}", corner.w);
+        assert!(approx(corner.h, 0.2), "漏乘选区高：{}", corner.h);
+
+        // 子图铺满选区 → 恰好还原成选区本身
+        let whole = sel.map_from_subrect(&NormRect::new(0.0, 0.0, 1.0, 1.0));
+        assert!(approx(whole.x, sel.x));
+        assert!(approx(whole.y, sel.y));
+        assert!(approx(whole.w, sel.w));
+        assert!(approx(whole.h, sel.h));
+    }
+
+    /// 选区跨中（非整数倍缩放）时同样必须平移 + 缩放。
+    #[test]
+    fn test_map_from_subrect_centered_selection() {
+        let sel = NormRect::new(0.25, 0.5, 0.5, 0.25);
+        let m = sel.map_from_subrect(&NormRect::new(0.2, 0.4, 0.4, 0.4));
+        assert!(approx(m.x, 0.35));
+        assert!(approx(m.y, 0.6));
+        assert!(approx(m.w, 0.2));
+        assert!(approx(m.h, 0.1));
+    }
+
+    /// 关键回归：完整链路——裁剪后按**裁剪图**归一化，再用 `map_from_subrect`
+    /// 还原，结果必须与「直接按全图像素归一化」完全一致。
+    ///
+    /// 这是 §4.4 的真实路径（裁剪 → OCR → 归一化 → 映射回全图）。
+    /// 归一化分母若误用全图尺寸，或漏做 `map_from_subrect`，本断言都会失败。
+    #[test]
+    fn test_map_from_subrect_round_trips_cropped_normalization() {
+        let (img_w, img_h) = (1000u32, 800u32);
+        let sel = NormRect::new(0.5, 0.25, 0.3, 0.5);
+        let (cx, cy, cw, ch) = sel.to_pixels_in(img_w, img_h);
+        assert_eq!((cx, cy, cw, ch), (500, 200, 300, 400), "裁剪矩形与预期不符");
+
+        // 裁剪图内一个块：像素 (60,40,120,80)
+        let inner = NormRect::from_pixels_in(60, 40, 120, 80, cw, ch);
+        let mapped = sel.map_from_subrect(&inner);
+
+        // 同一个块按全图像素直接归一化（独立参照）
+        let direct = NormRect::from_pixels_in(cx + 60, cy + 40, 120, 80, img_w, img_h);
+        assert!(
+            approx(mapped.x, direct.x),
+            "x：{} vs {}",
+            mapped.x,
+            direct.x
+        );
+        assert!(
+            approx(mapped.y, direct.y),
+            "y：{} vs {}",
+            mapped.y,
+            direct.y
+        );
+        assert!(
+            approx(mapped.w, direct.w),
+            "w：{} vs {}",
+            mapped.w,
+            direct.w
+        );
+        assert!(
+            approx(mapped.h, direct.h),
+            "h：{} vs {}",
+            mapped.h,
+            direct.h
+        );
+    }
+
+    /// 边界：选区宽或高为 0/负/NaN 时返回零矩形，绝不 panic。
+    ///
+    /// 这类退化选区在 `to_pixels_in` 里会被钳成 1px，不应产出负宽高矩形
+    /// 或 NaN 污染后续几何计算。
+    #[test]
+    fn test_map_from_subrect_degenerate_selection_returns_zero() {
+        let inner = NormRect::new(0.1, 0.1, 0.2, 0.2);
+
+        for sel in [
+            NormRect::new(0.3, 0.3, 0.0, 0.4),      // 零宽
+            NormRect::new(0.3, 0.3, 0.4, 0.0),      // 零高
+            NormRect::zero(),                       // 完全退化
+            NormRect::new(0.1, 0.1, -0.2, 0.3),     // 负宽
+            NormRect::new(0.1, 0.1, 0.2, f32::NAN), // NaN 高（`w <= 0.0` 写法会漏过）
+        ] {
+            assert_eq!(
+                sel.map_from_subrect(&inner),
+                NormRect::zero(),
+                "退化选区 {sel:?} 应返回零矩形"
+            );
+        }
+
+        // 选区有效、内部矩形退化 → 落在选区原点上的零尺寸矩形（而非全图零矩形）
+        let sel = NormRect::new(0.4, 0.5, 0.2, 0.2);
+        assert_eq!(
+            sel.map_from_subrect(&NormRect::zero()),
+            NormRect::new(0.4, 0.5, 0.0, 0.0)
+        );
     }
 
     #[test]

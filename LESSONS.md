@@ -92,3 +92,19 @@
   - 一个模块**完全没有单测**（如 `pairing.rs`）本身就是风险信号：安全关键逻辑没有任何东西阻止后人调错常量。修复时应顺手把不变式写成断言，让「改坏参数」立刻被 CI 拦下。
 
 
+
+### 15. 上游库的「坐标单位」必须逐函数实测，同一 API 族内都可能自相矛盾
+- **现象**：`tao` 在 Linux 上，`Monitor::position()` / `size()` / `cursor_position()` 三个函数都做了 `LogicalPosition::to_physical(scale)`（返回**物理**像素），唯独 `monitor_from_point(x, y)` 把入参**原样喂给 GDK** 的 `monitor_at_point()`（GDK 吃**逻辑**坐标）。同一 crate、同一坐标域，入口单位与出口单位不一致。计划原本打算「用光标物理坐标调 `monitor_from_point` 定位覆盖窗」，在 `GDK_SCALE=2` 下会把物理坐标当逻辑坐标用，直接选错屏或返回 `None`。
+- **教训**：
+  - 跨库传坐标前，**必须打开上游源码逐个函数确认单位**，不能因为「同一个 struct 上的方法」就假定单位一致。已用探针在 Xvfb（`GDK_BACKEND=x11 GDK_SCALE=2`）实测：`Monitor::size()` 报 2560×1440、`cursor_position()` 报 (1800,900) 均为物理量，而逻辑框只有 1280×720 —— 两者不可能同时成立。
+  - **宁可不依赖可疑 API**：改为「取全部显示器 + 光标物理坐标，自己在 core 里做矩形包含判定」。纯几何逻辑可单测、可反向验证，比信任一个单位语义不明的上游函数安全得多。
+  - 同理，macOS 的 `Monitor::size()` 是 `CGDisplayPixelsWide()`（**已是物理像素**）再套 `from_logical()`（**再乘一次 scale**），Retina 下会双重放大；`position()` 却用 `CGDisplayBounds`（逻辑点）乘 scale（正确）。**捕获后必须做尺寸自校验**，这是唯一能同时兜住「上游单位改了」与「三平台 DPI 差异」的写法。
+  - 探针脚本用完即删（本次置于 `/tmp/probe`，不落仓库）。
+
+### 16. 依赖的「可选性」要按平台特性核算，不能按功能语义推断
+- **现象**：`xcap 0.9.8` 只在 Wayland 录屏路径用到 `pipewire/libspa`，从功能语义看「不支持 Wayland 就用不上」。但实际依赖树里 pipewire 是**非 optional** 的：`libspa 0.10.1` 无条件引用 `spa_video_info_raw.flags`（pipewire 1.0 才引入），在 Ubuntu 22.04（pipewire 0.3.48）上编译直接失败。CI 的 `ubuntu-latest`（24.04，pipewire 1.0.5）却能过——**同一份代码在开发机与 CI 上表现相反**，这类「只在旧发行版炸」的依赖最难在 CI 里暴露。
+- **教训**：
+  - 评估一个新依赖前，先 `cargo tree` 看**整棵依赖树**是否有非 optional 的重型系统依赖，而不是看文档里的功能描述。能用「零 build.rs、零系统头文件」的纯 Rust crate（如 `xcb`）就别引 C 绑定链。
+  - **反向验证同样适用于依赖**：CI 绿不等于能构建。若本机与 CI 的系统库版本不同，务必在本机也跑一次完整构建（本次正是本机先炸才发现的）。
+  - 移除该依赖后需回头**重估 CI 的 apt 清单**：原先为 xcap 准备的 `libpipewire-0.3-dev libwayland-dev libegl-dev libclang-dev pkg-config` 全部不再需要；`libxcb1-dev` 虽由 `libwebkit2gtk-4.1-dev → libgtk-3-dev → libx11-dev` 传递带入，仍应显式声明（它是我们代码的直接依赖，不该靠别人的传递依赖）。
+  - 另核实：`xcb` crate 的 randr 扩展**零 `extern "C"`**，全部走 X11 wire protocol（`xcb_get_conn_funcs!`），因此**不需要 `libxcb-randr.so` / `libxcb-randr0-dev`**——依赖是否真的需要某个 `.so`，要看生成的绑定里有没有 `#[link]`，不能靠包名猜。

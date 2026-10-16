@@ -42,6 +42,28 @@ pub const OVERLAY_LABEL_PREFIX: &str = "screenshot-";
 /// 看门狗超时：窗口被外部 WM 挂起（全屏置顶且不响应 Esc）时的兜底。
 const WATCHDOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// 建窗后忽略失焦事件的宽限期。
+///
+/// 真机实测（Windows 11 150% 缩放）：覆盖窗加载完页面后约 52ms 内会收到一次
+/// `Focused(false)` —— `set_focus()` 的成功回调早于窗口真正稳定持有焦点，
+/// 系统会把焦点还给上一个前台窗口。若不加宽限，`focused_once` 守卫会被这次
+/// 假失焦击穿，覆盖窗「一闪即关」，功能完全不可用。
+///
+/// 取 1.2s：足以跨过窗口初始化与 WebView 首帧（实测 < 200ms），
+/// 又短到用户真正点开其他应用时仍能及时收起。
+const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// 等待旧覆盖窗真正销毁的最长时间。正常远小于此（真机实测约 1.1s 内消失）。
+const OVERLAY_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3000);
+
+/// 旧覆盖窗隐藏/销毁后，再等这么久才捕获屏幕。
+///
+/// **`is_visible()` 不是可靠信号**：`hide()` 一调用它就返回 `false`，但 DWM 合成器
+/// 要再过几帧才把窗口像素真正从屏幕上撤下。真机实测（Windows 11）不加这段等待时，
+/// 连按两次快捷键的第二张冻结帧会把上一次的框选工具栏（「拖动框选要翻译的区域」
+/// 与「取消（Esc）」）连同暗色背板一并截进去，且框选坐标随之整体偏移。
+const OVERLAY_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// 轻点未拖拽的判据（物理像素）。与前端 `is_degenerate` 的阈值保持一致。
 const MIN_SELECTION_PX: u32 = 8;
 
@@ -62,6 +84,8 @@ struct SessionState {
     /// 建窗瞬间的「假失焦」守卫：只有先收到过 `Focused(true)`，
     /// 随后的 `Focused(false)` 才可信。
     focused_once: bool,
+    /// 覆盖窗建窗时刻，用于 [`FOCUS_GRACE`] 宽限期判定。
+    created_at: Option<std::time::Instant>,
     session_id: String,
     image_url: String,
     png: Vec<u8>,
@@ -111,12 +135,48 @@ fn image_url(session_id: &str) -> String {
     }
 }
 
-fn close_existing_overlays(app: &AppHandle) {
-    for (label, window) in app.webview_windows() {
-        if label.starts_with(OVERLAY_LABEL_PREFIX) {
-            let _ = window.destroy();
-        }
+fn close_existing_overlays(app: &AppHandle) -> Vec<tauri::WebviewWindow> {
+    let stale: Vec<tauri::WebviewWindow> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with(OVERLAY_LABEL_PREFIX))
+        .map(|(_, window)| window)
+        .collect();
+    for window in &stale {
+        // 先 `hide()` 再 `destroy()`：`destroy()` 在 Windows 上是**异步**的，
+        // 调用返回时窗口仍在屏幕上（真机实测 1075ms 后才从目标列表消失）。
+        // 而冻结帧是在那之后立刻捕获的，旧覆盖窗会被截进新帧——
+        // 用户看到的是「背景图里叠着上一次的框选工具栏」，且框选坐标随之整体偏移。
+        let _ = window.hide();
+        let _ = window.destroy();
     }
+    stale
+}
+
+/// 等待给定窗口真正销毁。
+///
+/// `WebviewWindow::destroy()` 在 Windows 上是异步的：调用返回时窗口仍在屏幕上，
+/// 真机实测约 1.1s 后才真正消失。**捕获必须等到旧窗的像素从屏幕上消失**，
+/// 否则连按两次快捷键时，第二次的冻结帧会把第一次的覆盖窗（含框选工具栏）截进去。
+async fn wait_for_windows_closed(stale: &[tauri::WebviewWindow]) {
+    if stale.is_empty() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + OVERLAY_CLOSE_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        let still_open = stale.iter().any(|w| {
+            // `is_visible` 失败（窗口已销毁）视为已关闭；成功则看是否还可见。
+            w.is_visible().unwrap_or(false)
+        });
+        if !still_open {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // 超时不阻断截图（宁可让用户看到一次脏帧，也不能让功能卡死），但要留痕。
+    eprintln!(
+        "[Screenshot] 旧覆盖窗未在 {OVERLAY_CLOSE_TIMEOUT:?} 内消失，本次冻结帧可能含残留窗口"
+    );
 }
 
 /// 启动一次截图：选屏 → 捕获 → 建窗 → 展示。
@@ -125,8 +185,13 @@ pub async fn start(
     target_lang: String,
     engine: String,
 ) -> Result<ScreenshotSessionDto, OcrErrorDto> {
-    // 已有覆盖窗先销毁，避免叠加多个全屏窗瓜分焦点。
-    close_existing_overlays(app);
+    // 已有覆盖窗先隐藏并销毁，并**等其像素真正从屏幕上撤下**再捕获，
+    // 否则旧窗会被截进新冻结帧（见 [`OVERLAY_SETTLE`]）。
+    let stale = close_existing_overlays(app);
+    wait_for_windows_closed(&stale).await;
+    if !stale.is_empty() {
+        tokio::time::sleep(OVERLAY_SETTLE).await;
+    }
 
     let cursor = app
         .cursor_position()
@@ -197,6 +262,7 @@ pub async fn start(
         st.generation = st.generation.wrapping_add(1);
         st.phase = Phase::Selecting;
         st.focused_once = false;
+        st.created_at = Some(std::time::Instant::now());
         st.session_id = format!("{:016x}", rand::random::<u64>());
         st.image_url = image_url(&st.session_id);
         st.image_width = win_w;
@@ -345,6 +411,7 @@ pub fn cancel(app: &AppHandle) {
         let mut st = session.lock();
         st.phase = Phase::Idle;
         st.focused_once = false;
+        st.created_at = None;
         st.release_frame();
         std::mem::take(&mut st.window_label)
     };
@@ -374,11 +441,16 @@ fn handle_window_event(window: &tauri::WebviewWindow, event: &tauri::WindowEvent
         }
         tauri::WindowEvent::Focused(false) => {
             let session = window.state::<Arc<ScreenshotSession>>().inner().clone();
-            // 只在「已确认获得过焦点」且仍在等待框选时取消：
-            // 建窗瞬间的假失焦不能被当真，否则窗口一出现就被自己关掉。
+            // 只在「已确认获得过焦点」「已过建窗宽限期」且仍在等待框选时取消。
+            // 两个守卫缺一不可：`focused_once` 挡建窗前的假失焦，
+            // `FOCUS_GRACE` 挡建窗后紧跟着的那次假失焦（真机实测 52ms 内必现）。
             let should_cancel = {
                 let st = session.lock();
-                st.phase == Phase::Selecting && st.focused_once
+                let past_grace = st
+                    .created_at
+                    .map(|t| t.elapsed() >= FOCUS_GRACE)
+                    .unwrap_or(true);
+                st.phase == Phase::Selecting && st.focused_once && past_grace
             };
             if should_cancel {
                 cancel(window.app_handle());

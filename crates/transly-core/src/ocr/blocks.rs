@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::geom::NormRect;
+
 /// 像素级包围盒（OCR 引擎的原始产物，单位是**喂给 OCR 那张图**的像素）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PixelBox {
@@ -122,15 +124,39 @@ pub fn merge_words_into_lines(words: &[PixelBox], y_tolerance: u32) -> Vec<Pixel
     let mut sorted: Vec<&PixelBox> = words.iter().collect();
     sorted.sort_by_key(|w| (w.center_y(), w.x));
 
-    let mut lines: Vec<PixelBox> = Vec::new();
+    // 分两步：先按垂直邻近分组，再在组内按 x 排序后合并。
+    //
+    // ⚠️ 不能直接按 `(center_y, x)` 的顺序逐词合并：同一行的词垂直中心会因
+    // 字体基线/下伸部（如 g、y）差异错开 1–2px，而 `center_y` 是排序首要键，
+    // 于是 "Hello world again" 会被重排成 "Hello again world"——译文语序错乱。
+    // 分组判据（与当前已合并行的中心比较）与原先逐词合并**完全一致**，
+    // 故不改变既有分行行为，只修正行内次序。
+    let mut groups: Vec<Vec<&PixelBox>> = Vec::new();
+    let mut merged: Vec<PixelBox> = Vec::new();
     for word in sorted {
-        match lines.last_mut() {
+        match merged.last_mut() {
             Some(line) if word.center_y().abs_diff(line.center_y()) <= y_tolerance => {
                 *line = line.merge_with(word);
+                if let Some(group) = groups.last_mut() {
+                    group.push(word);
+                }
             }
-            _ => lines.push(word.clone()),
+            _ => {
+                merged.push(word.clone());
+                groups.push(vec![word]);
+            }
         }
     }
+
+    let mut lines: Vec<PixelBox> = groups
+        .into_iter()
+        .filter_map(|mut group| {
+            group.sort_by_key(|w| w.x);
+            let mut iter = group.into_iter();
+            let first = iter.next()?.clone();
+            Some(iter.fold(first, |acc, w| acc.merge_with(w)))
+        })
+        .collect();
 
     lines.sort_by_key(|l| (l.y, l.x));
     lines
@@ -229,6 +255,78 @@ pub struct OcrBlockDto {
 /// tesseract 的 `conf` 是 0–100 整数，调用方需先除以 100；
 /// `conf < 0` 表示该行无有效识别结果，应在解析阶段就丢弃。
 pub const MIN_BLOCK_CONFIDENCE: f32 = 0.5;
+
+/// 行聚合的垂直容差：平均词高的这一倍。
+///
+/// 同一行的词因字体基线/下伸部（如 g、y）差异，垂直中心会小幅错开。
+/// 取平均词高的 0.6 倍：足以吸收该差异，又小于行距（通常 ≥ 1.2 倍词高），
+/// 不会把相邻两行并成一行。
+pub const LINE_MERGE_Y_TOLERANCE_RATIO: f32 = 0.6;
+
+/// 段聚合的最大垂直间距：平均词高的这一倍。
+///
+/// 段落内的行距通常小于 1 倍词高；超过则视为另起一段（如标题与正文之间）。
+pub const PARAGRAPH_MAX_GAP_RATIO: f32 = 1.5;
+
+/// 段聚合所需的最小水平重叠比例。
+///
+/// 分栏排版的关键：左右两栏即使垂直间距为 0，也不得并段。
+pub const PARAGRAPH_MIN_X_OVERLAP: f32 = 0.3;
+
+/// 把平台 OCR 产出的**词级**框聚合成送往前端的归一化块。
+///
+/// 这是三平台共用的收口点：平台层只负责「拿到词」，
+/// 聚合与归一化是纯逻辑，必须留在 core 才能获得测试覆盖
+/// （平台代码在非目标平台上会被 `cfg` 剔除）。
+///
+/// # 参数
+///
+/// - `words`：词级框，坐标是**喂给 OCR 那张图**的像素；
+/// - `img_w` / `img_h`：**同一张图**的像素尺寸。
+///
+/// ⚠️ 若 OCR 前裁剪过选区，`img_w`/`img_h` 必须是**裁剪后**的尺寸，
+/// 不是原图尺寸。用错分母会让所有块整体偏移。
+///
+/// 返回的块已过 [`filter_blocks`]，故 `index` 与数组下标严格一致。
+pub fn words_to_blocks(words: &[PixelBox], img_w: u32, img_h: u32) -> Vec<OcrBlockDto> {
+    if words.is_empty() || img_w == 0 || img_h == 0 {
+        return Vec::new();
+    }
+
+    // 聚合容差按「平均词高」自适应：固定像素值在 4K 与低分屏之间不可通用。
+    // 用词高而非字高，是因为词框已包含该词的实际字体高度。
+    let mean_height = {
+        let sum: u64 = words.iter().map(|w| u64::from(w.h)).sum();
+        (sum / words.len() as u64).max(1) as u32
+    };
+    let y_tolerance = (mean_height as f32 * LINE_MERGE_Y_TOLERANCE_RATIO).round() as u32;
+    let max_gap = (mean_height as f32 * PARAGRAPH_MAX_GAP_RATIO).round() as u32;
+
+    let lines = merge_words_into_lines(words, y_tolerance);
+    let paragraphs = merge_lines_into_paragraphs(&lines, max_gap, PARAGRAPH_MIN_X_OVERLAP);
+
+    let blocks: Vec<OcrBlockDto> = paragraphs
+        .into_iter()
+        .map(|p| {
+            let rect = NormRect::from_pixels_in(p.x, p.y, p.w, p.h, img_w, img_h);
+            OcrBlockDto {
+                // 占位；filter_blocks 会重排为与下标一致
+                index: 0,
+                text: p.text,
+                x: rect.x,
+                y: rect.y,
+                w: rect.w,
+                h: rect.h,
+                // 段落是行合并的产物，行数信息在合并时丢失；按高度反推。
+                // 前端只用它估行高与字号，不参与坐标计算，近似即可。
+                line_count: (p.h as f32 / mean_height as f32).round().max(1.0) as u32,
+                confidence: p.confidence,
+            }
+        })
+        .collect();
+
+    filter_blocks(blocks)
+}
 
 /// 过滤不可用的 OCR 块。
 ///
@@ -513,5 +611,125 @@ mod tests {
         assert!(!is_cjk('a'));
         assert!(!is_cjk('1'));
         assert!(!is_cjk(' '));
+    }
+
+    /// 关键回归：坐标必须按「喂给 OCR 那张图」的尺寸归一化。
+    ///
+    /// 两处独立缺陷都靠这条捕获：① 坐标轴搞反（x/y 互换）；
+    /// ② 归一化分母用错（用原图尺寸而非裁剪图尺寸）。
+    #[test]
+    fn test_words_to_blocks_normalizes_into_correct_quadrants() {
+        // 1000x500 的图，左上角一个词、右下角一个词
+        let words = vec![
+            PixelBox::new(50, 40, 100, 20, "Hello"),
+            PixelBox::new(800, 400, 150, 20, "世界"),
+        ];
+        let blocks = words_to_blocks(&words, 1000, 500);
+        assert_eq!(blocks.len(), 2);
+
+        let hello = blocks.iter().find(|b| b.text == "Hello").expect("Hello 块");
+        assert!(
+            hello.x < 0.3 && hello.y < 0.3,
+            "Hello 应落在左上: {hello:?}"
+        );
+
+        let world = blocks.iter().find(|b| b.text == "世界").expect("世界 块");
+        assert!(world.x > 0.6 && world.y > 0.6, "世界 应落在右下: {world:?}");
+
+        // 精确值：x = 800/1000 = 0.8，y = 400/500 = 0.8
+        assert!((world.x - 0.8).abs() < 1e-6, "x 应精确为 0.8: {}", world.x);
+        assert!((world.y - 0.8).abs() < 1e-6, "y 应精确为 0.8: {}", world.y);
+    }
+
+    /// 关键回归：裁剪后的子图尺寸才是归一化分母。
+    ///
+    /// 同一个词在「全图 1000x500」与「裁剪图 400x200」下归一化结果必须不同；
+    /// 用错分母会让所有块整体偏移（本例 0.8 vs 0.2）。
+    #[test]
+    fn test_words_to_blocks_uses_downsampled_or_cropped_denominator() {
+        let words = vec![PixelBox::new(320, 160, 40, 20, "cropped")];
+
+        let in_full = words_to_blocks(&words, 1000, 500);
+        let in_crop = words_to_blocks(&words, 400, 200);
+        assert_eq!(in_full.len(), 1);
+        assert_eq!(in_crop.len(), 1);
+
+        assert!(
+            (in_full[0].x - 0.32).abs() < 1e-6,
+            "全图分母: {}",
+            in_full[0].x
+        );
+        assert!(
+            (in_crop[0].x - 0.8).abs() < 1e-6,
+            "裁剪分母: {}",
+            in_crop[0].x
+        );
+        assert!(
+            (in_full[0].x - in_crop[0].x).abs() > 0.1,
+            "两种分母必须给出不同结果，否则分母没起作用"
+        );
+    }
+
+    /// 关键回归：同一行的多个词必须合成一块，而不是逐词成块。
+    ///
+    /// 逐词送翻译会因上下文缺失导致语序崩坏（与 LESSONS 第 8 条同源）。
+    #[test]
+    fn test_words_to_blocks_merges_same_line_words() {
+        let words = vec![
+            PixelBox::new(10, 10, 60, 20, "Hello"),
+            PixelBox::new(80, 12, 70, 20, "world"),
+            PixelBox::new(160, 10, 40, 20, "again"),
+        ];
+        let blocks = words_to_blocks(&words, 1000, 500);
+        assert_eq!(blocks.len(), 1, "同一行应合成 1 块: {blocks:?}");
+        assert_eq!(blocks[0].text, "Hello world again");
+    }
+
+    /// 相邻两行且水平重叠 → 必须并成同一段（保留上下文）。
+    #[test]
+    fn test_words_to_blocks_merges_adjacent_lines_into_paragraph() {
+        let words = vec![
+            PixelBox::new(10, 10, 100, 20, "first"),
+            PixelBox::new(10, 34, 120, 20, "second"),
+        ];
+        let blocks = words_to_blocks(&words, 1000, 500);
+        assert_eq!(blocks.len(), 1, "相邻两行应并段: {blocks:?}");
+        assert!(blocks[0].text.contains("first") && blocks[0].text.contains("second"));
+    }
+
+    /// 退化输入：空词表、零尺寸图都不得 panic，返回空块。
+    #[test]
+    fn test_words_to_blocks_degenerate_inputs() {
+        assert!(words_to_blocks(&[], 1000, 500).is_empty());
+        assert!(words_to_blocks(&[PixelBox::new(1, 1, 10, 10, "x")], 0, 0).is_empty());
+    }
+
+    /// 关键回归：低置信度词必须被过滤掉（否则噪点也会被送去翻译）。
+    #[test]
+    fn test_words_to_blocks_filters_low_confidence() {
+        let mut low = PixelBox::new(10, 10, 100, 20, "noise");
+        low.confidence = Some(0.1);
+        let mut high = PixelBox::new(10, 100, 100, 20, "valid");
+        high.confidence = Some(0.9);
+
+        let blocks = words_to_blocks(&[low, high], 1000, 500);
+        assert_eq!(blocks.len(), 1, "低置信度块应被过滤: {blocks:?}");
+        assert_eq!(blocks[0].text, "valid");
+    }
+
+    /// 过滤后 index 必须与数组下标严格一致（前端按 index 回填译文）。
+    #[test]
+    fn test_words_to_blocks_reindexes_after_filter() {
+        let mut noise = PixelBox::new(10, 10, 100, 20, "!");
+        noise.confidence = Some(0.1);
+        let words = vec![
+            noise,
+            PixelBox::new(10, 100, 100, 20, "alpha"),
+            PixelBox::new(10, 200, 100, 20, "beta"),
+        ];
+        let blocks = words_to_blocks(&words, 1000, 500);
+        for (i, b) in blocks.iter().enumerate() {
+            assert_eq!(b.index, i as u32, "index 必须与下标一致: {blocks:?}");
+        }
     }
 }

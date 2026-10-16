@@ -747,6 +747,7 @@ pub async fn ocr_clipboard_image(
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
 }
 
+pub mod screenshot;
 pub mod selection;
 
 // 划词/浮窗相关符号平移至 `commands::selection`，此处重导出：

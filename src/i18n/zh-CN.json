@@ -86,6 +86,14 @@
     "pin": "固定置顶（失焦不收起）",
     "unpin": "取消置顶（失焦自动收起）"
   },
+  "screenshot": {
+    "title": "拖动框选要翻译的区域",
+    "recognizing": "识别中…",
+    "sizeHint": "{w} × {h} px",
+    "showOriginal": "还原原文",
+    "showTranslation": "显示译文",
+    "cancel": "取消（Esc）"
+  },
   "task": {
     "btnCancel": "取消",
     "btnRetry": "重试",

@@ -124,3 +124,14 @@
   - 引用上游 `#[cfg]` 门控作为「会编译失败」的证据时，**必须同时给出 feature 求并集后的实际状态**。只引 `#[cfg]` 是**片面的证据**，得不出结论。
   - 这条是第 17 条的同型复发：**在无法执行验证的环境里，凭局部证据写下了强断言**。当时的正确动作就是跑那条 `cargo tree`——它零成本、只读、且立刻就给出了反证。**「差一步就能验证」不等于「无法验证」**，不许用后者为自己的推测免责。
   - 附带查实的真实陷阱（替换掉了上面那条错的）：该函数带 `#[deprecated]`，**`-D warnings` 下必须 `#[allow(deprecated)]`**——这才是 macOS 分支真正会踩的坑。
+
+### 19. 宿主 clippy 看不到被 `cfg` 剔除的平台代码，必须另找类型检查途径
+- **现象**：`src-tauri/src/screencap/{windows,macos}.rs` 在 Linux 上被三段式 `cfg` 整个剔除，`cargo clippy --workspace --all-targets -- -D warnings` **完全不会编译它们**。其中真实的类型错误（`unwrap_or_else(CGMainDisplayID)` 因为 `extern "C-unwind" fn` 不实现 `FnOnce()` 而编不过）与 clippy 缺陷（`BITMAPINFO::default()` 后逐字段赋值触发 `field_reassign_with_default`）在本机全部静默通过，只会在 CI 的 macOS/Windows runner 上炸。
+- **教训**：
+  - 「本机 clippy 通过」对 `#[cfg]` 剔除的平台代码**零证据价值**。写完平台分支后必须显式确认这份代码被编译过。
+  - 整仓交叉 `cargo check --target <triple>` 常被无关的原生构建脚本挡住（本次 Windows 卡在 `webview2-com-sys`/`ring` 的 `lib.exe`，macOS 卡在 `objc2-exception-helper`/`libsqlite3-sys` 的 SDK）。**绕法**：在 `/tmp` 建一个只依赖该平台 crate（`windows` / `objc2-core-graphics`）并 `include` 真实源文件（用 sed 把 `use transly_core::...` 换成桩模块）的**隔离 scratch crate**，再 `cargo clippy --target <triple> -- -D warnings`。本次据此修掉 2 处真实缺陷。
+  - scratch crate 必须建在 `/tmp`、用完即删，不得落仓库。
+
+### 20. specta 把非 Option 的 `f32` 也生成为 `number | null`
+- **现象**：`NormRect`/`OcrBlockDto` 里 `pub x: f32` 经 specta 生成的 TS 是 `x: number | null`（f32 无法表达 NaN/Infinity，故映射为可空）。前端按 `number` 写 `rect.x * 100` 会直接 `TS18047: possibly null`；`ScreenshotSessionDto` 的字段名也保持 snake_case（`image_url`），不是 camelCase。
+- **教训**：新增 IPC 结构前先跑 `cargo run -p src-tauri --bin export_bindings` 并**按生成的 `bindings.ts` 写前端**，不要按 Rust 源码推测字段名与可空性。前端内部计算用的矩形另起一个字段非空的本地类型（结构上仍可直接作为参数传入），避免把可空性扩散到全部算术。

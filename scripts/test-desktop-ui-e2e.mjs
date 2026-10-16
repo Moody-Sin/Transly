@@ -368,6 +368,30 @@ const TAURI_MOCK_INIT_SCRIPT = `
         case 'ocr_clipboard_image':
           return '[OCR识别结果] Image text';
 
+        // 截图翻译：冻结帧用 data: URL 顶替自定义协议（浏览器环境里没有 tauri 协议；
+        // vite 构建产物不带 CSP，故 data URL 可用）。
+        case 'start_screenshot_translation':
+        case 'get_screenshot_session':
+          return {
+            session_id: 'e2e-shot-session',
+            image_url:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+            image_width: 1200,
+            image_height: 800,
+            generation: 7,
+            target_lang: 'zh-CN',
+            engine: 'google',
+          };
+
+        case 'recognize_screenshot_selection':
+          return [
+            { index: 0, text: '[E2E译文块0]', x: 0.1, y: 0.2, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
+            { index: 1, text: '[E2E译文块1]', x: 0.1, y: 0.3, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
+          ];
+
+        case 'cancel_screenshot_translation':
+          return null;
+
         default:
           console.warn('[Mock IPC] Unhandled cmd:', cmd, args);
           return null;
@@ -673,6 +697,100 @@ async function runDesktopUiE2E() {
     await floatPage.close()
     console.log('✔ [用例 7] 迷你悬浮窗 (#float) 路由隔离、选区事件响应与交互成功')
 
+    // ==========================================
+    // 用例 8: 截图覆盖窗 (#shot) 框选与选区归一化
+    // ==========================================
+    console.log('[UI-E2E] 正在测试 [用例 8: 截图覆盖窗 (#shot) 框选交互]...')
+    const shotPage = await browser.newPage()
+    shotPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    shotPage.on('pageerror', (err) => consoleErrors.push(err.message))
+    await shotPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    // 视口固定为 1200×800，与 mock 的 image_width/image_height 一致，
+    // 使「物理像素 ↔ 归一化」换算可精确断言。
+    await shotPage.setViewportSize({ width: 1200, height: 800 })
+    await shotPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+
+    // 断言 1: 背景冻结帧已加载（src 非空且 complete）
+    const shotFrame = shotPage.locator('[data-testid="shot-frame"]')
+    await shotFrame.waitFor({ state: 'visible', timeout: 5000 })
+    const frameReady = await shotFrame.evaluate(
+      (el) => !!el.getAttribute('src') && el.complete && el.naturalWidth > 0,
+    )
+    assert(frameReady, '覆盖窗必须加载非空且已完成的冻结帧背景图')
+
+    const lastRecognizeArgs = async () => {
+      const logs = await shotPage.evaluate(() => window.__INVOKE_LOGS || [])
+      const calls = logs.filter((l) => l.cmd === 'recognize_screenshot_selection')
+      return calls.length ? calls[calls.length - 1].args.rect : null
+    }
+    const dragSelect = async (x0, y0, x1, y1) => {
+      await shotPage.mouse.move(x0, y0)
+      await shotPage.mouse.down()
+      await shotPage.mouse.move(x1, y1, { steps: 8 })
+      await shotPage.mouse.up()
+      await shotPage.waitForTimeout(250)
+    }
+    const assertRect = (rect, expected, label) => {
+      assert(rect, `${label}：必须调用 recognize_screenshot_selection`)
+      for (const [key, value] of Object.entries(expected)) {
+        assert(
+          Math.abs(rect[key] - value) < 0.001,
+          `${label}：选区 ${key} 应为 ${value}，实际 ${rect[key]}；完整入参 ${JSON.stringify(rect)}`,
+        )
+      }
+    }
+
+    // 断言 2: 正向框选 (240,160)→(720,480) 应得 {0.2, 0.2, 0.4, 0.4}
+    await dragSelect(240, 160, 720, 480)
+    assertRect(await lastRecognizeArgs(), { x: 0.2, y: 0.2, w: 0.4, h: 0.4 }, '正向框选')
+
+    // 断言 3: 拖出视口必须被钳制为 x+w ≤ 1、y+h ≤ 1
+    await dragSelect(600, 400, 2000, 1500)
+    assertRect(await lastRecognizeArgs(), { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, '越界框选')
+
+    // 断言 4: 反向拖拽必须得到与正向相同的正矩形（两角取 min）
+    await dragSelect(800, 600, 400, 300)
+    assertRect(
+      await lastRecognizeArgs(),
+      { x: 400 / 1200, y: 300 / 800, w: 400 / 1200, h: 300 / 800 },
+      '反向框选',
+    )
+
+    // 断言 5: 识别结果块按归一化坐标渲染成百分比定位
+    const shotBlocks = shotPage.locator('[data-testid="shot-block"]')
+    assert.strictEqual(await shotBlocks.count(), 2, '识别完成后必须渲染 2 个译文块')
+    assert.strictEqual(await shotBlocks.first().evaluate((el) => el.style.left), '10%')
+    assert.strictEqual(await shotBlocks.first().evaluate((el) => el.style.top), '20%')
+    assert.strictEqual(await shotBlocks.nth(1).evaluate((el) => el.style.top), '30%')
+
+    // 断言 6: 「还原原文」只隐藏译文层，不得卸载背景冻结帧
+    await shotPage.getByRole('button', { name: '还原原文' }).click()
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      0,
+      '还原原文后译文层必须不可见',
+    )
+    assert(await shotFrame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    // 断言 7: Esc 取消并关闭覆盖层
+    await shotPage.keyboard.press('Escape')
+    await shotPage.waitForTimeout(200)
+    const cancelCalled = await shotPage
+      .evaluate(() => window.__INVOKE_LOGS || [])
+      .then((logs) => logs.some((l) => l.cmd === 'cancel_screenshot_translation'))
+    assert(cancelCalled, 'Esc 必须调用 cancel_screenshot_translation')
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-frame"]').count(),
+      0,
+      'Esc 后覆盖层必须消失',
+    )
+
+    await shotPage.close()
+    console.log('✔ [用例 8] 截图覆盖窗框选、坐标归一化、译文层与取消闭环正常')
+
     // 检查控制台异常
     assert.equal(
       consoleErrors.length,
@@ -681,7 +799,11 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 7 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 8 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log(
+      '⚠️ 覆盖范围声明：截图覆盖窗用例走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
+        '不代表自定义协议 translyshot 链路与真实屏幕捕获已验证；那两项只能靠真机手动验收。',
+    )
     console.log('========================================\n')
   } catch (err) {
     console.error('[UI-E2E Catch] 捕获到错误，控制台错误列表:', consoleErrors)

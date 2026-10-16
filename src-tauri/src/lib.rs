@@ -3,7 +3,9 @@ pub mod clipboard_gate;
 pub mod commands;
 pub mod engine_pool;
 pub mod ocr;
+pub mod overlay;
 pub mod proxy;
+pub mod screencap;
 pub mod secrets;
 pub mod server;
 pub mod storage;
@@ -68,7 +70,11 @@ macro_rules! app_command_builder {
             $crate::commands::get_preferred_replace_engine,
             $crate::commands::save_preferred_replace_engine,
             $crate::commands::get_proxy_config,
-            $crate::commands::save_proxy_config
+            $crate::commands::save_proxy_config,
+            $crate::commands::screenshot::start_screenshot_translation,
+            $crate::commands::screenshot::get_screenshot_session,
+            $crate::commands::screenshot::recognize_screenshot_selection,
+            $crate::commands::screenshot::cancel_screenshot_translation
         ])
     };
 }

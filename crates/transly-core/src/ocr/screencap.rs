@@ -79,6 +79,33 @@ pub fn map_capture_error(raw: &str) -> OcrErrorKind {
     OcrErrorKind::CaptureFailed
 }
 
+/// 捕获图像尺寸与显示器声明物理尺寸之间允许的最大误差（像素）。
+///
+/// 差 1 像素源于驱动/窗口管理器的取整，属正常；差 2 及以上则说明单位或缩放
+/// 折算出错（典型如 macOS `Monitor::size()` 在 Retina 下被双重缩放）。
+pub const CAPTURE_SIZE_TOLERANCE: u32 = 1;
+
+/// 判定捕获图像尺寸是否与显示器声明的物理尺寸吻合。
+///
+/// # 为什么必须做这件事
+///
+/// 这是**唯一**能同时兜住「上游 `Monitor` 单位改了」与「三平台 DPI 折算差异」
+/// 的判据，且不引入任何平台分支假设：它只依赖「同一显示器的物理尺寸应等于
+/// 捕获图像尺寸」这一不变量。
+///
+/// 容差取 ±1：上游各项 DPI 折算相互竞合时，差 1 像素是正常取整，
+/// 一味要求完全相等会让功能在个别显卡/驱动上假性失败；放到 ±2 又会把
+/// Retina 双重缩放（差整整一倍）之外的小幅折算错误一并放过。
+pub fn is_capture_size_consistent(
+    image_w: u32,
+    image_h: u32,
+    monitor_w: u32,
+    monitor_h: u32,
+) -> bool {
+    image_w.abs_diff(monitor_w) <= CAPTURE_SIZE_TOLERANCE
+        && image_h.abs_diff(monitor_h) <= CAPTURE_SIZE_TOLERANCE
+}
+
 /// 一次截图翻译会话（跨 IPC 边界传递的元数据，**不含图像字节**）。
 ///
 /// 图像走自定义 URI 协议，故本结构只携带定位与状态信息。
@@ -199,6 +226,30 @@ mod tests {
             map_capture_error("BitBlt returned zero"),
             OcrErrorKind::CaptureFailed
         );
+    }
+
+    /// 关键回归：尺寸自校验的容差必须是 ±1。
+    ///
+    /// 容差取错（放松到 ±2，或收紧到严格相等）都会让「三平台 DPI 折算差异」
+    /// 这类真缺陷漏过或被误报，且两种错法都只能靠边界值断言区分。
+    #[test]
+    fn test_is_capture_size_consistent_tolerance() {
+        // 完全一致
+        assert!(is_capture_size_consistent(1920, 1080, 1920, 1080));
+        // 差 1：通过
+        assert!(is_capture_size_consistent(1921, 1079, 1920, 1080));
+        assert!(is_capture_size_consistent(1919, 1081, 1920, 1080));
+        // 差 2：失败（容差取错时会漏过）
+        assert!(!is_capture_size_consistent(1922, 1080, 1920, 1080));
+        assert!(!is_capture_size_consistent(1920, 1082, 1920, 1080));
+        assert!(!is_capture_size_consistent(1918, 1078, 1920, 1080));
+
+        // macOS Retina 双重缩放：物理 3840 被上报成 7680 —— 必须拦截
+        assert!(!is_capture_size_consistent(3840, 2160, 7680, 4320));
+        assert!(!is_capture_size_consistent(7680, 4320, 3840, 2160));
+
+        // 只差一个轴同样要拦
+        assert!(!is_capture_size_consistent(1920, 2160, 1920, 1080));
     }
 
     #[test]

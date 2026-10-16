@@ -17,6 +17,7 @@
 
 - **App.tsx**: 桌面端主工作台界面、引擎与翻译风格切换、系统设置中心。
 - **FloatWindow.tsx**: 划词悬浮迷你窗独立入口（在 `main.tsx` 根据 `#float` 路由分流），轻量级冷启动，支持失焦关闭、图钉置顶与自由拖拽。
+- **ScreenshotOverlay.tsx**: 截图翻译覆盖窗独立入口（在 `main.tsx` 根据 `#shot` 路由分流），以冻结帧为背景做框选，选区与译文块全程使用归一化坐标 `[0,1]²`。
 - **HistoryPanel.tsx**: 翻译历史记录面板，支持实时模糊搜索、单条删除与全量 CSV/JSON 流式导出。
 - **ShortcutRecorder.tsx**: 全局快捷键智能录制器，支持修饰键捕获与冲突检测。
 - **task**: 共享任务状态机、代际隔离、结构化错误回落与 `useTaskRunner` 入口钩子，附 `node:test` 单测。

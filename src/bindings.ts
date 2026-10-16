@@ -59,6 +59,14 @@ export const commands = {
 	savePreferredReplaceEngine: (engine: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_replace_engine", { engine })),
 	getProxyConfig: () => typedError<ProxyConfig, string>(__TAURI_INVOKE("get_proxy_config")),
 	saveProxyConfig: (config: ProxyConfig) => typedError<null, string>(__TAURI_INVOKE("save_proxy_config", { config })),
+	/**  触发一次截图翻译：选光标所在显示器、捕获冻结帧并弹出覆盖窗。 */
+	startScreenshotTranslation: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("start_screenshot_translation")),
+	/**  读取当前截图会话。幂等读，供覆盖窗挂载（含 StrictMode 二次执行）使用。 */
+	getScreenshotSession: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("get_screenshot_session")),
+	/**  提交框选区域。阶段 2 返回空块（OCR 在阶段 3），仅完成选区钳制与代际校验。 */
+	recognizeScreenshotSelection: (rect: NormRect, generation: number) => typedError<OcrBlockDto[], OcrErrorDto>(__TAURI_INVOKE("recognize_screenshot_selection", { rect, generation })),
+	/**  取消并关闭覆盖窗。 */
+	cancelScreenshotTranslation: () => typedError<null, string>(__TAURI_INVOKE("cancel_screenshot_translation")),
 };
 
 /* Types */
@@ -106,6 +114,33 @@ export type LlmConfigDto = {
 	model: string | null,
 };
 
+/**  归一化矩形。原点左上，分量 ∈ `[0,1]`。 */
+export type NormRect = {
+	x: number | null,
+	y: number | null,
+	w: number | null,
+	h: number | null,
+};
+
+/**
+ *  送往前端的 OCR 文字块。
+ * 
+ *  坐标是**相对喂给 OCR 那张图**的归一化值（原点左上）。
+ */
+export type OcrBlockDto = {
+	/**  稳定序号（与请求数组下标一致，供前端按 id 回填译文） */
+	index: number,
+	text: string,
+	x: number | null,
+	y: number | null,
+	w: number | null,
+	h: number | null,
+	/**  段落内行数（前端据此估算行高与字号） */
+	line_count: number,
+	/**  置信度 ∈ [0,1]；引擎不提供时为 `None` */
+	confidence: number | null,
+};
+
 export type OcrErrorDto = {
 	kind: OcrErrorKind,
 	message: string,
@@ -145,6 +180,28 @@ export type ProxyMode =
 "manual" | 
 /**  不使用代理：强制直连，忽略环境与系统代理 */
 "none";
+
+/**
+ *  一次截图翻译会话（跨 IPC 边界传递的元数据，**不含图像字节**）。
+ * 
+ *  图像走自定义 URI 协议，故本结构只携带定位与状态信息。
+ *  所有几何量均为归一化或物理量，前端不做 DPI 换算。
+ */
+export type ScreenshotSessionDto = {
+	/**  会话标识（自定义协议 URL 的一部分，防陈旧窗口读到新会话图） */
+	session_id: string,
+	/**  冻结帧的完整 URL（由 Rust 按平台拼好，前端不做平台判断） */
+	image_url: string,
+	/**  冻结帧的**物理**像素尺寸（供前端换算选区像素数展示） */
+	image_width: number,
+	image_height: number,
+	/**  会话代际（异步命令落地前比对，不等则丢弃） */
+	generation: number,
+	/**  当前目标语言（供覆盖窗初始化下拉框） */
+	target_lang: string,
+	/**  当前引擎 id */
+	engine: string,
+};
 
 /**
  *  本地 HTTP 服务（供浏览器插件调用）的运行状态。

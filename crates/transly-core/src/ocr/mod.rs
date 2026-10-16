@@ -10,7 +10,10 @@ pub use blocks::{
     OcrBlockDto, PixelBox, MIN_BLOCK_CONFIDENCE,
 };
 pub use geom::{find_monitor_for_point, MonitorRect, NormRect};
-pub use screencap::{detect_wayland_session, map_capture_error, ScreenshotSessionDto};
+pub use screencap::{
+    detect_wayland_session, is_capture_size_consistent, map_capture_error, ScreenshotSessionDto,
+    CAPTURE_SIZE_TOLERANCE,
+};
 pub use tsv::{parse_tesseract_tsv, tesseract_lang_arg, OcrTsvError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -149,6 +152,23 @@ pub fn rgba_to_bgra_in_place(buf: &mut [u8]) {
     }
 }
 
+/// 原地将 `BGRX`（每像素 4 字节，X 为无意义填充）重排为 `RGBA8`。
+///
+/// 屏幕捕获的三个后端给出的都是「每像素 4 字节、低位在前」的 BGR 序缓冲：
+/// Linux xcb `GetImage`（24/32 位色深）、Windows GDI `GetDIBits`（BGRA32）、
+/// macOS `CGDisplayCreateImage`（BGRA32 / premultipliedFirst）。它们的第 4 字节
+/// 是填充或恒为不透明的 alpha，**不是**可直接沿用的透明度；不改写第 4 字节时
+/// `RgbaImage` 会得到一张 alpha=0 的全透明图（PNG 看起来是全黑/全透明）。
+///
+/// 与 [`rgba_to_bgra_in_place`] 对称：只交换 R/B 并补上不透明 alpha，
+/// 不引入额外的全量堆分配。
+pub fn bgrx_to_rgba_in_place(buf: &mut [u8]) {
+    for chunk in buf.as_chunks_mut::<4>().0 {
+        chunk.swap(0, 2);
+        chunk[3] = 255;
+    }
+}
+
 /// 剪贴板位图可接受的像素总量上限（宽 × 高）。
 ///
 /// 平台层在做任何全量像素拷贝之前必须先用它把关：RGBA 每像素 4 字节，
@@ -218,6 +238,26 @@ mod tests {
         let mut buf = vec![10, 20, 30, 255, 40, 50, 60, 200];
         rgba_to_bgra_in_place(&mut buf);
         assert_eq!(buf, vec![30, 20, 10, 255, 60, 50, 40, 200]);
+    }
+
+    /// 关键回归：BGRX → RGBA 必须交换 R/B，且把填充字节改写为不透明 alpha。
+    ///
+    /// 这两处缺陷在灰度 UI 上肉眼均不可察觉：漏交换会得到「红蓝互换」的
+    /// 冻结帧，漏写 alpha 会让整张图透明。两个断言分别钉住这两点。
+    #[test]
+    fn test_bgrx_to_rgba_in_place_swizzle() {
+        // 纯红 BGRX → 纯红 RGBA；第 4 字节是填充 0，必须变成 255
+        let mut buf = vec![10, 20, 30, 0, 40, 50, 60, 0];
+        bgrx_to_rgba_in_place(&mut buf);
+        assert_eq!(
+            buf,
+            vec![30, 20, 10, 255, 60, 50, 40, 255],
+            "B/R 未交换或填充字节未改写为不透明 alpha"
+        );
+        // 非 4 字节对齐的尾部必须原样保留，不能被吞掉
+        let mut tail = vec![1, 2, 3, 0, 9, 9];
+        bgrx_to_rgba_in_place(&mut tail);
+        assert_eq!(tail, vec![3, 2, 1, 255, 9, 9]);
     }
 
     #[test]

@@ -86,6 +86,14 @@
     "pin": "Pin window (keep visible on blur)",
     "unpin": "Unpin window (auto-hide on blur)"
   },
+  "screenshot": {
+    "title": "Drag to select the area to translate",
+    "recognizing": "Recognizing…",
+    "sizeHint": "{w} × {h} px",
+    "showOriginal": "Show original",
+    "showTranslation": "Show translation",
+    "cancel": "Cancel (Esc)"
+  },
   "task": {
     "btnCancel": "Cancel",
     "btnRetry": "Retry",

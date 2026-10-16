@@ -128,6 +128,10 @@ fn main() {
 
     let pairing_manager = Arc::new(src_tauri::server::pairing::PairingManager::new());
 
+    // 截图翻译会话状态。必须 newtype（Tauri 按 TypeId 存 state，同类型重复 manage 会 panic），
+    // 且以 Arc 共享给自定义 URI 协议的闭包。
+    let screenshot_session = Arc::new(src_tauri::overlay::ScreenshotSession::default());
+
     // 克隆传递给 setup 内部异步启动
     let server_token = token.clone();
     let server_cache = cache.clone();
@@ -169,6 +173,34 @@ fn main() {
             counter: counter_shared,
         }))
         .manage(token.unwrap_or_else(|| Arc::new(RwLock::new(String::new()))))
+        .manage(Arc::clone(&screenshot_session))
+        // 冻结帧走自定义协议而非 IPC：4K 帧约 33MB，走 IPC 需 base64 再 JSON.parse，
+        // JS 堆峰值可达图像 3 倍。session_id 不匹配即 404，防陈旧窗口读到新会话图。
+        .register_uri_scheme_protocol("translyshot", {
+            let shot_session = Arc::clone(&screenshot_session);
+            move |_ctx, request| {
+                // 路径形如 `/{session_id}/base.png`
+                let session_id = request
+                    .uri()
+                    .path()
+                    .trim_start_matches('/')
+                    .split('/')
+                    .next()
+                    .unwrap_or_default();
+                match src_tauri::overlay::frame_for_session(&shot_session, session_id) {
+                    Some(png) => tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", "image/png")
+                        .header("Cache-Control", "no-store")
+                        .body(png)
+                        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                    None => tauri::http::Response::builder()
+                        .status(404)
+                        .body(Vec::new())
+                        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new())),
+                }
+            }
+        })
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             let pending_slot = app

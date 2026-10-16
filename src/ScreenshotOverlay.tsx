@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { commands, type OcrBlockDto, type OcrErrorDto, type ScreenshotSessionDto } from './bindings'
+import {
+  commands,
+  type OcrBlockDto,
+  type OcrErrorDto,
+  type ScreenshotBlockResultDto,
+  type ScreenshotSessionDto,
+} from './bindings'
 import { getTranslation, Locale } from './i18n'
 import { parseLocalePreference, parseThemePreference, LOCALE_STORAGE_KEY } from './utils/prefs'
+import { fitFontSize, toPercentStyle } from './utils/screenshotLayout'
 
 /**
  * 轻点未拖拽的物理像素阈值，与 Rust 侧 `overlay::MIN_SELECTION_PX` 保持一致。
@@ -46,8 +53,18 @@ export default function ScreenshotOverlay() {
   const formatOcrError = (err: OcrErrorDto | string) =>
     typeof err === 'string' ? err : t.ocrError[err.kind] || err.message
 
+  /** 渲染期按来源选文案表（放在渲染期可随用户切语言即时更新）。 */
+  const renderError = (err: OverlayError | string): string => {
+    if (typeof err === 'string') return err
+    if (err.source === 'ocr') return formatOcrError(err.dto)
+    return err.message
+  }
+
   const [session, setSession] = useState<ScreenshotSessionDto | null>(null)
-  const [error, setError] = useState<OcrErrorDto | string | null>(null)
+  // 两类错误来源：OCR（OcrErrorDto）与翻译（TranslateErrorDto），
+  // 它们的 `kind` 是不同枚举，故用联合类型 + 各自的文案表。
+  type OverlayError = { source: 'ocr'; dto: OcrErrorDto } | { source: 'translate'; message: string }
+  const [error, setError] = useState<OverlayError | string | null>(null)
   const [anchor, setAnchor] = useState<Point | null>(null)
   const [pointer, setPointer] = useState<Point | null>(null)
   const [blocks, setBlocks] = useState<OcrBlockDto[]>([])
@@ -55,6 +72,16 @@ export default function ScreenshotOverlay() {
   const [showTranslation, setShowTranslation] = useState(true)
   const [closed, setClosed] = useState(false)
   const dragging = useRef(false)
+
+  // 译文与引擎/语言状态
+  const [targetLang, setTargetLang] = useState('zh-CN')
+  const [engine, setEngine] = useState('google')
+  const [results, setResults] = useState<Map<number, ScreenshotBlockResultDto>>(new Map())
+  const [translating, setTranslating] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle')
+  // 翻译代际：与 Rust 侧的**会话** generation 是两回事。
+  // 会话代际防「陈旧窗口」，本代际防「旧译文覆盖新译文」（切语言/切引擎时）。
+  const translateGen = useRef(0)
 
   // 跟随主窗口切换界面语言
   useEffect(() => {
@@ -92,8 +119,13 @@ export default function ScreenshotOverlay() {
       .getScreenshotSession()
       .then((res) => {
         if (!alive) return
-        if (res.status === 'ok') setSession(res.data)
-        else setError(res.error)
+        if (res.status === 'ok') {
+          setSession(res.data)
+          setTargetLang(res.data.target_lang)
+          setEngine(res.data.engine)
+        } else {
+          setError({ source: 'ocr', dto: res.error })
+        }
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof Error ? e.message : String(e))
@@ -177,14 +209,67 @@ export default function ScreenshotOverlay() {
     if (!session) return
     setBusy(true)
     setError(null)
+    setResults(new Map())
     try {
       const res = await commands.recognizeScreenshotSelection(rect, session.generation)
-      if (res.status === 'error') setError(res.error)
-      else setBlocks(res.data)
+      if (res.status === 'error') {
+        setError({ source: 'ocr', dto: res.error })
+        return
+      }
+      setBlocks(res.data)
+      if (res.data.length > 0) {
+        // 识别完成即自动翻译（用户不必再点一次）
+        await translate(res.data, targetLang, engine)
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  /**
+   * 批量翻译给定块。
+   *
+   * 切语言/切引擎时**只重发翻译，不重跑 OCR**（块文本已在内存，OCR 又贵又不会变）。
+   */
+  const translate = async (target: OcrBlockDto[], lang: string, eng: string, only?: number[]) => {
+    if (!session || target.length === 0) return
+    const mine = ++translateGen.current
+    setTranslating(true)
+    setError(null)
+    try {
+      const subset = only ? target.filter((b) => only.includes(b.index)) : target
+      const res = await commands.translateScreenshotBlocks(
+        subset.map((b) => b.text),
+        lang,
+        eng,
+        session.generation,
+      )
+      // 代际闸门：期间用户又切了语言/引擎或重新框选，则丢弃本次结果。
+      if (mine !== translateGen.current) return
+      if (res.status === 'error') {
+        // 翻译错误的 kind 是 ErrorKind（非 OcrErrorKind），用 t.error 表映射。
+        const errMap = t.error as Record<string, string>
+        setError({ source: 'translate', message: errMap[res.error.kind] || res.error.message })
+        return
+      }
+      // ⚠️ 按 index 回填，不能按数组顺序硬贴：本次只翻了 subset，
+      // 且失败项占位后顺序可能与块顺序不一致。
+      setResults((prev) => {
+        const next = new Map(prev)
+        subset.forEach((b, i) => {
+          const r = res.data[i]
+          if (r) next.set(b.index, { ...r, index: b.index })
+        })
+        return next
+      })
+    } catch (e: unknown) {
+      if (mine === translateGen.current) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      if (mine === translateGen.current) setTranslating(false)
     }
   }
 
@@ -250,21 +335,56 @@ export default function ScreenshotOverlay() {
       )}
 
       {showTranslation &&
-        blocks.map((block) => (
-          <div
-            key={block.index}
-            data-testid="shot-block"
-            className="absolute overflow-hidden rounded bg-white/90 px-0.5 text-left text-[11px] leading-tight text-slate-900 dark:bg-slate-800/90 dark:text-slate-100"
-            style={{
-              left: pct(block.x ?? 0),
-              top: pct(block.y ?? 0),
-              width: block.w == null ? undefined : pct(block.w),
-              height: block.h == null ? undefined : pct(block.h),
-            }}
-          >
-            {block.text}
-          </div>
-        ))}
+        blocks.map((block) => {
+          const r = results.get(block.index)
+          const failed = r?.failed === true
+          const text = r && !r.failed ? r.text : block.text
+          // 字号按「原文框的物理像素」自适应；放不下则用最小字号 + 溢出隐藏
+          // （缩到 2px 的鬼影字既不可读也没意义）。
+          const boxPx = {
+            w: (block.w ?? 0) * (session?.image_width ?? 0),
+            h: (block.h ?? 0) * (session?.image_height ?? 0),
+          }
+          const fitted = fitFontSize(text, boxPx, { maxPx: 22, minPx: 9 })
+          const fontSize = fitted ?? 9
+          return (
+            <div
+              key={block.index}
+              data-testid="shot-block"
+              data-failed={failed ? 'true' : 'false'}
+              className={`absolute overflow-hidden rounded px-0.5 text-left leading-tight ${
+                failed
+                  ? 'border border-rose-400 bg-rose-50/95 text-rose-700 dark:bg-rose-950/90 dark:text-rose-300'
+                  : 'bg-white/90 text-slate-900 dark:bg-slate-800/90 dark:text-slate-100'
+              }`}
+              style={{
+                ...toPercentStyle({
+                  x: block.x ?? 0,
+                  y: block.y ?? 0,
+                  w: block.w ?? 0,
+                  h: block.h ?? 0,
+                }),
+                fontSize: `${fontSize}px`,
+              }}
+              title={failed ? (r?.error_message ?? t.screenshot.translateFailed) : text}
+            >
+              {text}
+              {failed && (
+                <button
+                  type="button"
+                  data-testid="shot-block-retry"
+                  className="pointer-events-auto ml-1 rounded bg-rose-200 px-1 text-[10px] font-medium text-rose-800 hover:bg-rose-300"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void translate(blocks, targetLang, engine, [block.index])
+                  }}
+                >
+                  {t.task.btnRetry}
+                </button>
+              )}
+            </div>
+          )
+        })}
 
       {selection && physicalWidth > 0 && (
         <div
@@ -288,8 +408,84 @@ export default function ScreenshotOverlay() {
         onPointerDown={(e) => e.stopPropagation()}
       >
         <span className="font-medium">{t.screenshot.title}</span>
-        {busy && (
-          <span className="text-indigo-600 dark:text-indigo-400">{t.screenshot.recognizing}</span>
+        {(busy || translating) && (
+          <span className="text-indigo-600 dark:text-indigo-400">
+            {busy ? t.screenshot.recognizing : t.screenshot.translating}
+          </span>
+        )}
+        {blocks.length > 0 && (
+          <>
+            <select
+              data-testid="shot-engine"
+              value={engine}
+              onChange={(e) => {
+                const next = e.target.value
+                setEngine(next)
+                // 只重发翻译：块文本已在内存，OCR 不必重跑。
+                void translate(blocks, targetLang, next)
+              }}
+              className="rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <option value="google">{t.translation.engineGoogle}</option>
+              <option value="offline">{t.translation.engineOffline}</option>
+              <option value="deepl">{t.translation.engineDeepl}</option>
+              <option value="deepseek">{t.translation.engineDeepseek}</option>
+              <option value="openai">{t.translation.engineOpenai}</option>
+            </select>
+            <select
+              data-testid="shot-lang"
+              value={targetLang}
+              onChange={(e) => {
+                const next = e.target.value
+                setTargetLang(next)
+                void translate(blocks, next, engine)
+              }}
+              className="rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <option value="zh-CN">{t.translation.languageZhCN}</option>
+              <option value="en">{t.languages.en}</option>
+              <option value="ja">{t.translation.languageJa}</option>
+            </select>
+            <button
+              type="button"
+              data-testid="shot-copy"
+              className="rounded bg-slate-100 px-2 py-0.5 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+              onClick={() => {
+                const joined = blocks
+                  .map((b) => results.get(b.index))
+                  .filter((r): r is NonNullable<typeof r> => !!r && !r.failed)
+                  .map((r) => r.text)
+                  .join('\n')
+                navigator.clipboard
+                  .writeText(joined)
+                  .then(() => {
+                    setCopyState('ok')
+                    setTimeout(() => setCopyState('idle'), 1500)
+                  })
+                  .catch(() => {
+                    setCopyState('fail')
+                    setTimeout(() => setCopyState('idle'), 1500)
+                  })
+              }}
+            >
+              {copyState === 'ok' ? t.translation.copied : t.translation.copy}
+            </button>
+            <button
+              type="button"
+              data-testid="shot-to-main"
+              className="rounded bg-slate-100 px-2 py-0.5 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+              onClick={() => {
+                const joined = blocks
+                  .map((b) => results.get(b.index))
+                  .filter((r): r is NonNullable<typeof r> => !!r && !r.failed)
+                  .map((r) => r.text)
+                  .join('\n')
+                commands.pushScreenshotTextToMain(joined).catch(() => {})
+              }}
+            >
+              {t.screenshot.sendToMain}
+            </button>
+          </>
         )}
         {blocks.length > 0 && (
           <button
@@ -314,7 +510,7 @@ export default function ScreenshotOverlay() {
           data-testid="shot-error"
           className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded bg-rose-600/95 px-3 py-1.5 text-xs text-white shadow-lg"
         >
-          {formatOcrError(error)}
+          {renderError(error)}
         </div>
       )}
     </div>

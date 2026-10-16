@@ -440,6 +440,32 @@ export default function App() {
     }
   }, [])
 
+  // 监听截图覆盖窗的「发送到主窗口」：把文本灌进输入框并立即翻译。
+  //
+  // 这是「OCR 结果可编辑」被砍掉后的替代路径——用户在覆盖窗里看到不满意的
+  // 识别/翻译结果时，送到主窗口精修再重译。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    listen<{ text: string }>('transly://screenshot-to-main', (event) => {
+      const text = event.payload.text ?? ''
+      if (!text.trim()) return
+      setSourceText(text)
+      runner.run(text, { source: 'input', debounceMs: 0 })
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlisten = fn
+      })
+      .catch((err) => {
+        console.warn('[Transly] 截图送主窗口事件订阅失败：', err)
+      })
+    return () => {
+      disposed = true
+      if (unlisten) unlisten()
+    }
+  }, [runner])
+
   // 监听划词原地替换失败事件并弹出 Toast 与桌面原生通知提醒（仅限主窗口处理，防止双窗口重复弹窗）
   useEffect(() => {
     let unlisten: (() => void) | undefined

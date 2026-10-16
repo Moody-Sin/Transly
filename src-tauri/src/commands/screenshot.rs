@@ -280,3 +280,162 @@ pub async fn cancel_screenshot_translation(app: AppHandle) -> Result<(), String>
     crate::overlay::cancel(&app);
     Ok(())
 }
+
+/// 单个块的翻译结果。
+///
+/// 字段刻意扁平（specta 禁嵌套 `Option`、禁 `u64`/`i64`）：
+/// `failed` 与 `error_kind`/`error_message` 分开表达，前端无需解嵌套。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ScreenshotBlockResultDto {
+    /// 与请求下标一一对应，前端据此回填（**不能按数组顺序硬贴**）
+    pub index: u32,
+    /// 成功时为译文；失败时为空串
+    pub text: String,
+    pub failed: bool,
+    /// 失败时的错误种类，供前端映射 i18n 文案
+    pub error_kind: Option<transly_core::ErrorKind>,
+    pub error_message: Option<String>,
+    /// 实际执行引擎（可能因降级与请求不同）
+    pub engine: String,
+}
+
+/// 批量翻译截图块。
+///
+/// # 为什么走 `translate_batch_with_cache`
+///
+/// 「术语库源端 → 缓存 → 引擎 → 缓存 → 译文端」的顺序已在该模块单测覆盖；
+/// 此处若另写一份就是第四份复制，任何顺序修正都会漂移（见该模块文档）。
+///
+/// # 逐项容错
+///
+/// 返回**整批级** `Err` 仅用于「引擎不可用」这类全局失败；单个块翻译失败
+/// 走 `Vec` 里的 `failed: true`——用户需要能对失败块单独重试。
+#[tauri::command]
+#[specta::specta]
+pub async fn translate_screenshot_blocks(
+    texts: Vec<String>,
+    target_lang: String,
+    engine: Option<String>,
+    generation: u32,
+    app: AppHandle,
+    deps: tauri::State<'_, Arc<TranslationDependencies>>,
+) -> Result<Vec<ScreenshotBlockResultDto>, crate::commands::TranslateErrorDto> {
+    use crate::commands::TranslateErrorDto;
+
+    // 代际闸门：陈旧窗口（用户已重新截图）的结果不得落到新会话。
+    let session_gen = crate::overlay::current_generation(&app).ok_or_else(|| {
+        TranslateErrorDto::from_error(&transly_core::Error::Input("截图会话已结束".into()))
+    })?;
+    if session_gen != generation {
+        return Err(TranslateErrorDto::from_error(&transly_core::Error::Input(
+            "截图会话已过期，请重新截图".into(),
+        )));
+    }
+
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some(ref eng) = engine {
+        if !transly_core::validate_engine_id(eng) {
+            return Err(TranslateErrorDto::from_error(&transly_core::Error::Input(
+                format!("不支持或未知的翻译引擎: {eng}"),
+            )));
+        }
+    }
+
+    let deps_arc = deps.inner().clone();
+
+    // 引擎解析与批量流水线都是阻塞操作（内部同步访问 SQLite 缓存）。
+    let results = tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(async move {
+            let active_engine = match engine {
+                Some(ref name) => deps_arc.pool.get_engine(name).await,
+                None => deps_arc.pool.default_engine(),
+            };
+            let engine_id = active_engine.id().to_string();
+
+            let requests: Vec<transly_core::TranslationRequest> = texts
+                .iter()
+                .map(|t| transly_core::TranslationRequest {
+                    text: t.clone(),
+                    // 截图内容语言未知，交给引擎/离线检测
+                    source_lang: "auto".to_string(),
+                    target_lang: target_lang.clone(),
+                })
+                .collect();
+
+            let (cache_enabled, _gen) = deps_arc.cache_controller.snapshot();
+            let glossary = deps_arc.glossary.read().await.clone();
+
+            let outcome = transly_core::translate_batch_with_cache(
+                transly_core::BatchPipelineDeps {
+                    engine: active_engine.as_ref(),
+                    cache: &deps_arc.cache,
+                    glossary: &glossary,
+                    cache_enabled,
+                },
+                &requests,
+            )
+            .await;
+
+            outcome
+                .results
+                .into_iter()
+                .enumerate()
+                .map(|(idx, r)| match r {
+                    Ok(resp) => ScreenshotBlockResultDto {
+                        index: idx as u32,
+                        text: resp.text,
+                        failed: false,
+                        error_kind: None,
+                        error_message: None,
+                        engine: resp.engine,
+                    },
+                    Err(e) => {
+                        let dto = TranslateErrorDto::from_error(&e);
+                        ScreenshotBlockResultDto {
+                            index: idx as u32,
+                            text: String::new(),
+                            failed: true,
+                            error_kind: Some(dto.kind),
+                            error_message: Some(dto.message),
+                            engine: engine_id.clone(),
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .await
+    .map_err(|e| {
+        TranslateErrorDto::from_error(&transly_core::Error::Internal(format!(
+            "批量翻译任务调度异常: {e}"
+        )))
+    })?;
+
+    Ok(results)
+}
+
+/// 把文本（通常是译文）送到主窗口编辑重译，并关闭覆盖窗。
+///
+/// 这是「OCR 结果可编辑」被砍掉后的替代路径（全局设计 §十二）。
+#[tauri::command]
+#[specta::specta]
+pub async fn push_screenshot_text_to_main(app: AppHandle, text: String) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+
+    #[derive(Clone, serde::Serialize)]
+    struct Payload {
+        text: String,
+    }
+
+    app.emit_to("main", "transly://screenshot-to-main", Payload { text })
+        .map_err(|e| format!("发送文本到主窗口失败: {e}"))?;
+
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    crate::overlay::cancel(&app);
+    Ok(())
+}

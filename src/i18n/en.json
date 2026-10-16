@@ -96,7 +96,10 @@
     "sizeHint": "{w} × {h} px",
     "showOriginal": "Show original",
     "showTranslation": "Show translation",
-    "cancel": "Cancel (Esc)"
+    "cancel": "Cancel (Esc)",
+    "translating": "Translating…",
+    "translateFailed": "Translation failed",
+    "sendToMain": "Send to main window"
   },
   "task": {
     "btnCancel": "Cancel",

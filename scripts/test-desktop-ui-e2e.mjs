@@ -403,9 +403,25 @@ const TAURI_MOCK_INIT_SCRIPT = `
 
         case 'recognize_screenshot_selection':
           return [
-            { index: 0, text: '[E2E译文块0]', x: 0.1, y: 0.2, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
-            { index: 1, text: '[E2E译文块1]', x: 0.1, y: 0.3, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
+            { index: 0, text: 'Block zero', x: 0.1, y: 0.2, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
+            { index: 1, text: 'Block one', x: 0.1, y: 0.3, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
           ];
+
+        case 'translate_screenshot_blocks': {
+          // 按 index 回填的验证依赖「译文与 index 绑定」，故译文里带上 index。
+          // 第 2 个块故意返回 failed，验证逐项容错。
+          return args.texts.map((t, i) => ({
+            index: i,
+            text: i === 1 ? '' : '[E2E译:' + args.targetLang + ':' + args.engine + '] ' + t,
+            failed: i === 1,
+            error_kind: i === 1 ? 'network' : null,
+            error_message: i === 1 ? 'E2E 模拟单块失败' : null,
+            engine: args.engine || 'google',
+          }));
+        }
+
+        case 'push_screenshot_text_to_main':
+          return null;
 
         case 'cancel_screenshot_translation':
           return null;
@@ -881,6 +897,86 @@ async function runDesktopUiE2E() {
     await degraded.close()
     console.log('✔ [用例 9] 截图入口接通、三快捷键卡片与降级禁用提示均正确')
 
+    // ==========================================
+    // 用例 10: 截图译文层（按 index 回填 / 逐项容错 / 切语言只重译）
+    // ==========================================
+    console.log('[UI-E2E] 正在测试 [用例 10: 截图译文层与切语言重译]...')
+    const trPage = await browser.newPage()
+    trPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    trPage.on('pageerror', (err) => consoleErrors.push(err.message))
+    await trPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await trPage.setViewportSize({ width: 1200, height: 800 })
+    await trPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+
+    const frame = trPage.locator('[data-testid="shot-frame"]')
+    await frame.waitFor({ state: 'visible', timeout: 5000 })
+    await trPage.waitForTimeout(600)
+
+    // 框选触发识别 + 自动翻译
+    await trPage.mouse.move(240, 160)
+    await trPage.mouse.down()
+    await trPage.mouse.move(720, 480, { steps: 8 })
+    await trPage.mouse.up()
+    await trPage.waitForTimeout(1200)
+
+    const blocks = trPage.locator('[data-testid="shot-block"]')
+    assert.strictEqual(await blocks.count(), 2, '识别后应有 2 个块')
+
+    // 断言 1: 译文按 index 回填 —— 块 0 的译文必须含 "Block zero"
+    const blockTexts = await blocks.allTextContents()
+    assert(
+      blockTexts[0].includes('Block zero'),
+      `块0 译文应按 index 回填到对应块，实际: ${blockTexts[0]}`,
+    )
+
+    // 断言 2: 逐项容错 —— 块 1 失败但块 0 正常显示译文
+    const failedCount = await trPage
+      .locator('[data-testid="shot-block"][data-failed="true"]')
+      .count()
+    assert.strictEqual(failedCount, 1, `应恰有 1 个失败块，实际 ${failedCount}`)
+    assert(blockTexts[0].includes('[E2E译:'), `块0 应显示译文而非原文，实际: ${blockTexts[0]}`)
+    assert(blockTexts[1].includes('Block one'), `失败块应回落到显示原文，实际: ${blockTexts[1]}`)
+    // 失败块必须有重试入口
+    assert.strictEqual(
+      await trPage.locator('[data-testid="shot-block-retry"]').count(),
+      1,
+      '失败块必须提供单块重试入口',
+    )
+
+    // 断言 3: 切语言只重发翻译，绝不重跑 OCR
+    const logsBefore = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const ocrBefore = logsBefore.filter((l) => l.cmd === 'recognize_screenshot_selection').length
+    const trBefore = logsBefore.filter((l) => l.cmd === 'translate_screenshot_blocks').length
+
+    await trPage.locator('[data-testid="shot-lang"]').selectOption('en')
+    await trPage.waitForTimeout(1000)
+
+    const logsAfter = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const ocrAfter = logsAfter.filter((l) => l.cmd === 'recognize_screenshot_selection').length
+    const trCalls = logsAfter.filter((l) => l.cmd === 'translate_screenshot_blocks')
+    assert.strictEqual(
+      ocrAfter,
+      ocrBefore,
+      '切语言不得重跑 OCR（块文本已在内存，OCR 又贵又不会变）',
+    )
+    assert(trCalls.length > trBefore, '切语言必须重新发起翻译')
+    assert.strictEqual(
+      trCalls[trCalls.length - 1].args.targetLang,
+      'en',
+      '重译必须携带新的 targetLang',
+    )
+
+    // 断言 4: 还原原文只隐藏译文层，背景图仍在
+    await trPage.getByRole('button', { name: '还原原文' }).click()
+    await trPage.waitForTimeout(200)
+    assert.strictEqual(await blocks.count(), 0, '还原原文后译文层必须不可见')
+    assert(await frame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    await trPage.close()
+    console.log('✔ [用例 10] 译文按 index 回填、单块容错、切语言只重译且还原原文正常')
+
     // 检查控制台异常
     assert.equal(
       consoleErrors.length,
@@ -889,7 +985,7 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 9 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 10 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
     console.log(
       '⚠️ 覆盖范围声明：截图覆盖窗用例走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
         '不代表自定义协议 translyshot 链路与真实屏幕捕获已验证；那两项只能靠真机手动验收。',

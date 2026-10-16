@@ -96,7 +96,10 @@
     "sizeHint": "{w} × {h} px",
     "showOriginal": "还原原文",
     "showTranslation": "显示译文",
-    "cancel": "取消（Esc）"
+    "cancel": "取消（Esc）",
+    "translating": "翻译中…",
+    "translateFailed": "翻译失败",
+    "sendToMain": "发送到主窗口"
   },
   "task": {
     "btnCancel": "取消",

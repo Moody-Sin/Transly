@@ -359,6 +359,20 @@ pub async fn start(
 ///
 /// `React.StrictMode` 会让 effect 在开发模式跑两次；一次性 take 会让第二次
 /// 挂载拿到空会话，覆盖窗表现为「一直停在背景图、无法框选」。
+/// 读取当前会话代际；会话不存在时返回 `None`。
+///
+/// 供批量翻译命令做代际闸门（陈旧窗口的结果不得落到新会话）。
+/// 与 `read_session` 的区别：只取代际，不做 DTO 组装。
+pub fn current_generation(app: &AppHandle) -> Option<u32> {
+    let session = app.state::<Arc<ScreenshotSession>>().inner().clone();
+    let st = session.lock();
+    if st.phase == Phase::Idle || st.session_id.is_empty() {
+        None
+    } else {
+        Some(st.generation)
+    }
+}
+
 pub fn read_session(app: &AppHandle) -> Result<ScreenshotSessionDto, OcrErrorDto> {
     let session = app.state::<Arc<ScreenshotSession>>().inner().clone();
     let st = session.lock();

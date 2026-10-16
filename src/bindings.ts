@@ -79,6 +79,26 @@ export const commands = {
 	 *  注册失败必须原子回滚，否则快捷键状态会永久丢失（用户既用不了新键也丢了旧键）。
 	 */
 	setScreenshotShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_screenshot_shortcut", { shortcut })),
+	/**
+	 *  批量翻译截图块。
+	 * 
+	 *  # 为什么走 `translate_batch_with_cache`
+	 * 
+	 *  「术语库源端 → 缓存 → 引擎 → 缓存 → 译文端」的顺序已在该模块单测覆盖；
+	 *  此处若另写一份就是第四份复制，任何顺序修正都会漂移（见该模块文档）。
+	 * 
+	 *  # 逐项容错
+	 * 
+	 *  返回**整批级** `Err` 仅用于「引擎不可用」这类全局失败；单个块翻译失败
+	 *  走 `Vec` 里的 `failed: true`——用户需要能对失败块单独重试。
+	 */
+	translateScreenshotBlocks: (texts: string[], targetLang: string, engine: string | null, generation: number) => typedError<ScreenshotBlockResultDto[], TranslateErrorDto>(__TAURI_INVOKE("translate_screenshot_blocks", { texts, targetLang, engine, generation })),
+	/**
+	 *  把文本（通常是译文）送到主窗口编辑重译，并关闭覆盖窗。
+	 * 
+	 *  这是「OCR 结果可编辑」被砍掉后的替代路径（全局设计 §十二）。
+	 */
+	pushScreenshotTextToMain: (text: string) => typedError<null, string>(__TAURI_INVOKE("push_screenshot_text_to_main", { text })),
 };
 
 /* Types */
@@ -192,6 +212,25 @@ export type ProxyMode =
 "manual" | 
 /**  不使用代理：强制直连，忽略环境与系统代理 */
 "none";
+
+/**
+ *  单个块的翻译结果。
+ * 
+ *  字段刻意扁平（specta 禁嵌套 `Option`、禁 `u64`/`i64`）：
+ *  `failed` 与 `error_kind`/`error_message` 分开表达，前端无需解嵌套。
+ */
+export type ScreenshotBlockResultDto = {
+	/**  与请求下标一一对应，前端据此回填（**不能按数组顺序硬贴**） */
+	index: number,
+	/**  成功时为译文；失败时为空串 */
+	text: string,
+	failed: boolean,
+	/**  失败时的错误种类，供前端映射 i18n 文案 */
+	error_kind: ErrorKind | null,
+	error_message: string | null,
+	/**  实际执行引擎（可能因降级与请求不同） */
+	engine: string,
+};
 
 /**
  *  截图翻译的可用性探测结果。

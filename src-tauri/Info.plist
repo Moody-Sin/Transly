@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 屏幕录制权限：截图翻译需截取屏幕内容。
+	     缺失本键时 macOS 会直接终止进程（而非弹窗拒绝），故必须声明。 -->
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Transly 需要屏幕录制权限以截取您框选的屏幕区域进行文字识别与翻译。截图内容仅在内存中处理，不会保存到磁盘。</string>
+</dict>
+</plist>

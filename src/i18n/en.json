@@ -44,7 +44,11 @@
     "ocrOverwriteDesc": "The recognized text will replace the {n} characters you already typed and cannot be undone.",
     "ocrOverwriteConfirm": "Replace & Translate",
     "exportGlossaryCsv": "Export CSV",
-    "importGlossaryCsv": "Import CSV"
+    "importGlossaryCsv": "Import CSV",
+    "btnScreenshot": "Screenshot translate",
+    "screenshotUnsupported": "Screenshot capture is not supported in this environment",
+    "screenshotShortcutTitle": "Screenshot shortcut",
+    "screenshotShortcutDesc": "Press to select a screen region and translate it"
   },
   "history": {
     "tabTranslate": "Translate",
@@ -71,7 +75,11 @@
     "no_image": "No image in clipboard. Copy or take a screenshot first.",
     "no_language_pack": "System OCR language pack not installed.",
     "empty_text": "No readable text detected in image.",
-    "unsupported_platform": "OCR is not supported on this operating system.",
+    "unsupported_platform": "Screen capture translation is not supported in this environment.",
+    "tool_missing": "A required OCR component is missing. Install it and retry.",
+    "capture_failed": "Screen capture failed. The area may contain protected content or be restricted by the system.",
+    "permission_denied": "Screen recording permission not granted. Allow Transly in System Settings, then restart the app.",
+    "too_large": "The selected area is too large. Select a smaller region and retry.",
     "internal": "OCR processing failed, please retry."
   },
   "float": {
@@ -81,6 +89,17 @@
     "autoHideNotice": "Auto-hides on blur",
     "pin": "Pin window (keep visible on blur)",
     "unpin": "Unpin window (auto-hide on blur)"
+  },
+  "screenshot": {
+    "title": "Drag to select the area to translate",
+    "recognizing": "Recognizing…",
+    "sizeHint": "{w} × {h} px",
+    "showOriginal": "Show original",
+    "showTranslation": "Show translation",
+    "cancel": "Cancel (Esc)",
+    "translating": "Translating…",
+    "translateFailed": "Translation failed",
+    "sendToMain": "Send to main window"
   },
   "task": {
     "btnCancel": "Cancel",

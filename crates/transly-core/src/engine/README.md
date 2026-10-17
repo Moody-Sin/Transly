@@ -16,6 +16,7 @@
 ## 结构
 
 - **mod.rs**：核心 `TranslateEngine` trait 定义，规范单条翻译、流式输出（`translate_stream`）与批量逐项容错分片契约（`translate_batch_tolerant`），内置指数退避受控重试逻辑。
+- **batch_pipeline.rs**：`translate_batch_with_cache` 统一编排「源端术语库 → 查缓存 → 引擎（逐项容错）→ 写缓存 → 译文端术语库」。此前 `commands::translate`、`commands::selection.rs`、`server/mod.rs` 各有一份复制，任何一处顺序修正都会漂移；本模块是其中唯一的可单测实现。
 - **google.rs**：`GoogleWebEngine` 免密钥网页翻译适配，实现官方扩展标头（`dict-chrome-ex`）风控防护、多段换行自动切块与防超长分片。
 - **deepl.rs**：`DeepLEngine` 官方 API 适配，支持 Free/Pro 双端点切换、严格条数对齐与 50 项批量分片。
 - **openai.rs**：`OpenAIEngine` 大模型翻译适配（支持 OpenAI 与 DeepSeek），支持自定义 Base URL 端点、模型名、翻译风格（`TranslationStyle`）、本地离线模型（Ollama）免 Key 适配及 SSE 流式打字机输出。

@@ -747,6 +747,7 @@ pub async fn ocr_clipboard_image(
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
 }
 
+pub mod screenshot;
 pub mod selection;
 
 // 划词/浮窗相关符号平移至 `commands::selection`，此处重导出：
@@ -1219,27 +1220,30 @@ pub fn get_server_status(slot: tauri::State<'_, Arc<ServerStatusSlot>>) -> Serve
 
 /// 全局快捷键的注册状态。
 ///
-/// `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
-/// 格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
-/// 莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+/// `Alt+Shift+D` / `Alt+Shift+R` / `Alt+Shift+S` 是极易被其他软件占用的组合，
+/// 注册失败（被占用 / 格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，
+/// 用户只会看到「功能莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct ShortcutStatusDto {
-    /// 两个快捷键是否都注册成功
+    /// 三个快捷键是否都注册成功
     pub ok: bool,
-    /// 聚合失败原因（兼容旧字段，注册成功时为 None）
+    /// 聚合失败原因（兼容旧字段，全部成功时为 None）
     pub reason: Option<String>,
     /// 划词翻译快捷键注册失败原因（注册成功时为 None）
     pub translate_error: Option<String>,
     /// 划词原地替换快捷键注册失败原因（注册成功时为 None）
     pub replace_error: Option<String>,
+    /// 截图翻译快捷键注册失败原因（注册成功时为 None）
+    pub screenshot_error: Option<String>,
 }
 
 /// 快捷键注册状态槽位。与 `ServerStatusSlot` 同构（Tauri 按 TypeId 存 state）。
-/// 分离维护划词翻译与划词原地替换的错误状态，避免二者状态相互覆盖。
+/// 分离维护三个快捷键的错误状态，避免它们相互覆盖。
 #[derive(Debug, Default)]
 pub struct ShortcutStatusSlot {
     translate_error: std::sync::Mutex<Option<String>>,
     replace_error: std::sync::Mutex<Option<String>>,
+    screenshot_error: std::sync::Mutex<Option<String>>,
 }
 
 impl ShortcutStatusSlot {
@@ -1267,15 +1271,36 @@ impl ShortcutStatusSlot {
         }
     }
 
+    pub fn set_screenshot_ok(&self) {
+        if let Ok(mut slot) = self.screenshot_error.lock() {
+            *slot = None;
+        }
+    }
+
+    pub fn set_screenshot_failed(&self, reason: String) {
+        if let Ok(mut slot) = self.screenshot_error.lock() {
+            *slot = Some(reason);
+        }
+    }
+
     pub fn get(&self) -> ShortcutStatusDto {
         let t_err = self.translate_error.lock().ok().and_then(|g| g.clone());
         let r_err = self.replace_error.lock().ok().and_then(|g| g.clone());
+        let s_err = self.screenshot_error.lock().ok().and_then(|g| g.clone());
 
-        let reason = match (&t_err, &r_err) {
-            (None, None) => None,
-            (Some(t), None) => Some(t.clone()),
-            (None, Some(r)) => Some(r.clone()),
-            (Some(t), Some(r)) => Some(format!("{t}; {r}")),
+        // 用数组聚合而非两两 match：槽位从 2 个加到 3 个时，两两 match 会漏掉
+        // 新增的那个（这正是本阶段踩过的坑）。
+        let errors: Vec<&String> = [&t_err, &r_err, &s_err].into_iter().flatten().collect();
+        let reason = if errors.is_empty() {
+            None
+        } else {
+            Some(
+                errors
+                    .iter()
+                    .map(|e| e.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
         };
 
         ShortcutStatusDto {
@@ -1283,6 +1308,7 @@ impl ShortcutStatusSlot {
             reason,
             translate_error: t_err,
             replace_error: r_err,
+            screenshot_error: s_err,
         }
     }
 }
@@ -1856,6 +1882,44 @@ mod tests {
         assert_eq!(ok.reason, None);
         assert_eq!(ok.translate_error, None);
         assert_eq!(ok.replace_error, None);
+    }
+
+    /// 关键回归：截图快捷键（第三槽）必须独立于另两个槽位。
+    ///
+    /// 槽位从 2 个加到 3 个时，`reason` 若用两两 match 聚合就会漏掉第三槽；
+    /// 且「新增一个失败不得影响既有两个的状态」是产品硬要求
+    ///（三张设置卡片各自显示自己的冲突提示）。
+    #[test]
+    fn test_shortcut_status_slot_third_slot_is_independent() {
+        let slot = ShortcutStatusSlot::default();
+        assert!(slot.get().ok);
+
+        // 只截图快捷键失败：另两个必须仍为 None
+        slot.set_screenshot_failed("Alt+Shift+S: conflict".to_string());
+        let only_shot = slot.get();
+        assert!(!only_shot.ok);
+        assert_eq!(
+            only_shot.screenshot_error.as_deref(),
+            Some("Alt+Shift+S: conflict")
+        );
+        assert_eq!(only_shot.translate_error, None);
+        assert_eq!(only_shot.replace_error, None);
+        // reason 必须包含第三槽（两两 match 的实现在此会得到 None）
+        assert_eq!(only_shot.reason.as_deref(), Some("Alt+Shift+S: conflict"));
+
+        // 三个都失败：reason 必须聚合全部三条，不丢信息
+        slot.set_translate_failed("t".to_string());
+        slot.set_replace_failed("r".to_string());
+        let all = slot.get();
+        assert_eq!(all.reason.as_deref(), Some("t; r; Alt+Shift+S: conflict"));
+
+        // 截图槽修好不应影响另两个；反之亦然
+        slot.set_screenshot_ok();
+        let two = slot.get();
+        assert_eq!(two.screenshot_error, None);
+        assert_eq!(two.translate_error.as_deref(), Some("t"));
+        assert_eq!(two.replace_error.as_deref(), Some("r"));
+        assert_eq!(two.reason.as_deref(), Some("t; r"));
     }
 
     #[test]

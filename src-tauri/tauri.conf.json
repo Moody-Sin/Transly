@@ -34,7 +34,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:39281;"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:39281; img-src 'self' data: blob: translyshot: http://translyshot.localhost;"
     }
   },
   "bundle": {
@@ -45,6 +45,14 @@
       "icons/128x128.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "recommends": ["tesseract-ocr"]
+      },
+      "rpm": {
+        "recommends": ["tesseract"]
+      }
+    }
   }
 }

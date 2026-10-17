@@ -98,7 +98,7 @@ transly/
 │       ├── src/
 │       │   ├── lib.rs
 │       │   ├── engine/        # 翻译引擎抽象与实现 (DeepL, OpenAI, Google...)
-│       │   ├── ocr/           # OCR 辅助运算与 DTO
+│       │   ├── ocr/           # OCR 纯逻辑（几何/块聚合/TSV 解析/捕获判定）
 │       │   ├── cache.rs       # SQLite 缓存与全量历史流式导出
 │       │   ├── detector.rs    # Unicode 脚本离线语言检测与智能对转
 │       │   ├── preserve.rs    # Markdown 代码块占位保护与容错还原
@@ -119,7 +119,9 @@ transly/
 │   │   ├── engine_pool.rs     # 引擎实例池（读写锁 + spawn_blocking 凭据读取 + 代理热重载）
 │   │   ├── cache_controller.rs# 缓存开关 generation 门禁
 │   │   ├── clipboard_gate.rs  # 剪贴板去重与划词抑制判定（纯函数）
-│   │   ├── ocr.rs             # 平台原生 OCR（Windows WinRT，其余平台返回未支持）
+│   │   ├── ocr/               # 三平台 OCR（Windows WinRT / macOS Vision / Linux tesseract）
+│   │   ├── screencap/         # 三平台屏幕捕获（GDI BitBlt / CGDisplayCreateImage / X11 xcb）
+│   │   ├── overlay/           # 截图覆盖窗会话状态、生命周期与自定义 URI 取帧协议
 │   │   ├── proxy.rs           # Windows 注册表原生系统代理探测与自动/手动网络代理策略转换
 │   │   ├── storage.rs         # 应用数据目录解析（便携版支持）与旧版数据迁移
 │   │   └── secrets.rs         # 密钥读写（系统凭据管理器）
@@ -133,11 +135,12 @@ transly/
 │   ├── main.tsx               # 根入口路由分流（主窗口与 FloatWindow 分流）
 │   ├── App.tsx                # 桌面端主工作台视图、设置中心
 │   ├── FloatWindow.tsx        # 悬浮迷你查词窗独立组件（路由级解耦）
+│   ├── ScreenshotOverlay.tsx  # 截图覆盖窗（框选 + 译文层，路由级解耦）
 │   ├── HistoryPanel.tsx       # 翻译历史记录面板与全量流式导出
 │   ├── ShortcutRecorder.tsx   # 全局快捷键智能录制器
 │   ├── task/                  # 共享任务状态机、代际隔离、useTaskRunner 钩子
 │   ├── i18n/                  # zh-CN.json / en.json 国际化文案
-│   ├── utils/                 # 前端通用辅助工具（如 Web Speech 规范化）
+│   ├── utils/                 # 前端通用辅助工具（Web Speech 规范化、截图布局纯逻辑）
 │   └── bindings.ts            # tauri-specta 自动生成的类型与 API
 │
 ├── extension/                 # 浏览器插件 (Vite + 原生 TypeScript)
@@ -168,9 +171,13 @@ transly/
 - **选中文本翻译**：以“全局快捷键触发”为基准。逻辑为：用户选中文本 $\to$ 触发全局快捷键 $\to$ 模拟按键复制到剪贴板 $\to$ Rust 读取并恢复旧剪贴板内容 $\to$ 弹出浮窗。避免高侵入、高权限风险的全局鼠标监听。
 - **输入框即时翻译**：主窗口与常驻快捷浮窗内即输即译。
 - **剪贴板监听翻译**：用户可选开启，监听系统剪贴板变动，检测到文本自动弹窗/通知。
-- **截图 OCR 翻译**：
-  - 从系统剪贴板读取图片（用户自行截图/复制），或后续接入系统原生捕获能力。
-  - OCR 引擎同样抽象为 trait，优先接入云端 API 或系统原生 OCR（Windows Media OCR / macOS Vision），不将庞大离线模型打入主程序包。
+- **截图 OCR 翻译**：两个入口，共用同一套 OCR 与翻译链路。
+  - **框选截图翻译**：`Alt+Shift+S` / 托盘「截图翻译」/ 主窗口按钮三入口触发 → 选光标所在显示器 → 全屏冻结帧覆盖窗 → 拖拽框选 → 裁剪后 OCR → 按原坐标叠加译文。
+  - **剪贴板图片 OCR**：主输入框底栏「识别剪贴板图片」，用户自行截图/复制后识别。
+  - **OCR 三平台各自实现**，统一入口 `recognize_words`：Windows `Windows.Media.Ocr`、macOS Vision、Linux 外呼 `tesseract`（管道，零落盘）。不将庞大离线模型打入主程序包。
+  - **屏幕捕获三平台各自实现**，统一入口 `capture_monitor`：Windows GDI `BitBlt`、macOS `CGDisplayCreateImage`、Linux X11 `xcb`。**刻意不引入 `xcap`**（其 Linux 依赖链强制拉入 pipewire/libspa，在 Ubuntu 22.04 上编译失败）。
+  - **坐标契约是归一化矩形 `NormRect`**（原点左上，分量 ∈ `[0,1]`）：截图的物理像素与覆盖窗的 CSS 逻辑像素在任何 DPI 下都不相等，归一化后全链路零缩放系数。所有换算收口在 `transly-core`，禁止在宿主层或前端重新实现。
+  - **图像字节走自定义 URI 协议 `translyshot`**，绝不走 IPC：4K 帧约 33 MB，走 IPC 需 base64 再 `JSON.parse`，JS 堆峰值可达图像 3 倍。
 
 ### 翻译引擎
 - 可插拔设计，每个引擎实现统一 `TranslateEngine` trait
@@ -196,7 +203,9 @@ transly/
 ### 平台集成
 - 全局快捷键：`tauri-plugin-global-shortcut`
 - 剪贴板：`tauri-plugin-clipboard-manager`
-- 截图：`tauri-plugin-screenshot` 或自研（平台差异大，隔离在 platform 层）；当前仅支持从剪贴板读取图片
+- 截图：**三平台自研**（平台差异大，隔离在 `src-tauri/src/screencap/`）。冻结帧全程内存零落盘；Linux 仅支持 X11（Wayland 直接降级并给出 X11 指引，因为系统级截图 API 需落临时文件，且 compositor 不认置顶）。
+- OCR：**三平台自研**（`src-tauri/src/ocr/`）。Linux 依赖外部 `tesseract`，缺失时返回 `tool_missing` 并给出可执行的安装命令。
+- 截图覆盖窗：会话状态与窗口生命周期收口在 `src-tauri/src/overlay/`；窗口 label 必须是 `screenshot-*`（与 `capabilities/screenshot-overlay.json` 的通配一致，否则 ACL 静默拒绝）。
 - 系统托盘：Tauri 2 内置
 
 ### 多语言与国际化

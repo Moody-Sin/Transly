@@ -80,6 +80,9 @@ const TAURI_MOCK_INIT_SCRIPT = `
     clipboardMonitor: false,
     shortcut: "Alt+Shift+D",
     replaceShortcut: "Alt+Shift+R",
+    screenshotShortcut: "Alt+Shift+S",
+    screenshotShortcutError: null,
+    screenshotSupported: true,
     preferredReplaceEngine: "google",
     llmStyle: "general",
     apiKeys: {
@@ -238,8 +241,23 @@ const TAURI_MOCK_INIT_SCRIPT = `
             ok: true,
             reason: null,
             translate_error: null,
-            replace_error: null
+            replace_error: null,
+            screenshot_error: state.screenshotShortcutError
           };
+
+        case 'get_screenshot_capability':
+          return {
+            supported: state.screenshotSupported,
+            reason: state.screenshotSupported ? null : 'Wayland 会话下不支持框选截图',
+            ocr_available: true
+          };
+
+        case 'get_screenshot_shortcut':
+          return state.screenshotShortcut;
+
+        case 'set_screenshot_shortcut':
+          state.screenshotShortcut = args.shortcut;
+          return null;
 
         case 'get_shortcut':
           return state.shortcut;
@@ -367,6 +385,46 @@ const TAURI_MOCK_INIT_SCRIPT = `
 
         case 'ocr_clipboard_image':
           return '[OCR识别结果] Image text';
+
+        // 截图翻译：冻结帧用 data: URL 顶替自定义协议（浏览器环境里没有 tauri 协议；
+        // vite 构建产物不带 CSP，故 data URL 可用）。
+        case 'start_screenshot_translation':
+        case 'get_screenshot_session':
+          return {
+            session_id: 'e2e-shot-session',
+            image_url:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+            image_width: 1200,
+            image_height: 800,
+            generation: 7,
+            target_lang: 'zh-CN',
+            engine: 'google',
+          };
+
+        case 'recognize_screenshot_selection':
+          return [
+            { index: 0, text: 'Block zero', x: 0.1, y: 0.2, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
+            { index: 1, text: 'Block one', x: 0.1, y: 0.3, w: 0.3, h: 0.05, line_count: 1, confidence: 0.9 },
+          ];
+
+        case 'translate_screenshot_blocks': {
+          // 按 index 回填的验证依赖「译文与 index 绑定」，故译文里带上 index。
+          // 第 2 个块故意返回 failed，验证逐项容错。
+          return args.texts.map((t, i) => ({
+            index: i,
+            text: i === 1 ? '' : '[E2E译:' + args.targetLang + ':' + args.engine + '] ' + t,
+            failed: i === 1,
+            error_kind: i === 1 ? 'network' : null,
+            error_message: i === 1 ? 'E2E 模拟单块失败' : null,
+            engine: args.engine || 'google',
+          }));
+        }
+
+        case 'push_screenshot_text_to_main':
+          return null;
+
+        case 'cancel_screenshot_translation':
+          return null;
 
         default:
           console.warn('[Mock IPC] Unhandled cmd:', cmd, args);
@@ -673,6 +731,252 @@ async function runDesktopUiE2E() {
     await floatPage.close()
     console.log('✔ [用例 7] 迷你悬浮窗 (#float) 路由隔离、选区事件响应与交互成功')
 
+    // ==========================================
+    // 用例 8: 截图覆盖窗 (#shot) 框选与选区归一化
+    // ==========================================
+    console.log('[UI-E2E] 正在测试 [用例 8: 截图覆盖窗 (#shot) 框选交互]...')
+    const shotPage = await browser.newPage()
+    shotPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    shotPage.on('pageerror', (err) => consoleErrors.push(err.message))
+    await shotPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    // 视口固定为 1200×800，与 mock 的 image_width/image_height 一致，
+    // 使「物理像素 ↔ 归一化」换算可精确断言。
+    await shotPage.setViewportSize({ width: 1200, height: 800 })
+    await shotPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+
+    // 断言 1: 背景冻结帧已加载（src 非空且 complete）
+    const shotFrame = shotPage.locator('[data-testid="shot-frame"]')
+    await shotFrame.waitFor({ state: 'visible', timeout: 5000 })
+    const frameReady = await shotFrame.evaluate(
+      (el) => !!el.getAttribute('src') && el.complete && el.naturalWidth > 0,
+    )
+    assert(frameReady, '覆盖窗必须加载非空且已完成的冻结帧背景图')
+
+    const lastRecognizeArgs = async () => {
+      const logs = await shotPage.evaluate(() => window.__INVOKE_LOGS || [])
+      const calls = logs.filter((l) => l.cmd === 'recognize_screenshot_selection')
+      return calls.length ? calls[calls.length - 1].args.rect : null
+    }
+    const dragSelect = async (x0, y0, x1, y1) => {
+      await shotPage.mouse.move(x0, y0)
+      await shotPage.mouse.down()
+      await shotPage.mouse.move(x1, y1, { steps: 8 })
+      await shotPage.mouse.up()
+      await shotPage.waitForTimeout(250)
+    }
+    const assertRect = (rect, expected, label) => {
+      assert(rect, `${label}：必须调用 recognize_screenshot_selection`)
+      for (const [key, value] of Object.entries(expected)) {
+        assert(
+          Math.abs(rect[key] - value) < 0.001,
+          `${label}：选区 ${key} 应为 ${value}，实际 ${rect[key]}；完整入参 ${JSON.stringify(rect)}`,
+        )
+      }
+    }
+
+    // 断言 2: 正向框选 (240,160)→(720,480) 应得 {0.2, 0.2, 0.4, 0.4}
+    await dragSelect(240, 160, 720, 480)
+    assertRect(await lastRecognizeArgs(), { x: 0.2, y: 0.2, w: 0.4, h: 0.4 }, '正向框选')
+
+    // 断言 3: 拖出视口必须被钳制为 x+w ≤ 1、y+h ≤ 1
+    await dragSelect(600, 400, 2000, 1500)
+    assertRect(await lastRecognizeArgs(), { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, '越界框选')
+
+    // 断言 4: 反向拖拽必须得到与正向相同的正矩形（两角取 min）
+    await dragSelect(800, 600, 400, 300)
+    assertRect(
+      await lastRecognizeArgs(),
+      { x: 400 / 1200, y: 300 / 800, w: 400 / 1200, h: 300 / 800 },
+      '反向框选',
+    )
+
+    // 断言 5: 识别结果块按归一化坐标渲染成百分比定位
+    const shotBlocks = shotPage.locator('[data-testid="shot-block"]')
+    assert.strictEqual(await shotBlocks.count(), 2, '识别完成后必须渲染 2 个译文块')
+    assert.strictEqual(await shotBlocks.first().evaluate((el) => el.style.left), '10%')
+    assert.strictEqual(await shotBlocks.first().evaluate((el) => el.style.top), '20%')
+    assert.strictEqual(await shotBlocks.nth(1).evaluate((el) => el.style.top), '30%')
+
+    // 断言 6: 「还原原文」只隐藏译文层，不得卸载背景冻结帧
+    await shotPage.getByRole('button', { name: '还原原文' }).click()
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      0,
+      '还原原文后译文层必须不可见',
+    )
+    assert(await shotFrame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    // 断言 7: Esc 取消并关闭覆盖层
+    await shotPage.keyboard.press('Escape')
+    await shotPage.waitForTimeout(200)
+    const cancelCalled = await shotPage
+      .evaluate(() => window.__INVOKE_LOGS || [])
+      .then((logs) => logs.some((l) => l.cmd === 'cancel_screenshot_translation'))
+    assert(cancelCalled, 'Esc 必须调用 cancel_screenshot_translation')
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-frame"]').count(),
+      0,
+      'Esc 后覆盖层必须消失',
+    )
+
+    await shotPage.close()
+    console.log('✔ [用例 8] 截图覆盖窗框选、坐标归一化、译文层与取消闭环正常')
+
+    // ==========================================
+    // 用例 9: 截图翻译三入口与降级探测
+    // ==========================================
+    console.log('[UI-E2E] 正在测试 [用例 9: 截图翻译入口与降级探测]...')
+    const entryPage = await browser.newPage()
+    entryPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    entryPage.on('pageerror', (err) => consoleErrors.push(err.message))
+    await entryPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await entryPage.goto(`${baseUrl}/`, { waitUntil: 'networkidle' })
+
+    // 断言 1: 主窗口存在「截图翻译」按钮且可点击
+    const shotBtn = entryPage.getByRole('button', { name: /截图翻译|Screenshot translate/ }).first()
+    await shotBtn.waitFor({ state: 'visible', timeout: 5000 })
+    assert(!(await shotBtn.isDisabled()), '支持环境下截图按钮不应被禁用')
+
+    // 断言 2: 点击后必须调用 start_screenshot_translation（入口真的接通）
+    await shotBtn.click()
+    await entryPage.waitForTimeout(500)
+    const shotLogs = await entryPage.evaluate(() => window.__INVOKE_LOGS || [])
+    assert(
+      shotLogs.some((l) => l.cmd === 'start_screenshot_translation'),
+      '点击截图按钮必须调用 start_screenshot_translation',
+    )
+
+    // 断言 3: 设置中心存在第三个快捷键录制器，且冲突提示独立
+    await entryPage.getByRole('button', { name: '设置' }).click()
+    await entryPage.waitForSelector('text=截图翻译快捷键', { timeout: 5000 })
+    const recorders = await entryPage.locator('[data-testid="shortcut-recorder"]').count()
+    assert(recorders >= 3, `设置中心应有至少 3 个快捷键录制器，实际 ${recorders}`)
+
+    // 断言 4: 降级探测 —— supported=false 时按钮必须禁用且展示原因
+    const degraded = await browser.newPage()
+    degraded.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    degraded.on('pageerror', (err) => consoleErrors.push(err.message))
+    await degraded.addInitScript(`
+      (() => {
+        const original = window.__TAURI_INTERNALS__ ? null : null;
+      })();
+    `)
+    await degraded.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    // 覆写 mock：强制返回不支持
+    await degraded.addInitScript(`
+      (() => {
+        const orig = window.__TAURI_INTERNALS__.invoke;
+        window.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+          if (cmd === 'get_screenshot_capability') {
+            return { supported: false, reason: 'Wayland 会话下不支持框选截图', ocr_available: true };
+          }
+          return orig(cmd, args);
+        };
+      })();
+    `)
+    await degraded.goto(`${baseUrl}/`, { waitUntil: 'networkidle' })
+    const degradedBtn = degraded
+      .getByRole('button', { name: /截图翻译|Screenshot translate/ })
+      .first()
+    await degradedBtn.waitFor({ state: 'visible', timeout: 5000 })
+    assert(await degradedBtn.isDisabled(), '不支持环境下截图按钮必须禁用')
+    const degradedText = await degraded.textContent('body')
+    assert(
+      degradedText.includes('Wayland') || degradedText.includes('不支持框选截图'),
+      '不支持时必须展示可执行的原因，而不是静默禁用',
+    )
+
+    await entryPage.close()
+    await degraded.close()
+    console.log('✔ [用例 9] 截图入口接通、三快捷键卡片与降级禁用提示均正确')
+
+    // ==========================================
+    // 用例 10: 截图译文层（按 index 回填 / 逐项容错 / 切语言只重译）
+    // ==========================================
+    console.log('[UI-E2E] 正在测试 [用例 10: 截图译文层与切语言重译]...')
+    const trPage = await browser.newPage()
+    trPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text())
+    })
+    trPage.on('pageerror', (err) => consoleErrors.push(err.message))
+    await trPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await trPage.setViewportSize({ width: 1200, height: 800 })
+    await trPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+
+    const frame = trPage.locator('[data-testid="shot-frame"]')
+    await frame.waitFor({ state: 'visible', timeout: 5000 })
+    await trPage.waitForTimeout(600)
+
+    // 框选触发识别 + 自动翻译
+    await trPage.mouse.move(240, 160)
+    await trPage.mouse.down()
+    await trPage.mouse.move(720, 480, { steps: 8 })
+    await trPage.mouse.up()
+    await trPage.waitForTimeout(1200)
+
+    const blocks = trPage.locator('[data-testid="shot-block"]')
+    assert.strictEqual(await blocks.count(), 2, '识别后应有 2 个块')
+
+    // 断言 1: 译文按 index 回填 —— 块 0 的译文必须含 "Block zero"
+    const blockTexts = await blocks.allTextContents()
+    assert(
+      blockTexts[0].includes('Block zero'),
+      `块0 译文应按 index 回填到对应块，实际: ${blockTexts[0]}`,
+    )
+
+    // 断言 2: 逐项容错 —— 块 1 失败但块 0 正常显示译文
+    const failedCount = await trPage
+      .locator('[data-testid="shot-block"][data-failed="true"]')
+      .count()
+    assert.strictEqual(failedCount, 1, `应恰有 1 个失败块，实际 ${failedCount}`)
+    assert(blockTexts[0].includes('[E2E译:'), `块0 应显示译文而非原文，实际: ${blockTexts[0]}`)
+    assert(blockTexts[1].includes('Block one'), `失败块应回落到显示原文，实际: ${blockTexts[1]}`)
+    // 失败块必须有重试入口
+    assert.strictEqual(
+      await trPage.locator('[data-testid="shot-block-retry"]').count(),
+      1,
+      '失败块必须提供单块重试入口',
+    )
+
+    // 断言 3: 切语言只重发翻译，绝不重跑 OCR
+    const logsBefore = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const ocrBefore = logsBefore.filter((l) => l.cmd === 'recognize_screenshot_selection').length
+    const trBefore = logsBefore.filter((l) => l.cmd === 'translate_screenshot_blocks').length
+
+    await trPage.locator('[data-testid="shot-lang"]').selectOption('en')
+    await trPage.waitForTimeout(1000)
+
+    const logsAfter = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const ocrAfter = logsAfter.filter((l) => l.cmd === 'recognize_screenshot_selection').length
+    const trCalls = logsAfter.filter((l) => l.cmd === 'translate_screenshot_blocks')
+    assert.strictEqual(
+      ocrAfter,
+      ocrBefore,
+      '切语言不得重跑 OCR（块文本已在内存，OCR 又贵又不会变）',
+    )
+    assert(trCalls.length > trBefore, '切语言必须重新发起翻译')
+    assert.strictEqual(
+      trCalls[trCalls.length - 1].args.targetLang,
+      'en',
+      '重译必须携带新的 targetLang',
+    )
+
+    // 断言 4: 还原原文只隐藏译文层，背景图仍在
+    await trPage.getByRole('button', { name: '还原原文' }).click()
+    await trPage.waitForTimeout(200)
+    assert.strictEqual(await blocks.count(), 0, '还原原文后译文层必须不可见')
+    assert(await frame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    await trPage.close()
+    console.log('✔ [用例 10] 译文按 index 回填、单块容错、切语言只重译且还原原文正常')
+
     // 检查控制台异常
     assert.equal(
       consoleErrors.length,
@@ -681,7 +985,13 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 7 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 10 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log(
+      '⚠️ 覆盖范围声明：用例 8/9/10 走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
+        '只验证前端交互与状态流转，不代表真实屏幕捕获、自定义协议 translyshot、' +
+        '系统 OCR 与真实引擎翻译已验证——那四项需真机验收（Windows 侧已完成：' +
+        'GDI 捕获 + WinRT OCR + 真实 Google 引擎，含断网与代际闸门）。',
+    )
     console.log('========================================\n')
   } catch (err) {
     console.error('[UI-E2E Catch] 捕获到错误，控制台错误列表:', consoleErrors)

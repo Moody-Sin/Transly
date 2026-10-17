@@ -14,16 +14,21 @@ pub use cache::{CacheEntry, TranslationCache};
 pub use config::AppConfig;
 pub use detector::{detect_language, resolve_smart_target_lang};
 pub use engine::{
-    lookup_batch_with_fallback, lookup_cache_with_fallback, plan_batch_ranges, BatchItemRequest,
-    BatchItemResult, DeepLEngine, EngineCapabilities, GoogleWebEngine, OpenAIEngine,
+    lookup_batch_with_fallback, lookup_cache_with_fallback, plan_batch_ranges,
+    translate_batch_with_cache, BatchItemRequest, BatchItemResult, BatchPipelineDeps,
+    BatchPipelineOutcome, DeepLEngine, EngineCapabilities, GoogleWebEngine, OpenAIEngine,
     TranslateEngine, TranslationRequest, TranslationResponse, MAX_BATCH_ITEMS,
     MAX_BATCH_TOTAL_CHARS, MAX_ITEM_CHARS,
 };
 pub use error::{Error, ErrorKind, Result};
 pub use glossary::Glossary;
 pub use ocr::{
-    build_candidate_languages, clamp_dimensions, is_within_ocr_pixel_budget, rgba_to_bgra_in_place,
-    OcrErrorDto, OcrErrorKind,
+    bgrx_to_rgba_in_place, build_candidate_languages, clamp_dimensions, detect_wayland_session,
+    filter_blocks, find_monitor_for_point, is_capture_size_consistent, is_within_ocr_pixel_budget,
+    map_capture_error, merge_lines_into_paragraphs, merge_words_into_lines, parse_tesseract_tsv,
+    plan_block_batches, rgba_to_bgra_in_place, tesseract_lang_arg, words_to_blocks, MonitorRect,
+    NormRect, OcrBlockDto, OcrErrorDto, OcrErrorKind, OcrTsvError, PixelBox, ScreenshotSessionDto,
+    CAPTURE_SIZE_TOLERANCE, MIN_BLOCK_CONFIDENCE,
 };
 pub use preserve::{restore_code_blocks, stash_code_blocks, PreservedText};
 pub use proxy::{normalize_proxy_url, ProxyConfig, ProxyMode};

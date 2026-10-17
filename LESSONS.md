@@ -92,3 +92,78 @@
   - 一个模块**完全没有单测**（如 `pairing.rs`）本身就是风险信号：安全关键逻辑没有任何东西阻止后人调错常量。修复时应顺手把不变式写成断言，让「改坏参数」立刻被 CI 拦下。
 
 
+
+### 15. 上游库的「坐标单位」必须逐函数实测，同一 API 族内都可能自相矛盾
+- **现象**：`tao` 在 Linux 上，`Monitor::position()` / `size()` / `cursor_position()` 三个函数都做了 `LogicalPosition::to_physical(scale)`（返回**物理**像素），唯独 `monitor_from_point(x, y)` 把入参**原样喂给 GDK** 的 `monitor_at_point()`（GDK 吃**逻辑**坐标）。同一 crate、同一坐标域，入口单位与出口单位不一致。计划原本打算「用光标物理坐标调 `monitor_from_point` 定位覆盖窗」，在 `GDK_SCALE=2` 下会把物理坐标当逻辑坐标用，直接选错屏或返回 `None`。
+- **教训**：
+  - 跨库传坐标前，**必须打开上游源码逐个函数确认单位**，不能因为「同一个 struct 上的方法」就假定单位一致。已用探针在 Xvfb（`GDK_BACKEND=x11 GDK_SCALE=2`）实测：`Monitor::size()` 报 2560×1440、`cursor_position()` 报 (1800,900) 均为物理量，而逻辑框只有 1280×720 —— 两者不可能同时成立。
+  - **宁可不依赖可疑 API**：改为「取全部显示器 + 光标物理坐标，自己在 core 里做矩形包含判定」。纯几何逻辑可单测、可反向验证，比信任一个单位语义不明的上游函数安全得多。
+  - 同理，macOS 的 `Monitor::size()` 是 `CGDisplayPixelsWide()`（**已是物理像素**）再套 `from_logical()`（**再乘一次 scale**），Retina 下会双重放大；`position()` 却用 `CGDisplayBounds`（逻辑点）乘 scale（正确）。**捕获后必须做尺寸自校验**，这是唯一能同时兜住「上游单位改了」与「三平台 DPI 差异」的写法。
+  - 探针脚本用完即删（本次置于 `/tmp/probe`，不落仓库）。
+
+### 16. 依赖的「可选性」要按平台特性核算，不能按功能语义推断
+- **现象**：`xcap 0.9.8` 只在 Wayland 录屏路径用到 `pipewire/libspa`，从功能语义看「不支持 Wayland 就用不上」。但实际依赖树里 pipewire 是**非 optional** 的：`libspa 0.10.1` 无条件引用 `spa_video_info_raw.flags`（pipewire 1.0 才引入），在 Ubuntu 22.04（pipewire 0.3.48）上编译直接失败。CI 的 `ubuntu-latest`（24.04，pipewire 1.0.5）却能过——**同一份代码在开发机与 CI 上表现相反**，这类「只在旧发行版炸」的依赖最难在 CI 里暴露。
+- **教训**：
+  - 评估一个新依赖前，先 `cargo tree` 看**整棵依赖树**是否有非 optional 的重型系统依赖，而不是看文档里的功能描述。能用「零 build.rs、零系统头文件」的纯 Rust crate（如 `xcb`）就别引 C 绑定链。
+  - **反向验证同样适用于依赖**：CI 绿不等于能构建。若本机与 CI 的系统库版本不同，务必在本机也跑一次完整构建（本次正是本机先炸才发现的）。
+  - 移除该依赖后需回头**重估 CI 的 apt 清单**：原先为 xcap 准备的 `libpipewire-0.3-dev libwayland-dev libegl-dev libclang-dev pkg-config` 全部不再需要；`libxcb1-dev` 虽由 `libwebkit2gtk-4.1-dev → libgtk-3-dev → libx11-dev` 传递带入，仍应显式声明（它是我们代码的直接依赖，不该靠别人的传递依赖）。
+  - 另核实：`xcb` crate 的 randr 扩展**零 `extern "C"`**，全部走 X11 wire protocol（`xcb_get_conn_funcs!`），因此**不需要 `libxcb-randr.so` / `libxcb-randr0-dev`**——依赖是否真的需要某个 `.so`，要看生成的绑定里有没有 `#[link]`，不能靠包名猜。
+
+### 17. 「无法验证」时不要凭推测改动已通过的代码
+- **现象**：本次因工具链故障（Bash 分类器不可用）长时间无法运行 `cargo fmt` / `cargo clippy`。等待期间，我凭对借用检查器（RFC 1245 的 match 临时作用域、Polonius 限制）的**记忆与推测**，改写了 `merge_words_into_lines` 与 `merge_lines_into_paragraphs` 两处 `match` 结构，并给每处都写了「原写法必然编译失败」的断言式注释。而这批代码此前**确实编译并跑过测试**（4 个测试失败 → 修复 → 全绿 → 反向验证确认 FAILED），即原写法本就是对的。改动纯属无谓，且两处注释的论断我根本无法证实。
+- **教训**：
+  - **「已通过测试的代码」是比任何推测都强的证据**。在缺少编译器反馈时，风险只应通过**减少改动**来降低，绝不该通过**增加未经证实的改动**来降低。
+  - 注释里**不要写无法证伪的断言**（如「原写法必然编译失败」）。这类注释一旦写错，会把错误认知固化成后人信赖的「契约」，比没有注释更糟——与第 11 条「断言错误行为比不写测试更危险」同源。
+  - 想验证「某种写法是否编译得过」有零成本办法：写一个 5 行的**最小复现片段**单独试，而不是直接在业务代码里改一版赌它能过。本次连这步也没做，是纯粹的顺序错误。
+  - 推论：工具链不可用时，正确动作是**做只读的核查与调研**（本次查清了 xcb 的 `GetImage`/randr `GetMonitors` 精确签名、`OpenAIEngine` 等长保证等事实），或**写新代码**（新代码无论如何都要编译验证），而不是「顺手整理」已有代码。
+
+### 18. `#[cfg]` 的字面门控 ≠ 实际是否启用；feature 是否开启只能问 cargo
+- **现象**：写阶段 2 交接单时，我看到 `objc2-core-graphics` 的 `mod.rs` 里 `CGDisplayCreateImage` 标着 `#[cfg(all(feature = "CGDirectDisplay", feature = "CGImage"))]`，而 `Cargo.toml` 只写了 `features = ["CGImage"]`，于是断言「必须补 `CGDirectDisplay`，否则 macOS 编译失败」，并把它列为「会导致编译失败的实际缺陷，必须顺带修掉」。**这是错的**：`CGImage` 所在 crate 的 `default` feature 列表**本身就含** `CGDirectDisplay`，而我们没设 `default-features = false`，两者本来就是开着的。`cargo tree --target aarch64-apple-darwin -e features -i objc2-core-graphics` 直接列出 `feature "CGDirectDisplay"` 已启用。若真按这条断言改了 `Cargo.toml`，就是给后人留一条无从证实的「必须」。
+- **教训**：
+  - **cargo feature 是跨依赖边求并集的**：看到某个 `#[cfg(feature = ...)]`，不能只看「我这一行写了什么」，还要看**同一 crate 的 default 列表**、以及**其他依赖方是否也声明了它**。判定的唯一可靠来源是 `cargo tree -e features`，不是阅读 `#[cfg]`。
+  - 引用上游 `#[cfg]` 门控作为「会编译失败」的证据时，**必须同时给出 feature 求并集后的实际状态**。只引 `#[cfg]` 是**片面的证据**，得不出结论。
+  - 这条是第 17 条的同型复发：**在无法执行验证的环境里，凭局部证据写下了强断言**。当时的正确动作就是跑那条 `cargo tree`——它零成本、只读、且立刻就给出了反证。**「差一步就能验证」不等于「无法验证」**，不许用后者为自己的推测免责。
+  - 附带查实的真实陷阱（替换掉了上面那条错的）：该函数带 `#[deprecated]`，**`-D warnings` 下必须 `#[allow(deprecated)]`**——这才是 macOS 分支真正会踩的坑。
+
+### 19. 宿主 clippy 看不到被 `cfg` 剔除的平台代码，必须另找类型检查途径
+- **现象**：`src-tauri/src/screencap/{windows,macos}.rs` 在 Linux 上被三段式 `cfg` 整个剔除，`cargo clippy --workspace --all-targets -- -D warnings` **完全不会编译它们**。其中真实的类型错误（`unwrap_or_else(CGMainDisplayID)` 因为 `extern "C-unwind" fn` 不实现 `FnOnce()` 而编不过）与 clippy 缺陷（`BITMAPINFO::default()` 后逐字段赋值触发 `field_reassign_with_default`）在本机全部静默通过，只会在 CI 的 macOS/Windows runner 上炸。
+- **教训**：
+  - 「本机 clippy 通过」对 `#[cfg]` 剔除的平台代码**零证据价值**。写完平台分支后必须显式确认这份代码被编译过。
+  - 整仓交叉 `cargo check --target <triple>` 常被无关的原生构建脚本挡住（本次 Windows 卡在 `webview2-com-sys`/`ring` 的 `lib.exe`，macOS 卡在 `objc2-exception-helper`/`libsqlite3-sys` 的 SDK）。**绕法**：在 `/tmp` 建一个只依赖该平台 crate（`windows` / `objc2-core-graphics`）并 `include` 真实源文件（用 sed 把 `use transly_core::...` 换成桩模块）的**隔离 scratch crate**，再 `cargo clippy --target <triple> -- -D warnings`。本次据此修掉 2 处真实缺陷。
+  - scratch crate 必须建在 `/tmp`、用完即删，不得落仓库。
+
+### 20. specta 把非 Option 的 `f32` 也生成为 `number | null`
+- **现象**：`NormRect`/`OcrBlockDto` 里 `pub x: f32` 经 specta 生成的 TS 是 `x: number | null`（f32 无法表达 NaN/Infinity，故映射为可空）。前端按 `number` 写 `rect.x * 100` 会直接 `TS18047: possibly null`；`ScreenshotSessionDto` 的字段名也保持 snake_case（`image_url`），不是 camelCase。
+- **教训**：新增 IPC 结构前先跑 `cargo run -p src-tauri --bin export_bindings` 并**按生成的 `bindings.ts` 写前端**，不要按 Rust 源码推测字段名与可空性。前端内部计算用的矩形另起一个字段非空的本地类型（结构上仍可直接作为参数传入），避免把可空性扩散到全部算术。
+
+### 21. 全屏覆盖窗的「假失焦」必须在建窗后设宽限期，否则窗口一闪即关
+- **现象**：阶段 2 的覆盖窗在 Windows 真机上**创建后 52ms 就自我销毁**（CDP Target 事件时间线：`+980ms created` → `+1113ms 加载 #shot` → `+1165ms destroyed`）。根因是既有的 `focused_once` 守卫只挡「建窗**前**的假失焦」，挡不住建窗**后**紧跟着的那次：`set_focus()` 的成功回调早于窗口真正稳定持有焦点，系统随即把焦点还给上一个前台窗口，于是 `Focused(true)` 之后紧跟 `Focused(false)`，守卫判定「用户点了别处」→ `cancel()`。功能完全不可用（窗口一闪即关，用户根本来不及框选）。
+- **教训**：
+  - 「拿到过焦点」**不等于**「焦点已稳定」。任何「失焦即收起」的全屏窗（截图覆盖、取色器、画中画）都要在**建窗后**再设一段宽限期，而不只是「先见过一次 true」。本实现取 1.2s（实测窗口初始化 < 200ms），并用 `created_at: Instant` 落地。
+  - 这类缺陷**在单测和前端 E2E 里 100% 看不见**：它们不经过真实窗口管理器，`Focused` 事件根本不产生。**只有真机跑起来才能暴露**——这正是「优先使用真实端到端测试验证」的价值所在。
+  - 定位手法可复用：用 CDP 的 `Target.setDiscoverTargets` 订阅 `targetCreated`/`targetDestroyed`，能得到窗口生灭的**精确毫秒时间线**，比轮询页面列表可靠得多（后者受 Playwright 目标发现延迟干扰，曾让我误判成「窗口从未出现」）。
+
+### 22. `destroy()` 是异步的，`is_visible()` 也不是「像素已撤下」的可靠信号
+- **现象**：连按两次截图快捷键时，第二张冻结帧里叠着**上一次的框选工具栏**（放大后清晰可读「拖动框选要翻译的区域」「取消（Esc）」）。根因：`close_existing_overlays()` 用异步的 `destroy()` 关旧窗后**立刻**捕获屏幕，而旧窗的像素此时仍在屏上（实测 `destroy()` 返回后约 1.1s 才真正消失）。
+- **更隐蔽的一层**：第一版修复用 `hide()` + 轮询 `is_visible()` 等待，**仍然复现**。因为 `hide()` 一调用 `is_visible()` 立刻返回 `false`，但 DWM 合成器要再过几帧才把窗口像素从屏幕上撤下——**`is_visible()` 反映的是窗口的可见标志，不是屏幕上的实际像素**。最终解法是在确认不可见后**再补一段真实沉降等待**（250ms）。
+- **教训**：
+  - 任何「先关窗、再截屏」的流程都必须问一句：**我等的这个信号，是否等价于「像素已从屏幕上消失」？** 窗口 API 的可见性/销毁状态都不是。
+  - 修复这类竞态不能只靠「加 await」——必须先测量真实延迟（本次用 CDP Target 事件量到 1.1s），再据此设等待与超时，并保留「超时不阻断功能、但要打印诊断」的降级。
+  - 验证方式同样要防自欺：**把两帧的同一区域裁切放大后并排比对**，才能确认工具栏文字真的消失。靠「区域平均亮度」这类启发式会误报（终端白字同样很亮，本次就先误报后误证了一轮）。
+
+### 23. `tesseract` 的 `tsv` 必须放在选项**之后**，否则静默输出乱码而非报错
+- **现象**：写 `tesseract - - tsv -l chi_sim` 时，识别结果是一堆垃圾（`你好世界` → `Prof`/`F-`/`MR`；`测试文本识别` → `ITATWRA`），**且没有任何报错**。一度误判为「Ubuntu 22.04 自带的 2018 版 chi_sim 数据质量太差」，甚至去下载了 tessdata_best 想替换。
+- **真相**：`tsv` 是**输出格式配置名**，必须作为最后一个位置参数（`tesseract - - -l chi_sim tsv`），放在选项之前时会被当成**输入文件名**解析。正确用法下，2018 版老数据识别中文 conf 达 89–96（`你好世界`、`测试文本识别` 全对），**根本不需要换数据**。
+- **教训**：
+  - 外部 CLI 的**参数顺序**是一份隐性契约，写错时往往**不报错而是给错结果**。集成任何 CLI 前必须先用手工构造的最小样例（自己画一张已知文字的图）跑通并**肉眼核对输出**，不能只看退出码。
+  - 排查「识别质量差」时，先分三步证伪：① 输入图是否真的含清晰文字（**把图读出来看**）；② CLI 调用是否正确（换一种等价写法对比）；③ 才是模型/数据质量。本次在 ① ② 都未验证时就跳到 ③，白下了 28MB 数据。
+  - 同时确认了 `-l chi_sim+eng` 与单独 `-l chi_sim` 在本机都能正确识别中英混合文本，故语言包拼接策略不必为「英文必须单独加载」而复杂化。
+  - 另：`TESSDATA_PREFIX` 在 tesseract 4.1.1 上行为不可靠（指向父目录与指向 tessdata 目录本身都曾失败），**`--tessdata-dir` 参数才是可靠用法**；若非必要不要依赖该环境变量。
+
+### 24. 注册快捷键前「先注销目标键」会静默抢走别的功能的快捷键
+- **现象**：阶段 5 的 `set_screenshot_shortcut` 照抄既有两份快捷键的实现，在注册前先 `unregister(clean)`（本意是避开「用户没改键却重复保存」的 `AlreadyRegistered`）。真机实测：把截图键设成划词已占用的 `Alt+Shift+D` 时，**函数返回 `Ok`、`screenshot_error` 为 `null`、UI 毫无告警**，而划词的快捷键已被悄悄注销——用户会发现「划词突然不工作了」且查不到任何原因。
+- **根因**：`unregister(clean)` 无条件注销该加速键，**不区分它是谁注册的**。注销后 `on_shortcut` 自然注册成功，于是「冲突」被自己抹平了。
+- **教训**：
+  - 「先注销再注册」只对**自己拥有的资源**成立。多路功能共用一个全局命名空间（全局快捷键、系统托盘、单例锁、注册表键）时，**只能注销自己上次注册的那个值**，然后把冲突如实报给用户。让 `on_shortcut` 返回 `AlreadyRegistered` 才是正确行为——那正是设置页要展示的信息。
+  - 这类缺陷**单测和前端 E2E 都抓不到**：mock 里没有真实的 OS 级注册表，`AlreadyRegistered` 根本不会发生。**只有真机注入真实快捷键才暴露**（本次靠 Playwright `Input.dispatchKeyEvent` + 真实 `on_shortcut` 复现）。凡是「与操作系统共享命名空间」的逻辑，都必须有真机验收环节。
+  - 排查时先做**对照实验**：同一段代码在「目标键空闲」与「目标键被占用」两种输入下的返回值差异，直接指向了「注销抹平冲突」这个根因。

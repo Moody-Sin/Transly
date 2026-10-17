@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+pub mod batch_pipeline;
 pub mod deepl;
 pub mod google;
 pub mod offline;
 pub mod openai;
+pub use batch_pipeline::{translate_batch_with_cache, BatchPipelineDeps, BatchPipelineOutcome};
 pub use deepl::DeepLEngine;
 pub use google::GoogleWebEngine;
 pub use offline::OfflineEngine;

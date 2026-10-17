@@ -44,7 +44,11 @@
     "ocrOverwriteDesc": "识别结果将替换输入框中已输入的 {n} 个字符，且无法撤销。",
     "ocrOverwriteConfirm": "覆盖并翻译",
     "exportGlossaryCsv": "导出 CSV",
-    "importGlossaryCsv": "导入 CSV"
+    "importGlossaryCsv": "导入 CSV",
+    "btnScreenshot": "截图翻译",
+    "screenshotUnsupported": "当前环境不支持框选截图",
+    "screenshotShortcutTitle": "截图翻译快捷键",
+    "screenshotShortcutDesc": "按此键框选屏幕区域并识别翻译"
   },
   "history": {
     "tabTranslate": "翻译",
@@ -71,7 +75,11 @@
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",
     "no_language_pack": "系统未安装 OCR 语言包，请在 Windows 设置中安装",
     "empty_text": "未能从图片中识别到有效文字",
-    "unsupported_platform": "当前操作系统暂未支持图片识别",
+    "unsupported_platform": "当前系统环境不支持屏幕截图翻译",
+    "tool_missing": "缺少必要的 OCR 组件，请按提示安装后重试",
+    "capture_failed": "屏幕捕获失败，该区域可能包含受保护内容或被系统限制",
+    "permission_denied": "未授予屏幕录制权限，请在系统设置中允许 Transly 后重启应用",
+    "too_large": "所选区域过大，请缩小范围后重试",
     "internal": "图片识别内部异常，请重试"
   },
   "float": {
@@ -81,6 +89,17 @@
     "autoHideNotice": "失焦自动收起",
     "pin": "固定置顶（失焦不收起）",
     "unpin": "取消置顶（失焦自动收起）"
+  },
+  "screenshot": {
+    "title": "拖动框选要翻译的区域",
+    "recognizing": "识别中…",
+    "sizeHint": "{w} × {h} px",
+    "showOriginal": "还原原文",
+    "showTranslation": "显示译文",
+    "cancel": "取消（Esc）",
+    "translating": "翻译中…",
+    "translateFailed": "翻译失败",
+    "sendToMain": "发送到主窗口"
   },
   "task": {
     "btnCancel": "取消",

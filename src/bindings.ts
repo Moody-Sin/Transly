@@ -59,6 +59,46 @@ export const commands = {
 	savePreferredReplaceEngine: (engine: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_replace_engine", { engine })),
 	getProxyConfig: () => typedError<ProxyConfig, string>(__TAURI_INVOKE("get_proxy_config")),
 	saveProxyConfig: (config: ProxyConfig) => typedError<null, string>(__TAURI_INVOKE("save_proxy_config", { config })),
+	/**  触发一次截图翻译：选光标所在显示器、捕获冻结帧并弹出覆盖窗。 */
+	startScreenshotTranslation: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("start_screenshot_translation")),
+	/**  读取当前截图会话。幂等读，供覆盖窗挂载（含 StrictMode 二次执行）使用。 */
+	getScreenshotSession: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("get_screenshot_session")),
+	/**  提交框选区域，返回归一化到整张冻结帧的 OCR 块。 */
+	recognizeScreenshotSelection: (rect: NormRect, generation: number) => typedError<OcrBlockDto[], OcrErrorDto>(__TAURI_INVOKE("recognize_screenshot_selection", { rect, generation })),
+	/**  取消并关闭覆盖窗。 */
+	cancelScreenshotTranslation: () => typedError<null, string>(__TAURI_INVOKE("cancel_screenshot_translation")),
+	/**  探测当前环境的截图翻译能力。 */
+	getScreenshotCapability: () => __TAURI_INVOKE<ScreenshotCapabilityDto>("get_screenshot_capability"),
+	/**  读取截图翻译快捷键。 */
+	getScreenshotShortcut: () => typedError<string, string>(__TAURI_INVOKE("get_screenshot_shortcut")),
+	/**
+	 *  设置截图翻译快捷键。
+	 * 
+	 *  与既有 `set_shortcut` / `set_replace_shortcut` 同构的四段式：
+	 *  注销旧键 → 注册新键 → 失败则回滚重注旧键 → 持久化（持久化失败也回滚）。
+	 *  注册失败必须原子回滚，否则快捷键状态会永久丢失（用户既用不了新键也丢了旧键）。
+	 */
+	setScreenshotShortcut: (shortcut: string) => typedError<null, string>(__TAURI_INVOKE("set_screenshot_shortcut", { shortcut })),
+	/**
+	 *  批量翻译截图块。
+	 * 
+	 *  # 为什么走 `translate_batch_with_cache`
+	 * 
+	 *  「术语库源端 → 缓存 → 引擎 → 缓存 → 译文端」的顺序已在该模块单测覆盖；
+	 *  此处若另写一份就是第四份复制，任何顺序修正都会漂移（见该模块文档）。
+	 * 
+	 *  # 逐项容错
+	 * 
+	 *  返回**整批级** `Err` 仅用于「引擎不可用」这类全局失败；单个块翻译失败
+	 *  走 `Vec` 里的 `failed: true`——用户需要能对失败块单独重试。
+	 */
+	translateScreenshotBlocks: (texts: string[], targetLang: string, engine: string | null, generation: number) => typedError<ScreenshotBlockResultDto[], TranslateErrorDto>(__TAURI_INVOKE("translate_screenshot_blocks", { texts, targetLang, engine, generation })),
+	/**
+	 *  把文本（通常是译文）送到主窗口编辑重译，并关闭覆盖窗。
+	 * 
+	 *  这是「OCR 结果可编辑」被砍掉后的替代路径（全局设计 §十二）。
+	 */
+	pushScreenshotTextToMain: (text: string) => typedError<null, string>(__TAURI_INVOKE("push_screenshot_text_to_main", { text })),
 };
 
 /* Types */
@@ -106,12 +146,47 @@ export type LlmConfigDto = {
 	model: string | null,
 };
 
+/**  归一化矩形。原点左上，分量 ∈ `[0,1]`。 */
+export type NormRect = {
+	x: number | null,
+	y: number | null,
+	w: number | null,
+	h: number | null,
+};
+
+/**
+ *  送往前端的 OCR 文字块。
+ * 
+ *  坐标是**相对喂给 OCR 那张图**的归一化值（原点左上）。
+ */
+export type OcrBlockDto = {
+	/**  稳定序号（与请求数组下标一致，供前端按 id 回填译文） */
+	index: number,
+	text: string,
+	x: number | null,
+	y: number | null,
+	w: number | null,
+	h: number | null,
+	/**  段落内行数（前端据此估算行高与字号） */
+	line_count: number,
+	/**  置信度 ∈ [0,1]；引擎不提供时为 `None` */
+	confidence: number | null,
+};
+
 export type OcrErrorDto = {
 	kind: OcrErrorKind,
 	message: string,
 };
 
-export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "unsupported_platform" | "internal";
+export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "unsupported_platform" | 
+/**  缺少必要的系统组件或外部工具（如 Linux 未安装 tesseract） */
+"tool_missing" | 
+/**  屏幕捕获失败（受保护窗口、显示器休眠、系统限制） */
+"capture_failed" | 
+/**  系统未授予屏幕录制/捕获权限 */
+"permission_denied" | 
+/**  图像或选区超出处理预算 */
+"too_large" | "internal";
 
 export type PendingFloatResponse = {
 	has_request: boolean,
@@ -139,6 +214,63 @@ export type ProxyMode =
 "none";
 
 /**
+ *  单个块的翻译结果。
+ * 
+ *  字段刻意扁平（specta 禁嵌套 `Option`、禁 `u64`/`i64`）：
+ *  `failed` 与 `error_kind`/`error_message` 分开表达，前端无需解嵌套。
+ */
+export type ScreenshotBlockResultDto = {
+	/**  与请求下标一一对应，前端据此回填（**不能按数组顺序硬贴**） */
+	index: number,
+	/**  成功时为译文；失败时为空串 */
+	text: string,
+	failed: boolean,
+	/**  失败时的错误种类，供前端映射 i18n 文案 */
+	error_kind: ErrorKind | null,
+	error_message: string | null,
+	/**  实际执行引擎（可能因降级与请求不同） */
+	engine: string,
+};
+
+/**
+ *  截图翻译的可用性探测结果。
+ * 
+ *  供 UI 在**真正尝试之前**就告知用户环境是否支持，避免用户按了快捷键
+ *  却只得到一个失败提示。探测只回答「理论上能不能」，**不真的去捕获屏幕**
+ *  （那会闪一下且开销大，且权限类问题只能在捕获时才能确定）。
+ */
+export type ScreenshotCapabilityDto = {
+	/**  当前环境是否支持框选截图 */
+	supported: boolean,
+	/**  不支持时的**可执行**原因（直接展示给用户，UI 不要自己再拼文案） */
+	reason: string | null,
+	/**  OCR 后端是否可用（Linux 依赖外部 tesseract，Windows/macOS 为系统原生） */
+	ocr_available: boolean,
+};
+
+/**
+ *  一次截图翻译会话（跨 IPC 边界传递的元数据，**不含图像字节**）。
+ * 
+ *  图像走自定义 URI 协议，故本结构只携带定位与状态信息。
+ *  所有几何量均为归一化或物理量，前端不做 DPI 换算。
+ */
+export type ScreenshotSessionDto = {
+	/**  会话标识（自定义协议 URL 的一部分，防陈旧窗口读到新会话图） */
+	session_id: string,
+	/**  冻结帧的完整 URL（由 Rust 按平台拼好，前端不做平台判断） */
+	image_url: string,
+	/**  冻结帧的**物理**像素尺寸（供前端换算选区像素数展示） */
+	image_width: number,
+	image_height: number,
+	/**  会话代际（异步命令落地前比对，不等则丢弃） */
+	generation: number,
+	/**  当前目标语言（供覆盖窗初始化下拉框） */
+	target_lang: string,
+	/**  当前引擎 id */
+	engine: string,
+};
+
+/**
  *  本地 HTTP 服务（供浏览器插件调用）的运行状态。
  * 
  *  服务在后台异步启动，失败只进 stderr 的话用户完全无感：
@@ -155,19 +287,21 @@ export type ServerStatus =
 /**
  *  全局快捷键的注册状态。
  * 
- *  `Alt+Shift+D` / `Alt+Shift+R` 是极易被其他软件占用的组合，注册失败（被占用 /
- *  格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，用户只会看到「划词功能
- *  莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
+ *  `Alt+Shift+D` / `Alt+Shift+R` / `Alt+Shift+S` 是极易被其他软件占用的组合，
+ *  注册失败（被占用 / 格式非法 / 权限不足）属于高频场景。若把结果直接丢弃，
+ *  用户只会看到「功能莫名其妙不工作」且没有任何线索。因此必须把结果暴露出来。
  */
 export type ShortcutStatusDto = {
-	/**  两个快捷键是否都注册成功 */
+	/**  三个快捷键是否都注册成功 */
 	ok: boolean,
-	/**  聚合失败原因（兼容旧字段，注册成功时为 None） */
+	/**  聚合失败原因（兼容旧字段，全部成功时为 None） */
 	reason: string | null,
 	/**  划词翻译快捷键注册失败原因（注册成功时为 None） */
 	translate_error: string | null,
 	/**  划词原地替换快捷键注册失败原因（注册成功时为 None） */
 	replace_error: string | null,
+	/**  截图翻译快捷键注册失败原因（注册成功时为 None） */
+	screenshot_error: string | null,
 };
 
 /**  结构化翻译错误：kind 供 UI 分类展示，retryable 供 UI 决定是否提供重试入口 */

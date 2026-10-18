@@ -102,6 +102,7 @@ export const commands = {
 	 */
 	pushScreenshotTextToMain: (text: string) => typedError<null, string>(__TAURI_INVOKE("push_screenshot_text_to_main", { text })),
 	translateDocument: (content: string, format: DocumentFormat, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<DocumentTranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_document", { content, format, sourceLang, targetLang, engineName })),
+	getOfflineEngineStatus: () => typedError<OfflineEngineStatusDto, string>(__TAURI_INVOKE("get_offline_engine_status")),
 };
 
 /* Types */
@@ -202,6 +203,18 @@ export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "uns
 "permission_denied" | 
 /**  图像或选区超出处理预算 */
 "too_large" | "internal";
+
+/**  离线引擎运行状态与模型配置 DTO */
+export type OfflineEngineStatusDto = {
+	/**  内置词库词条总数 */
+	lexicon_entries_count: number,
+	/**  是否加载/检测到了外部本地模型 */
+	has_local_model: boolean,
+	/**  外部模型文件名（若检测到） */
+	local_model_name: string | null,
+	/**  本地模型扫描目录路径 */
+	model_dir: string,
+};
 
 export type PendingFloatResponse = {
 	has_request: boolean,

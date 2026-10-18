@@ -235,6 +235,14 @@ const TAURI_MOCK_INIT_SCRIPT = `
             fallback_engine: null
           };
 
+        case 'get_offline_engine_status':
+          return {
+            lexicon_entries_count: 120,
+            has_local_model: false,
+            local_model_name: null,
+            model_dir: '/mock/app/data/models'
+          };
+
         case 'get_server_token':
           return state.serverToken;
 

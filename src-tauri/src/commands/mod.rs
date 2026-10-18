@@ -747,6 +747,26 @@ pub async fn ocr_clipboard_image(
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn get_offline_engine_status(
+    app: tauri::AppHandle,
+) -> Result<transly_core::OfflineEngineStatusDto, String> {
+    let (data_dir, _) = crate::storage::resolve_data_dir(&app.config().identifier);
+    let models_dir = data_dir.join("models");
+    let _ = std::fs::create_dir_all(&models_dir);
+
+    let (has_local_model, local_model_name) =
+        transly_core::engine::offline::inspect_local_models(&models_dir);
+
+    Ok(transly_core::OfflineEngineStatusDto {
+        lexicon_entries_count: transly_core::engine::offline::get_lexicon_entries_count(),
+        has_local_model,
+        local_model_name,
+        model_dir: models_dir.to_string_lossy().to_string(),
+    })
+}
+
 pub mod document;
 pub mod screenshot;
 pub mod selection;

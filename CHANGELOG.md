@@ -16,6 +16,10 @@
   - **输入框原地翻译替换 (`selection/index.ts`, `background/index.ts`)**：支持通过快捷键 `Alt+Shift+R` 或右键「Transly 原地翻译替换」，将网页内 `input` 与 `textarea` 中选中的文本或完整内容原地翻译为目标语言；采用原型属性 setter 绕过 React/Vue 受控属性劫持并派发原生 `input`/`change` 事件，确保表单与框架状态机 100% 同步；
   - **站点级规则精细化配置 (`popup/index.ts`, `siteRules.ts`, `content/index.ts`)**：Popup 扩展折叠式站点规则卡片，支持为特定域名单独配置排除 CSS 选择器（如 `.code, pre, .comments`，防爆语法校验）、站点专属目标语言绑定（如特定外文站点固定直译），以及站点级输入助手禁用开关；
   - **构建产物 IIFE 隔离与防重声明 (`build.mjs`)**：将非 background 脚本（`content`、`selection`、`popup`）构建格式收口为独立 `iife` 并命名空间隔离，消除多次执行脚本时的顶层作用域标识符冲突。
+- **嵌入式离线混合翻译引擎与本地模型扩展 (`transly-core/src/engine/offline/`, `src-tauri/`)**：
+  - **内置高频与开发词库矩阵 (`lexicon.rs`)**：重构 `OfflineEngine` 为混合离线架构，内置百余项覆盖计算机、软件工程、界面交互、礼貌用语与高频词汇的 Aho-Corasick 双向自动机；支持 CJK 与西文词边界严格校验（防止词内误伤）及中英文标点智能双向对转；
+  - **本地模型自动探测与扩展契约 (`model.rs`, `storage.rs`)**：自动扫描 `<app_data_dir>/models/` 目录，探测并自适应支持 `.onnx` / `.bin` / `.gguf` 外部离线模型文件，在未放置外部模型时安全降级为内置词库模式，绝不崩溃报错；
+  - **设置中心离线引擎状态面板 (`App.tsx`)**：设置对话框新增「纯本地离线引擎与模型」卡片，实时展示内置词库就绪状态、外部模型装载状态以及本地模型扫描目录路径。
 
 
 ## [0.4.1] - 2026-10-18

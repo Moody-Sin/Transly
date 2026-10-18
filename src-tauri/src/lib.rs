@@ -82,7 +82,8 @@ macro_rules! app_command_builder {
             $crate::commands::screenshot::set_screenshot_shortcut,
             $crate::commands::screenshot::translate_screenshot_blocks,
             $crate::commands::screenshot::push_screenshot_text_to_main,
-            $crate::commands::document::translate_document
+            $crate::commands::document::translate_document,
+            $crate::commands::get_offline_engine_status
         ])
     };
 }

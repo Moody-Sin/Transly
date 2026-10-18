@@ -9,7 +9,7 @@ pub mod openai;
 pub use batch_pipeline::{translate_batch_with_cache, BatchPipelineDeps, BatchPipelineOutcome};
 pub use deepl::DeepLEngine;
 pub use google::GoogleWebEngine;
-pub use offline::OfflineEngine;
+pub use offline::{OfflineEngine, OfflineEngineStatusDto};
 pub use openai::OpenAIEngine;
 
 use crate::{error::ErrorKind, Result};

@@ -14,7 +14,12 @@ import {
   Volume2,
 } from 'lucide-react'
 import { commands } from './bindings'
-import type { EngineCapabilitiesDto, ProxyMode, ServerStatus } from './bindings'
+import type {
+  EngineCapabilitiesDto,
+  OfflineEngineStatusDto,
+  ProxyMode,
+  ServerStatus,
+} from './bindings'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getTranslation, Locale } from './i18n'
@@ -136,6 +141,7 @@ export default function App() {
   const [ocrError, setOcrError] = useState<string | null>(null)
   const [ocrConfirmOpen, setOcrConfirmOpen] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null)
+  const [offlineStatus, setOfflineStatus] = useState<OfflineEngineStatusDto | null>(null)
   const [customShortcut, setCustomShortcut] = useState('Alt+Shift+D')
   // 快捷键注册失败原因（如被其他软件占用）。Alt+Shift+D/R 极易冲突，
   // 静默失败会让用户看到「划词莫名其妙不工作」且毫无线索。独立维护两者的冲突提示。
@@ -316,6 +322,17 @@ export default function App() {
       })
       .catch((err) => {
         console.warn('[Transly] 读取缓存开关失败：', err)
+      })
+
+    commands
+      .getOfflineEngineStatus()
+      .then((res) => {
+        if (res.status === 'ok') {
+          setOfflineStatus(res.data)
+        }
+      })
+      .catch((err) => {
+        console.warn('[Transly] 读取离线引擎状态失败：', err)
       })
 
     commands
@@ -1765,6 +1782,65 @@ export default function App() {
                     {serverStatus.reason}
                   </div>
                 )}
+              </div>
+
+              {/* 纯本地离线引擎与模型 */}
+              <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-slate-700 dark:text-slate-200">
+                      {t.settings.offlineSectionTitle}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {t.settings.offlineSectionDesc}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5 pt-1 text-[11px]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      {t.settings.offlineLexiconCount.replace(
+                        '{n}',
+                        String(offlineStatus?.lexicon_entries_count || 100),
+                      )}
+                    </span>
+                    <span className="inline-flex items-center text-emerald-600 dark:text-emerald-400 font-medium">
+                      ● 就绪
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">
+                      {offlineStatus?.has_local_model
+                        ? t.settings.offlineModelDetected.replace(
+                            '{name}',
+                            offlineStatus.local_model_name || '',
+                          )
+                        : t.settings.offlineModelNotDetected}
+                    </span>
+                    <span
+                      className={
+                        offlineStatus?.has_local_model
+                          ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                          : 'text-slate-400'
+                      }
+                    >
+                      {offlineStatus?.has_local_model ? '● 模型已装载' : '○ 词库优先'}
+                    </span>
+                  </div>
+
+                  {offlineStatus?.model_dir && (
+                    <div className="mt-1 flex flex-col gap-1">
+                      <span className="text-[10px] text-slate-400">
+                        {t.settings.offlineModelDirLabel}
+                      </span>
+                      <code className="block rounded bg-slate-100 dark:bg-slate-900 px-2 py-1 font-mono text-[10px] text-slate-600 dark:text-slate-300 break-all select-all">
+                        {offlineStatus.model_dir}
+                      </code>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* 缓存数据管理 */}

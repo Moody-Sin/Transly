@@ -234,6 +234,12 @@
     "btnSaveProxy": "Save Proxy",
     "statusProxySaved": "Proxy settings saved successfully!",
     "statusProxySaveFailed": "Failed to save proxy settings",
-    "glossarySearchPlaceholder": "Search saved terms (source / target)..."
+    "glossarySearchPlaceholder": "Search saved terms (source / target)...",
+    "offlineSectionTitle": "Offline Engine & Local Models",
+    "offlineSectionDesc": "Zero network calls and zero third-party dependencies. Built-in high-frequency lexicon with automatic local model discovery",
+    "offlineLexiconCount": "Built-in lexicon: {n} high-frequency and technical entries loaded",
+    "offlineModelDetected": "Loaded external model: {name}",
+    "offlineModelNotDetected": "No external model file found (built-in lexicon & phrase-table active)",
+    "offlineModelDirLabel": "Local model directory (drop .onnx / .bin / .gguf files here to load):"
   }
 }

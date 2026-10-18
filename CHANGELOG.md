@@ -7,6 +7,13 @@
 
 ## [未发布]
 
+### 新增
+- **文档与字幕文件翻译 (`transly-core/src/document/`, `commands/document.rs`, `DocumentPanel.tsx`)**：
+  - 核心解析与保真重构：纯 Rust 实现 `.txt`（段落切分与空行定界保真）、`.md`（YAML Frontmatter 免翻保护、代码块/公式占位保护）与 `.srt`（序号行与时间轴 100% 锁定保真，仅回填字幕译文）；
+  - 批量流水线切批调度：复用 `plan_batch_ranges` 与 `translate_batch_with_cache`，严格满足 `MAX_BATCH_ITEMS`（30）与 `MAX_BATCH_TOTAL_CHARS`（50,000）上限；单项错误局部降级回退至原文，绝不损坏文档结构；
+  - 桌面端全新「文档翻译」工作台：支持拖拽上传与文件选择、格式与尺寸自动识别、翻译进度与耗时感知、双栏/Tab 原文与译文对照预览，支持一键复制与一键流式导出对应格式译文文件。
+
+
 ## [0.4.1] - 2026-10-18
 
 ### 优化与增强

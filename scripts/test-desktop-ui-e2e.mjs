@@ -202,6 +202,17 @@ const TAURI_MOCK_INIT_SCRIPT = `
           };
         }
 
+        case 'translate_document': {
+          const { content, format, targetLang, engineName } = args;
+          return {
+            translated_content: '[E2E文档译文:' + format + '->' + targetLang + ']\\n' + content,
+            total_chunks: 2,
+            translated_chunks: 2,
+            cache_hits: 1,
+            engine: engineName || 'google'
+          };
+        }
+
         case 'translate_stream': {
           const { text, targetLang, engineName } = args;
           return {
@@ -608,7 +619,7 @@ async function runDesktopUiE2E() {
     assert(filteredContent.includes('Continuous Integration'), '搜索结果必须包含匹配条目')
 
     // 切换回主翻译 Tab
-    const translateTab = page.getByRole('button', { name: '翻译' })
+    const translateTab = page.locator('[data-testid="tab-translate"]')
     await translateTab.click()
     await page.waitForTimeout(300)
     console.log('✔ [用例 4] 历史记录检索、过滤与交互闭环正常')
@@ -977,6 +988,52 @@ async function runDesktopUiE2E() {
     await trPage.close()
     console.log('✔ [用例 10] 译文按 index 回填、单块容错、切语言只重译且还原原文正常')
 
+    // -------------------------------------------------------------
+    // 用例 11: 文档与字幕翻译面板交互与导出闭环
+    // -------------------------------------------------------------
+    console.log('[UI-E2E] 正在测试 [用例 11: 文档与字幕翻译面板交互与导出]...')
+    const docPage = await browser.newPage()
+    await docPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await docPage.goto(`http://127.0.0.1:${port}`)
+    await docPage.waitForSelector('[data-testid="tab-document"]')
+
+    // 切换到文档翻译 Tab
+    await docPage.click('[data-testid="tab-document"]')
+    await docPage.waitForSelector('[data-testid="document-dropzone"]')
+
+    // 模拟上传 .md 文件
+    const testFilePath = path.resolve('test-sample.md')
+    fs.writeFileSync(testFilePath, '# Title\\n\\nThis is a test paragraph.', 'utf-8')
+
+    try {
+      await docPage.setInputFiles('input[type="file"]', testFilePath)
+      await docPage.waitForSelector('[data-testid="start-document-translate"]')
+
+      // 验证文件名与格式显示
+      const filenameText = await docPage.textContent('h4')
+      assert(filenameText && filenameText.includes('test-sample.md'), '应展示已选择的文件名')
+
+      // 点击开始翻译
+      await docPage.click('[data-testid="start-document-translate"]')
+      await docPage.waitForSelector('[data-testid="export-document-file"]')
+      await docPage.waitForSelector('[data-testid="copy-document-translation"]')
+
+      // 验证统计与预览
+      const bodyText = await docPage.textContent('body')
+      assert(bodyText && bodyText.includes('E2E文档译文'), '译文预览应正确展示翻译结果')
+
+      // 验证复制按钮
+      await docPage.click('[data-testid="copy-document-translation"]')
+      await docPage.waitForTimeout(100)
+    } finally {
+      if (fs.existsSync(testFilePath)) {
+        fs.unlinkSync(testFilePath)
+      }
+    }
+
+    await docPage.close()
+    console.log('✔ [用例 11] 文档翻译面板挂载、格式识别、翻译流水线与导出闭环正常')
+
     // 检查控制台异常
     assert.equal(
       consoleErrors.length,
@@ -985,7 +1042,7 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 10 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 11 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
     console.log(
       '⚠️ 覆盖范围声明：用例 8/9/10 走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
         '只验证前端交互与状态流转，不代表真实屏幕捕获、自定义协议 translyshot、' +

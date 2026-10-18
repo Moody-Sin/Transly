@@ -53,6 +53,7 @@
   "history": {
     "tabTranslate": "翻译",
     "tabHistory": "历史",
+    "tabDocument": "文档翻译",
     "title": "翻译历史",
     "refresh": "刷新",
     "loadMore": "加载更多",
@@ -70,6 +71,27 @@
     "exportSuccess": "已成功导出至文件",
     "exportFailed": "导出失败",
     "speak": "朗读发音"
+  },
+  "document": {
+    "title": "文档与字幕翻译",
+    "dropHint": "点击选择或将文件拖拽至此处",
+    "supportedFormats": "支持 .txt、.md (Markdown) 与 .srt (字幕)",
+    "fileSelected": "已选文件：{name} ({size})",
+    "formatTxt": "纯文本 (.txt)",
+    "formatMd": "Markdown (.md)",
+    "formatSrt": "SubRip 字幕 (.srt)",
+    "unsupportedFormat": "不支持的文件格式，仅支持 .txt、.md、.srt",
+    "btnStart": "开始翻译",
+    "translating": "正在翻译文档...",
+    "progressChunks": "已翻译 {done} / {total} 块 (缓存命中: {hits})",
+    "exportFile": "导出译文文件",
+    "copyTranslated": "复制译文",
+    "originalPreview": "原文预览",
+    "translatedPreview": "译文预览",
+    "readFailed": "读取文件内容失败",
+    "translateFailed": "文档翻译失败：",
+    "emptyFile": "文件内容为空",
+    "duration": "耗时 {s} 秒"
   },
   "ocrError": {
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",

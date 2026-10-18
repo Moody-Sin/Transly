@@ -747,8 +747,11 @@ pub async fn ocr_clipboard_image(
     crate::ocr::recognize_clipboard_image(&app, &target_lang).await
 }
 
+pub mod document;
 pub mod screenshot;
 pub mod selection;
+
+pub use document::{translate_document, DocumentTranslateOutcomeDto};
 
 // 划词/浮窗相关符号平移至 `commands::selection`，此处重导出：
 // `app_command_builder!` 与 `main.rs` 的既有引用路径保持不变，避免连带改动。

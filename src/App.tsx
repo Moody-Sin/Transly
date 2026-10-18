@@ -22,6 +22,7 @@ import type { I18nSchema } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
+import DocumentPanel from './DocumentPanel'
 import ShortcutRecorder from './ShortcutRecorder'
 import { speakText } from './utils/speech'
 import { downloadBlob } from './utils/download'
@@ -104,7 +105,7 @@ export default function App() {
 
   // 设置面板状态
   const [showSettings, setShowSettings] = useState(false)
-  const [activeTab, setActiveTab] = useState<'translate' | 'history'>('translate')
+  const [activeTab, setActiveTab] = useState<'translate' | 'history' | 'document'>('translate')
   const [deeplConfigured, setDeeplConfigured] = useState(false)
   const [deepseekConfigured, setDeepseekConfigured] = useState(false)
   const [openaiConfigured, setOpenaiConfigured] = useState(false)
@@ -1028,6 +1029,7 @@ export default function App() {
         {/* 顶层 Tab：翻译工作区 / 翻译历史 */}
         <div className="flex items-center gap-1">
           <button
+            data-testid="tab-translate"
             onClick={() => setActiveTab('translate')}
             className={`rounded px-3 py-1 text-xs font-medium ${
               activeTab === 'translate'
@@ -1038,6 +1040,7 @@ export default function App() {
             {t.history.tabTranslate}
           </button>
           <button
+            data-testid="tab-history"
             onClick={() => setActiveTab('history')}
             className={`rounded px-3 py-1 text-xs font-medium ${
               activeTab === 'history'
@@ -1046,6 +1049,17 @@ export default function App() {
             }`}
           >
             {t.history.tabHistory}
+          </button>
+          <button
+            data-testid="tab-document"
+            onClick={() => setActiveTab('document')}
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              activeTab === 'document'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            {t.history.tabDocument}
           </button>
         </div>
 
@@ -1316,6 +1330,9 @@ export default function App() {
         )}
 
         {activeTab === 'history' && <HistoryPanel t={t} locale={locale} />}
+        {activeTab === 'document' && (
+          <DocumentPanel t={t} targetLang={targetLang} engine={engine} />
+        )}
       </main>
       {/* 设置与密钥配置模态框 */}
       {showSettings && (

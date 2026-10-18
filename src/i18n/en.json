@@ -53,6 +53,7 @@
   "history": {
     "tabTranslate": "Translate",
     "tabHistory": "History",
+    "tabDocument": "Document",
     "title": "Translation History",
     "refresh": "Refresh",
     "loadMore": "Load more",
@@ -70,6 +71,27 @@
     "exportSuccess": "Successfully exported to file",
     "exportFailed": "Export failed",
     "speak": "Read Aloud"
+  },
+  "document": {
+    "title": "Document & Subtitle Translation",
+    "dropHint": "Click to select or drag and drop a file here",
+    "supportedFormats": "Supports .txt, .md (Markdown), and .srt (Subtitles)",
+    "fileSelected": "Selected: {name} ({size})",
+    "formatTxt": "Plain Text (.txt)",
+    "formatMd": "Markdown (.md)",
+    "formatSrt": "SubRip Subtitles (.srt)",
+    "unsupportedFormat": "Unsupported file format. Only .txt, .md, .srt are supported",
+    "btnStart": "Start Translation",
+    "translating": "Translating document...",
+    "progressChunks": "Translated {done} / {total} blocks (Cache hits: {hits})",
+    "exportFile": "Export Translated File",
+    "copyTranslated": "Copy Translation",
+    "originalPreview": "Original Preview",
+    "translatedPreview": "Translation Preview",
+    "readFailed": "Failed to read file",
+    "translateFailed": "Document translation failed: ",
+    "emptyFile": "File is empty",
+    "duration": "Completed in {s}s"
   },
   "ocrError": {
     "no_image": "No image in clipboard. Copy or take a screenshot first.",

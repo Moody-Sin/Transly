@@ -101,6 +101,7 @@ export const commands = {
 	 *  这是「OCR 结果可编辑」被砍掉后的替代路径（全局设计 §十二）。
 	 */
 	pushScreenshotTextToMain: (text: string) => typedError<null, string>(__TAURI_INVOKE("push_screenshot_text_to_main", { text })),
+	translateDocument: (content: string, format: DocumentFormat, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<DocumentTranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_document", { content, format, sourceLang, targetLang, engineName })),
 };
 
 /* Types */
@@ -113,6 +114,18 @@ export type CacheEntry = {
 	target_lang: string,
 	engine: string,
 	created_at: number,
+};
+
+/**  支持的文档格式 */
+export type DocumentFormat = "txt" | "md" | "srt";
+
+/**  文档翻译执行结果 DTO */
+export type DocumentTranslateOutcomeDto = {
+	translated_content: string,
+	total_chunks: number,
+	translated_chunks: number,
+	cache_hits: number,
+	engine: string,
 };
 
 export type EngineCapabilitiesDto = {

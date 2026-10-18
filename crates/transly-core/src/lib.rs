@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod config;
 pub mod detector;
+pub mod document;
 pub mod engine;
 pub mod error;
 pub mod glossary;
@@ -13,6 +14,7 @@ pub mod validation;
 pub use cache::{CacheEntry, TranslationCache};
 pub use config::AppConfig;
 pub use detector::{detect_language, resolve_smart_target_lang};
+pub use document::{translate_document_content, DocumentFormat, DocumentTranslateOutcome};
 pub use engine::{
     lookup_batch_with_fallback, lookup_cache_with_fallback, plan_batch_ranges,
     translate_batch_with_cache, BatchItemRequest, BatchItemResult, BatchPipelineDeps,

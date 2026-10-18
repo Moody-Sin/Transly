@@ -21,7 +21,7 @@
 
 ## 命令类别
 
-1. **翻译与流式处理**：`translate_text`、`translate_stream`（SSE 增量广播）、`cancel_stream_task`（物理取消在途任务）、`detect_text_language`（离线微秒级探测）。
+1. **翻译与流式处理**：`translate_text`、`translate_stream`（SSE 增量广播）、`cancel_stream_task`（物理取消在途任务）、`detect_text_language`（离线微秒级探测）、`translate_document`（文档与字幕多格式保真翻译）。
 2. **历史记录与缓存**：`get_translation_history`、`search_translation_history`、`delete_history_entry`、`clear_translation_history`、`export_translation_history`（后台流式写盘导出 CSV/JSON）。
 3. **术语库管理**：`list_glossary`、`add_glossary_term`、`delete_glossary_term`、`update_glossary_term`。
 4. **快捷键与剪贴板**：`get_shortcut` / `set_shortcut`、`get_replace_shortcut` / `set_replace_shortcut`（带原子回滚保护）、`get_clipboard_monitor` / `set_clipboard_monitor`。

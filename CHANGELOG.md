@@ -12,6 +12,10 @@
   - 核心解析与保真重构：纯 Rust 实现 `.txt`（段落切分与空行定界保真）、`.md`（YAML Frontmatter 免翻保护、代码块/公式占位保护）与 `.srt`（序号行与时间轴 100% 锁定保真，仅回填字幕译文）；
   - 批量流水线切批调度：复用 `plan_batch_ranges` 与 `translate_batch_with_cache`，严格满足 `MAX_BATCH_ITEMS`（30）与 `MAX_BATCH_TOTAL_CHARS`（50,000）上限；单项错误局部降级回退至原文，绝不损坏文档结构；
   - 桌面端全新「文档翻译」工作台：支持拖拽上传与文件选择、格式与尺寸自动识别、翻译进度与耗时感知、双栏/Tab 原文与译文对照预览，支持一键复制与一键流式导出对应格式译文文件。
+- **浏览器扩展体验深化：网页输入框原地替换助手与精细化站点规则 (`extension/`)**：
+  - **输入框原地翻译替换 (`selection/index.ts`, `background/index.ts`)**：支持通过快捷键 `Alt+Shift+R` 或右键「Transly 原地翻译替换」，将网页内 `input` 与 `textarea` 中选中的文本或完整内容原地翻译为目标语言；采用原型属性 setter 绕过 React/Vue 受控属性劫持并派发原生 `input`/`change` 事件，确保表单与框架状态机 100% 同步；
+  - **站点级规则精细化配置 (`popup/index.ts`, `siteRules.ts`, `content/index.ts`)**：Popup 扩展折叠式站点规则卡片，支持为特定域名单独配置排除 CSS 选择器（如 `.code, pre, .comments`，防爆语法校验）、站点专属目标语言绑定（如特定外文站点固定直译），以及站点级输入助手禁用开关；
+  - **构建产物 IIFE 隔离与防重声明 (`build.mjs`)**：将非 background 脚本（`content`、`selection`、`popup`）构建格式收口为独立 `iife` 并命名空间隔离，消除多次执行脚本时的顶层作用域标识符冲突。
 
 
 ## [0.4.1] - 2026-10-18

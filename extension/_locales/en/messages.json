@@ -179,6 +179,36 @@
   "siteRuleAuto": {
     "message": "Auto-translate this site"
   },
+  "siteRuleTitle": {
+    "message": "Site Rules"
+  },
+  "siteRuleExcludeSelectors": {
+    "message": "Exclude Selectors (CSS)"
+  },
+  "siteRuleExcludePlaceholder": {
+    "message": "e.g.: .code, pre, .comments"
+  },
+  "siteRuleDisableInputAssistant": {
+    "message": "Disable input assistant on this site"
+  },
+  "siteRuleTargetLang": {
+    "message": "Site Target Language"
+  },
+  "siteRuleLangFollowGlobal": {
+    "message": "Follow Global Setting"
+  },
+  "cmdReplaceInput": {
+    "message": "Translate and replace input text in-place"
+  },
+  "ctxMenuReplaceInput": {
+    "message": "Translate and replace in-place with Transly"
+  },
+  "inputReplaceSuccess": {
+    "message": "Replaced"
+  },
+  "inputReplaceEmpty": {
+    "message": "No input text to translate"
+  },
   "selectionHoverIcon": {
     "message": "T",
     "description": "划词后悬浮微型图标上的字符（建议单字符）"

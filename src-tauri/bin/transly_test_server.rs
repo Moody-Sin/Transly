@@ -31,6 +31,10 @@ const TEST_PAGE_HTML: &str = r#"<!DOCTYPE html>
   <!-- 场景 4: 开放模式 Web Components Shadow DOM -->
   <custom-card id="shadow-host"></custom-card>
 
+  <!-- 场景 5: 输入框与自定义排除区域 -->
+  <textarea id="test-textarea">这是一个测试输入框</textarea>
+  <div id="custom-exclude" class="user-excluded">Custom excluded text that should not be translated.</div>
+
   <script>
     class CustomCard extends HTMLElement {
       connectedCallback() {

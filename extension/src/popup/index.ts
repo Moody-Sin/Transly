@@ -1,4 +1,5 @@
 import { applyStaticTranslations, t } from '../i18n'
+import { normalizeSiteRule } from '../shared/siteRules'
 
 /**
  * 把后端返回的错误标识映射为本地化文案。
@@ -72,18 +73,68 @@ document.querySelectorAll<HTMLInputElement>('input[name="transly_mode"]').forEac
   })
 })
 
-const checkSiteAuto = document.getElementById('check-site-auto') as HTMLInputElement
+const checkSiteAuto = document.getElementById('check-site-auto') as HTMLInputElement | null
+const btnToggleSiteRules = document.getElementById('btn-toggle-site-rules')
+const siteRulesDetails = document.getElementById('site-rules-details')
+const selectSiteLang = document.getElementById('select-site-lang') as HTMLSelectElement | null
+const inputSiteExclude = document.getElementById('input-site-exclude') as HTMLInputElement | null
+const checkSiteDisableInput = document.getElementById(
+  'check-site-disable-input',
+) as HTMLInputElement | null
 
-// 回显站点自动翻译配置
+if (btnToggleSiteRules && siteRulesDetails) {
+  btnToggleSiteRules.addEventListener('click', () => {
+    siteRulesDetails.style.display = siteRulesDetails.style.display === 'none' ? 'block' : 'none'
+  })
+}
+
+let currentHost: string | null = null
+
+function saveCurrentSiteRule() {
+  const host = currentHost
+  if (!host) return
+  chrome.storage.local.get(['transly_site_rules'], (res) => {
+    const rules = res.transly_site_rules || {}
+    const auto = checkSiteAuto ? checkSiteAuto.checked : false
+    const targetLang = selectSiteLang && selectSiteLang.value ? selectSiteLang.value : undefined
+    const excludeSelectors =
+      inputSiteExclude && inputSiteExclude.value.trim() ? inputSiteExclude.value.trim() : undefined
+    const disableInputAssistant = checkSiteDisableInput ? checkSiteDisableInput.checked : false
+
+    if (!auto && !targetLang && !excludeSelectors && !disableInputAssistant) {
+      delete rules[host]
+    } else {
+      rules[host] = {
+        auto,
+        targetLang,
+        excludeSelectors,
+        disableInputAssistant,
+      }
+    }
+    chrome.storage.local.set({ transly_site_rules: rules })
+  })
+}
+
+// 回显站点自动翻译与定制规则
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   if (tab?.url) {
     try {
       const url = new URL(tab.url)
-      const host = url.hostname
+      currentHost = url.hostname
       chrome.storage.local.get(['transly_site_rules'], (res) => {
         const rules = res.transly_site_rules || {}
+        const rule = normalizeSiteRule(rules[url.hostname])
         if (checkSiteAuto) {
-          checkSiteAuto.checked = rules[host] === 'auto'
+          checkSiteAuto.checked = Boolean(rule.auto)
+        }
+        if (selectSiteLang && rule.targetLang) {
+          selectSiteLang.value = rule.targetLang
+        }
+        if (inputSiteExclude && rule.excludeSelectors) {
+          inputSiteExclude.value = rule.excludeSelectors
+        }
+        if (checkSiteDisableInput) {
+          checkSiteDisableInput.checked = Boolean(rule.disableInputAssistant)
         }
       })
     } catch (err) {
@@ -92,27 +143,10 @@ chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   }
 })
 
-if (checkSiteAuto) {
-  checkSiteAuto.addEventListener('change', async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (!tab?.url) return
-    try {
-      const url = new URL(tab.url)
-      const host = url.hostname
-      chrome.storage.local.get(['transly_site_rules'], (res) => {
-        const rules = res.transly_site_rules || {}
-        if (checkSiteAuto.checked) {
-          rules[host] = 'auto'
-        } else {
-          delete rules[host]
-        }
-        chrome.storage.local.set({ transly_site_rules: rules })
-      })
-    } catch (err) {
-      console.warn('[Transly] 保存站点规则异常:', err)
-    }
-  })
-}
+if (checkSiteAuto) checkSiteAuto.addEventListener('change', saveCurrentSiteRule)
+if (selectSiteLang) selectSiteLang.addEventListener('change', saveCurrentSiteRule)
+if (inputSiteExclude) inputSiteExclude.addEventListener('input', saveCurrentSiteRule)
+if (checkSiteDisableInput) checkSiteDisableInput.addEventListener('change', saveCurrentSiteRule)
 
 selectEngine.addEventListener('change', () => {
   chrome.storage.local.set({ transly_engine: selectEngine.value })

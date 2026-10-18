@@ -65,6 +65,10 @@ const TEST_PAGE_HTML = `<!DOCTYPE html>
   <!-- 场景 4: 开放模式 Web Components Shadow DOM -->
   <custom-card id="shadow-host"></custom-card>
 
+  <!-- 场景 5: 输入框与自定义排除区域 -->
+  <textarea id="test-textarea">这是一个测试输入框</textarea>
+  <div id="custom-exclude" class="user-excluded">Custom excluded text that should not be translated.</div>
+
   <script>
     class CustomCard extends HTMLElement {
       connectedCallback() {
@@ -329,6 +333,8 @@ async function runTests() {
 
     // 2. 打开被测页面（由真实的 Rust 本地服务托管）
     const page = await context.newPage()
+    page.on('console', (msg) => console.log('[PAGE CONSOLE]', msg.text()))
+    page.on('pageerror', (err) => console.log('[PAGE ERROR]', err.message))
     await page.goto(`http://127.0.0.1:${targetPort}/test-page.html`, { waitUntil: 'networkidle' })
 
     // 注入嵌套行内标签段落：<p> 的一级子元素是 <strong>/<em>，深层才是 <a>/<span>。
@@ -496,8 +502,81 @@ async function runTests() {
     )
     console.log('✔ [用例 7] 双语模式一键还原成功：兄弟译文节点彻底清除且原文保持完整')
 
+    // 7. 测试【输入框原地翻译替换】
+    console.log('[E2E] 正在触发输入框原地翻译替换...')
+    await page.focus('#test-textarea')
+    await sw.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ url: '*://127.0.0.1/*' })
+      const tab = tabs[0]
+      if (tab?.id) {
+        let pingOk = false
+        try {
+          const pingRes = await chrome.tabs.sendMessage(tab.id, { type: 'PING_SELECTION_SCRIPT' })
+          if (pingRes?.ok) pingOk = true
+        } catch {
+          pingOk = false
+        }
+
+        if (!pingOk) {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['selection.js'],
+          })
+        }
+
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'TRIGGER_INPUT_REPLACEMENT',
+        })
+      }
+    })
+
+    await page.waitForFunction(
+      () => {
+        const el = document.getElementById('test-textarea')
+        return el && el.value && el.value !== '这是一个测试输入框'
+      },
+      { timeout: 8000 },
+    )
+    const replacedVal = await page.locator('#test-textarea').inputValue()
+    assert(
+      replacedVal.length > 0 && replacedVal !== '这是一个测试输入框',
+      '输入框内容应被成功原地替换为译文',
+    )
+    console.log('✔ [用例 8] 网页 textarea 输入框原地翻译替换成功')
+
+    // 8. 测试【自定义站点排除选择器】
+    console.log('[E2E] 正在测试站点级自定义排除选择器...')
+    await sw.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true })
+      if (tab?.id && tab.url) {
+        const host = new URL(tab.url).hostname
+        await chrome.storage.local.set({
+          transly_site_rules: {
+            [host]: {
+              excludeSelectors: '#custom-exclude, .user-excluded',
+            },
+          },
+        })
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'START_PAGE_TRANSLATION',
+          target_lang: 'zh-CN',
+          engine: 'google',
+          mode: 'replace',
+        })
+      }
+    })
+
+    await page.waitForTimeout(1000)
+    const customExcludeText = await page.locator('#custom-exclude').innerText()
+    assert.equal(
+      customExcludeText,
+      'Custom excluded text that should not be translated.',
+      '命中站点自定义排除选择器的节点绝不得被翻译',
+    )
+    console.log('✔ [用例 9] 站点自定义 CSS 排除选择器生效，指定区域免翻保护正常')
+
     console.log('\n========================================')
-    console.log(`🎉 全部 9 项浏览器插件${backendLabel}端到端测试 100% 通过！`)
+    console.log(`🎉 全部 11 项浏览器插件${backendLabel}端到端测试 100% 通过！`)
     console.log('========================================\n')
   } finally {
     if (context) await context.close()

@@ -33,6 +33,8 @@ for (const [index, name] of ENTRIES.entries()) {
         output: {
           entryFileNames: '[name].js',
           inlineDynamicImports: true,
+          format: name === 'background' ? 'es' : 'iife',
+          name: name === 'background' ? undefined : `Transly_${name}`,
         },
       },
     },

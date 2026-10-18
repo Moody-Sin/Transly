@@ -3,6 +3,7 @@ import {
   normalizeLoopbackServerUrl,
   normalizeServerPort,
 } from '../shared/serverUrl'
+import { normalizeSiteRule } from '../shared/siteRules'
 
 async function getServerUrl(): Promise<string> {
   const result = await chrome.storage.local.get(['transly_server_url', 'transly_server_port'])
@@ -22,6 +23,7 @@ async function getServerUrl(): Promise<string> {
 }
 
 const CONTEXT_MENU_ID_TRANSLATE_SELECTION = 'transly-translate-selection'
+const CONTEXT_MENU_ID_REPLACE_INPUT = 'transly-replace-input'
 
 /**
  * 服务端批量上限（由 `/health` 公开）。
@@ -143,30 +145,71 @@ chrome.runtime.onInstalled.addListener(() => {
       },
       () => void chrome.runtime.lastError,
     )
+    chrome.contextMenus.create(
+      {
+        id: CONTEXT_MENU_ID_REPLACE_INPUT,
+        title: chrome.i18n.getMessage('ctxMenuReplaceInput'),
+        contexts: ['editable'],
+      },
+      () => void chrome.runtime.lastError,
+    )
   })
 })
 
 // 右键菜单点击 → 向页面注入气泡脚本并投递待翻译文本。
 // 目标语言与引擎沿用 Popup 中保存的配置，与整页翻译保持同一套偏好。
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== CONTEXT_MENU_ID_TRANSLATE_SELECTION) return
   const tabId = tab?.id
   if (typeof tabId !== 'number') return
 
-  void (async () => {
-    try {
-      await ensureSelectionScriptInjected(tabId)
-      const stored = await chrome.storage.local.get(['transly_engine', 'transly_target_lang'])
-      await chrome.tabs.sendMessage(tabId, {
-        type: 'SHOW_SELECTION_TRANSLATION',
-        text: info.selectionText || '',
-        target_lang: stored.transly_target_lang || 'zh-CN',
-        engine: stored.transly_engine || 'google',
-      })
-    } catch (err) {
-      console.warn('[Transly Extension] 划词翻译气泡注入失败:', err)
-    }
-  })()
+  if (info.menuItemId === CONTEXT_MENU_ID_TRANSLATE_SELECTION) {
+    void (async () => {
+      try {
+        await ensureSelectionScriptInjected(tabId)
+        const stored = await chrome.storage.local.get(['transly_engine', 'transly_target_lang'])
+        await chrome.tabs.sendMessage(tabId, {
+          type: 'SHOW_SELECTION_TRANSLATION',
+          text: info.selectionText || '',
+          target_lang: stored.transly_target_lang || 'zh-CN',
+          engine: stored.transly_engine || 'google',
+        })
+      } catch (err) {
+        console.warn('[Transly Extension] 划词翻译气泡注入失败:', err)
+      }
+    })()
+    return
+  }
+
+  if (info.menuItemId === CONTEXT_MENU_ID_REPLACE_INPUT) {
+    void (async () => {
+      try {
+        await ensureSelectionScriptInjected(tabId)
+        await chrome.tabs.sendMessage(tabId, {
+          type: 'TRIGGER_INPUT_REPLACEMENT',
+        })
+      } catch (err) {
+        console.warn('[Transly Extension] 输入框原地替换注入失败:', err)
+      }
+    })()
+  }
+})
+
+// 快捷键监听：处理 Alt+Shift+R 触发输入框原地替换
+chrome.commands?.onCommand?.addListener((command, tab) => {
+  if (command === 'replace-input-text') {
+    const tabId = tab?.id
+    if (typeof tabId !== 'number') return
+    void (async () => {
+      try {
+        await ensureSelectionScriptInjected(tabId)
+        await chrome.tabs.sendMessage(tabId, {
+          type: 'TRIGGER_INPUT_REPLACEMENT',
+        })
+      } catch (err) {
+        console.warn('[Transly Extension] 快捷键触发输入框替换失败:', err)
+      }
+    })()
+  }
 })
 
 interface TaskProgressState {
@@ -535,12 +578,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       ])
 
       const rules = cfg.transly_site_rules || {}
-      if (rules[host] === 'auto' && cfg.transly_server_token) {
+      const siteRule = normalizeSiteRule(rules[host])
+      if (siteRule.auto && cfg.transly_server_token) {
         await ensureContentScriptInjected(tabId)
         chrome.tabs.sendMessage(tabId, {
           type: 'START_PAGE_TRANSLATION',
-          target_lang: cfg.transly_target_lang || 'zh-CN',
-          engine: cfg.transly_engine || 'google',
+          target_lang: siteRule.targetLang || cfg.transly_target_lang || 'zh-CN',
+          engine: siteRule.engine || cfg.transly_engine || 'google',
           mode: cfg.transly_mode || 'replace',
         })
       }

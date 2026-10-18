@@ -15,6 +15,12 @@
  */
 import { t } from '../i18n'
 import { countChars } from '../shared/batchPlan'
+import {
+  getInputSelectionInfo,
+  replaceInputValue,
+  resolveInputTargetLang,
+} from '../shared/inputReplace'
+import { normalizeSiteRule } from '../shared/siteRules'
 
 const HOST_ID = 'transly-selection-bubble-host'
 
@@ -433,6 +439,140 @@ async function showSelectionTranslation(payload: {
   })
 }
 
+function showInputToast(
+  targetEl: HTMLElement,
+  message: string,
+  type: 'info' | 'success' | 'error' = 'info',
+) {
+  const oldToast = document.getElementById('transly-input-toast-host')
+  if (oldToast) oldToast.remove()
+
+  const toastHost = document.createElement('div')
+  toastHost.id = 'transly-input-toast-host'
+  toastHost.setAttribute('data-no-translate', 'true')
+  toastHost.style.position = 'absolute'
+  toastHost.style.zIndex = '2147483647'
+
+  const rect = targetEl.getBoundingClientRect()
+  const top = window.scrollY + rect.bottom + 4
+  const left = window.scrollX + rect.left + 4
+
+  toastHost.style.top = `${top}px`
+  toastHost.style.left = `${left}px`
+
+  const shadow = toastHost.attachShadow({ mode: 'closed' })
+  const box = document.createElement('div')
+  box.style.padding = '4px 8px'
+  box.style.fontSize = '11px'
+  box.style.borderRadius = '4px'
+  box.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)'
+  box.style.fontWeight = '500'
+  box.style.pointerEvents = 'none'
+
+  if (type === 'success') {
+    box.style.background = '#10b981'
+    box.style.color = '#ffffff'
+  } else if (type === 'error') {
+    box.style.background = '#ef4444'
+    box.style.color = '#ffffff'
+  } else {
+    box.style.background = '#4f46e5'
+    box.style.color = '#ffffff'
+  }
+  box.textContent = message
+
+  shadow.appendChild(box)
+  document.documentElement.appendChild(toastHost)
+
+  setTimeout(
+    () => {
+      toastHost.remove()
+    },
+    type === 'info' ? 1200 : 2000,
+  )
+}
+
+let lastFocusedEditable: HTMLInputElement | HTMLTextAreaElement | null = null
+
+document.addEventListener(
+  'focusin',
+  (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      lastFocusedEditable = e.target
+    }
+  },
+  true,
+)
+
+async function handleInputReplacement(): Promise<void> {
+  let activeEl: Element | null = document.activeElement
+  if (!(activeEl instanceof HTMLInputElement) && !(activeEl instanceof HTMLTextAreaElement)) {
+    if (lastFocusedEditable && document.contains(lastFocusedEditable)) {
+      activeEl = lastFocusedEditable
+    } else {
+      activeEl =
+        document.querySelector('textarea:focus, input:focus') ||
+        document.querySelector('textarea, input[type="text"], input:not([type])')
+    }
+  }
+
+  try {
+    const res = await chrome.storage.local.get(['transly_site_rules'])
+    const rules = res.transly_site_rules || {}
+    const siteRule = normalizeSiteRule(rules[window.location.hostname])
+    if (siteRule.disableInputAssistant) {
+      return
+    }
+  } catch {
+    // 忽略异常继续
+  }
+
+  if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) {
+    const selInfo = getInputSelectionInfo(activeEl)
+    if (!selInfo || !selInfo.text.trim()) {
+      showInputToast(activeEl, t('inputReplaceEmpty'))
+      return
+    }
+
+    showInputToast(activeEl, t('bubbleTranslating'))
+
+    try {
+      const stored = await chrome.storage.local.get([
+        'transly_engine',
+        'transly_target_lang',
+        'transly_site_rules',
+      ])
+      const siteRule = normalizeSiteRule(
+        (stored.transly_site_rules || {})[window.location.hostname],
+      )
+      const targetLang = resolveInputTargetLang(
+        selInfo.text,
+        siteRule.targetLang || stored.transly_target_lang,
+      )
+      const engine = siteRule.engine || stored.transly_engine || 'google'
+
+      const resp = await requestTranslation(selInfo.text, targetLang, engine)
+
+      if (resp && resp.ok && resp.data) {
+        const item = resp.data.items?.[0]
+        const translatedText =
+          item && item.status === 'success' && item.text ? item.text : resp.data.translations?.[0]
+        if (translatedText) {
+          replaceInputValue(activeEl, translatedText, selInfo)
+          showInputToast(activeEl, t('inputReplaceSuccess'), 'success')
+        } else {
+          showInputToast(activeEl, t('bubbleFailed'), 'error')
+        }
+      } else {
+        showInputToast(activeEl, t('bubbleFailed'), 'error')
+      }
+    } catch (err) {
+      console.warn('[Transly] 原地替换翻译请求失败:', err)
+      showInputToast(activeEl, t('bubbleFailed'), 'error')
+    }
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'PING_SELECTION_SCRIPT') {
     sendResponse({ ok: true })
@@ -444,6 +584,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((err) => {
         console.warn('[Transly] 划词翻译气泡渲染失败:', err)
+        sendResponse({ ok: false, error: String(err) })
+      })
+    return true
+  }
+
+  if (message.type === 'TRIGGER_INPUT_REPLACEMENT') {
+    handleInputReplacement()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => {
+        console.warn('[Transly] 原地替换输入框异常:', err)
         sendResponse({ ok: false, error: String(err) })
       })
     return true

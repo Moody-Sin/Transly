@@ -14,5 +14,13 @@
   "action": {
     "default_title": "__MSG_extTitle__",
     "default_popup": "popup.html"
+  },
+  "commands": {
+    "replace-input-text": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "__MSG_cmdReplaceInput__"
+    }
   }
 }

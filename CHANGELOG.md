@@ -7,6 +7,8 @@
 
 ## [未发布]
 
+## [0.4.1] - 2026-10-18
+
 ### 优化与增强
 - **批量流水线单事务原子写入优化 (`batch_pipeline.rs`)**：`translate_batch_with_cache` 将原本在循环中逐条单事务写入缓存的模式，重构为收集全部成功项后单次调用 `cache.set_batch` 原子批量写入，极大降低磁盘 I/O 争用与锁开销；同时移除 `translate_screenshot_blocks` 中的 `spawn_blocking + block_on` 嵌套反模式，直接异步执行。
 - **划词原地替换首选目标语言配置与跨端联动 (`selection.rs`)**：新增 `get_preferred_target_lang` 与 `save_preferred_target_lang` IPC 命令，划词原地替换（`Alt+Shift+R`）自动遵循用户在主窗口或设置中持久化的目标语言偏好，不再硬编码为中文。
@@ -486,7 +488,8 @@
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.4.0...HEAD
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Moody-Sin/Transly/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Moody-Sin/Transly/compare/v0.2.1...v0.3.0

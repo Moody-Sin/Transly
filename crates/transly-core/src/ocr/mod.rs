@@ -80,10 +80,20 @@ impl OcrErrorDto {
     ///
     /// 刻意不写「暂未支持」：那会误导用户以为永远不行。必须给出可执行的替代路径。
     pub fn wayland_unsupported() -> Self {
-        Self::new(
-            OcrErrorKind::UnsupportedPlatform,
-            "Wayland 会话下不支持框选截图（无法保证覆盖窗置顶）。请登录 X11 会话，或改用「识别剪贴板图片」",
-        )
+        Self::wayland_unsupported_with_desktop(None)
+    }
+
+    /// Wayland 会话下的截图能力降级提示（支持附带当前桌面环境说明）。
+    pub fn wayland_unsupported_with_desktop(desktop: Option<&str>) -> Self {
+        let msg = match desktop.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            Some(d) => format!(
+                "当前运行于 Wayland 会话 ({d})，系统限制应用直接捕获屏幕画面与覆盖窗强制置顶。请登录 X11/Xorg 会话，或改用「识别剪贴板图片」"
+            ),
+            None => {
+                "Wayland 会话下不支持框选截图（无法保证覆盖窗置顶）。请登录 X11 会话，或改用「识别剪贴板图片」".to_string()
+            }
+        };
+        Self::new(OcrErrorKind::UnsupportedPlatform, msg)
     }
 
     /// 缺少外部 OCR 工具（如 Linux 未安装 tesseract），必须给出可执行的安装指引。

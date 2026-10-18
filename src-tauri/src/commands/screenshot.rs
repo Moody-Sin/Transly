@@ -55,18 +55,34 @@ fn detect_capability() -> ScreenshotCapabilityDto {
     #[cfg(target_os = "linux")]
     {
         let ocr_available = tesseract_available();
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+
         // 复用既有错误文案，不在 UI 侧另写一份（避免两处漂移）。
         if wayland {
             ScreenshotCapabilityDto {
                 supported: false,
-                reason: Some(OcrErrorDto::wayland_unsupported().message),
+                reason: Some(
+                    OcrErrorDto::wayland_unsupported_with_desktop(desktop.as_deref()).message,
+                ),
                 ocr_available,
+            }
+        } else if !ocr_available {
+            ScreenshotCapabilityDto {
+                supported: false,
+                reason: Some(
+                    OcrErrorDto::tool_missing(
+                        "tesseract",
+                        "请执行 `sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim` 进行安装后重试",
+                    )
+                    .message,
+                ),
+                ocr_available: false,
             }
         } else {
             ScreenshotCapabilityDto {
                 supported: true,
                 reason: None,
-                ocr_available,
+                ocr_available: true,
             }
         }
     }

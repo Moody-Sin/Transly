@@ -32,7 +32,10 @@ pub fn capture_monitor(monitor: &MonitorRect) -> Result<image::RgbaImage, OcrErr
         std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
         std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
     ) {
-        return Err(OcrErrorDto::wayland_unsupported());
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+        return Err(OcrErrorDto::wayland_unsupported_with_desktop(
+            desktop.as_deref(),
+        ));
     }
 
     // WSL2 无 X server、DISPLAY 未设置、X server 不可达都会在这里失败——这是

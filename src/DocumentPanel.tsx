@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import {
   FileText,
   UploadCloud,
@@ -51,6 +51,11 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
         return
       }
 
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        setErrorMsg(t.document.fileTooLarge)
+        return
+      }
+
       const reader = new FileReader()
       reader.onload = () => {
         const text = typeof reader.result === 'string' ? reader.result : ''
@@ -95,7 +100,7 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
     setIsDragging(false)
   }, [])
 
-  const startTranslation = async () => {
+  const startTranslation = useCallback(async () => {
     if (!file || isTranslating) return
 
     setIsTranslating(true)
@@ -126,7 +131,21 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
     } finally {
       setIsTranslating(false)
     }
-  }
+  }, [file, isTranslating, targetLang, engine, t])
+
+  // 支持 Ctrl+Enter / Cmd+Enter 快捷键触发翻译
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (file && !isTranslating) {
+          e.preventDefault()
+          void startTranslation()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [file, isTranslating, startTranslation])
 
   const exportTranslated = () => {
     if (!file || !outcome) return
@@ -164,7 +183,7 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
       <input
         ref={fileInputRef}
         type="file"
-        accept=".txt,.md,.markdown,.srt"
+        accept=".txt,.md,.markdown,.srt,.json,.html,.htm"
         className="hidden"
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {

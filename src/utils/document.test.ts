@@ -9,6 +9,9 @@ test('detectDocumentFormat: 根据扩展名识别合法格式', () => {
   assert.equal(detectDocumentFormat('SPEC.MARKDOWN'), 'md')
   assert.equal(detectDocumentFormat('subtitle.srt'), 'srt')
   assert.equal(detectDocumentFormat('movie.SRT'), 'srt')
+  assert.equal(detectDocumentFormat('messages.json'), 'json')
+  assert.equal(detectDocumentFormat('INDEX.HTML'), 'html')
+  assert.equal(detectDocumentFormat('about.htm'), 'html')
 
   // 非法或未支持格式
   assert.equal(detectDocumentFormat('image.png'), null)
@@ -20,6 +23,8 @@ test('detectDocumentFormat: 根据扩展名识别合法格式', () => {
 test('generateExportFilename: 正确注入目标语言标识', () => {
   assert.equal(generateExportFilename('readme.md', 'zh-CN'), 'readme.zh-CN.md')
   assert.equal(generateExportFilename('video.srt', 'en'), 'video.en.srt')
+  assert.equal(generateExportFilename('locales.json', 'zh-CN'), 'locales.zh-CN.json')
+  assert.equal(generateExportFilename('page.html', 'en'), 'page.en.html')
   assert.equal(generateExportFilename('path/to/doc.txt', 'ja'), 'path/to/doc.ja.txt')
   assert.equal(generateExportFilename('LICENSE', 'fr'), 'LICENSE.fr.txt')
 })

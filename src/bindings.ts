@@ -118,7 +118,7 @@ export type CacheEntry = {
 };
 
 /**  支持的文档格式 */
-export type DocumentFormat = "txt" | "md" | "srt";
+export type DocumentFormat = "txt" | "md" | "srt" | "json" | "html";
 
 /**  文档翻译执行结果 DTO */
 export type DocumentTranslateOutcomeDto = {

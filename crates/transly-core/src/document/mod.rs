@@ -3,10 +3,14 @@
 //! 支持 `.txt`（纯文本）、`.md`（Markdown）、`.srt`（SubRip 字幕）格式。
 //! 严格保障原文档结构、Markdown 代码块与公式、SRT 序号和时间轴 100% 保真。
 
+pub mod html;
+pub mod json;
 pub mod md;
 pub mod srt;
 pub mod txt;
 
+pub use html::parse_html;
+pub use json::parse_json;
 pub use md::parse_md;
 pub use srt::parse_srt;
 pub use txt::parse_txt;
@@ -26,6 +30,8 @@ pub enum DocumentFormat {
     Txt,
     Md,
     Srt,
+    Json,
+    Html,
 }
 
 impl std::str::FromStr for DocumentFormat {
@@ -36,6 +42,8 @@ impl std::str::FromStr for DocumentFormat {
             "txt" | "text" => Ok(Self::Txt),
             "md" | "markdown" => Ok(Self::Md),
             "srt" => Ok(Self::Srt),
+            "json" => Ok(Self::Json),
+            "html" | "htm" => Ok(Self::Html),
             other => Err(crate::Error::Input(format!("不支持的文档格式: {other}"))),
         }
     }
@@ -84,6 +92,8 @@ pub async fn translate_document_content(
         DocumentFormat::Txt => parse_txt(content),
         DocumentFormat::Md => parse_md(content),
         DocumentFormat::Srt => parse_srt(content),
+        DocumentFormat::Json => parse_json(content),
+        DocumentFormat::Html => parse_html(content),
     };
 
     if chunks.is_empty() {

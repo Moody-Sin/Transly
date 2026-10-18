@@ -14,6 +14,12 @@ export function detectDocumentFormat(filename: string): DocumentFormat | null {
   if (lower.endsWith('.srt')) {
     return 'srt'
   }
+  if (lower.endsWith('.json')) {
+    return 'json'
+  }
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+    return 'html'
+  }
   return null
 }
 

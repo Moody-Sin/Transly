@@ -738,7 +738,12 @@ interface BatchResponsePayload {
 }
 
 import { planBatchRanges, splitByViewport, type BatchLimits } from '../shared/batchPlan'
-import { buildRichTextComposite, restoreRichTextComposite, type TextPart } from '../shared/richText'
+import {
+  buildRichTextComposite,
+  restoreRichTextComposite,
+  cleanCompositeText,
+  type TextPart,
+} from '../shared/richText'
 import { t } from '../i18n'
 
 /**
@@ -1049,7 +1054,20 @@ function applyBatchResponse(
             currentTaskCompleted += 1
             succeeded += 1
           } else {
-            // 占位符丢失或语序损坏：保持原文 DOM 结构完整，记录失败项供后续重试
+            // 占位符丢失或语序损坏：保持原文 DOM 结构完整
+            // 在双语对照模式下，若无法做原位切分，可优雅降级为在复合段落末尾追加整句译文
+            if (currentTranslateMode === 'bilingual') {
+              const cleanedText = cleanCompositeText(itemRes.text)
+              if (cleanedText && entry.compositeInfo.parts.length > 0) {
+                const lastNode =
+                  entry.compositeInfo.parts[entry.compositeInfo.parts.length - 1].node
+                replaceTextNode(lastNode, cleanedText, 'bilingual')
+                failedItemsMap.delete(entry.id)
+                currentTaskCompleted += 1
+                succeeded += 1
+                continue
+              }
+            }
             rememberFailed({
               ...entry,
               errorKind: 'rich_text_mismatch',
@@ -1097,6 +1115,18 @@ function applyBatchResponse(
               currentTaskCompleted += 1
               succeeded += 1
             } else {
+              if (currentTranslateMode === 'bilingual') {
+                const cleanedText = cleanCompositeText(translated)
+                if (cleanedText && batch[idx].compositeInfo.parts.length > 0) {
+                  const parts = batch[idx].compositeInfo.parts
+                  const lastNode = parts[parts.length - 1].node
+                  replaceTextNode(lastNode, cleanedText, 'bilingual')
+                  failedItemsMap.delete(batch[idx].id)
+                  currentTaskCompleted += 1
+                  succeeded += 1
+                  return
+                }
+              }
               rememberFailed({
                 ...batch[idx],
                 errorKind: 'rich_text_mismatch',

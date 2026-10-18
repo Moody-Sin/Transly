@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { commands } from '../bindings'
 import { canRetryExecution, nextState, type TaskError, type TaskState } from './taskState'
 import { applyIfCurrent } from './generation'
-import { toFailureOutcome } from './outcome'
+import { sanitizeCancelledStreamText, toFailureOutcome } from './outcome'
 
 export { applyIfCurrent }
 
@@ -236,7 +236,15 @@ export function useTaskRunner(
     genRef.current += 1
     // 向后端发送物理取消信号，中断底层 LLM 流式连接与 Token 消耗
     commands.cancelStreamTask(activeTaskId).catch(() => {})
-    setSnapshot((s) => (s.state === 'running' ? { ...s, state: nextState(s.state, 'cancel') } : s))
+    setSnapshot((s) =>
+      s.state === 'running'
+        ? {
+            ...s,
+            state: nextState(s.state, 'cancel'),
+            text: sanitizeCancelledStreamText(s.text),
+          }
+        : s,
+    )
   }, [clearDebounce])
 
   const reset = useCallback(() => {

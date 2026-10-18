@@ -172,3 +172,15 @@ export function restoreRichTextComposite(
 
   return result
 }
+
+/**
+ * 清洗复合文本中的所有内部占位符与闭合标签，返回纯净的段落译文字符串。
+ * 供双语对照模式或降级回退时整段展示使用。
+ */
+export function cleanCompositeText(text: string): string {
+  if (!text) return ''
+  return text
+    .replace(/⟦\s*T_\d+\s*⟧(.*?)⟦\s*\/T_\d+\s*⟧/gs, '$1')
+    .replace(/⟦\s*\/?[Tt]_\d+\s*⟧/g, '')
+    .trim()
+}

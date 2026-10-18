@@ -807,11 +807,8 @@ pub async fn set_shortcut(
     .await
     .unwrap_or_else(|_| DEFAULT_SHORTCUT.to_string());
 
-    // 尝试注销旧快捷键以及即将注册的键（防止用户未改动快捷键重复保存时触发 AlreadyRegistered 错误）
+    // 尝试注销本功能先前注册的旧快捷键（绝不注销 clean，避免静默抢占其他功能的快捷键，见 LESSONS 第 24 条）
     let _ = app.global_shortcut().unregister(old_shortcut.as_str());
-    if old_shortcut != clean {
-        let _ = app.global_shortcut().unregister(clean);
-    }
 
     // 立即注册新快捷键
     let app_h = app.clone();
@@ -946,10 +943,8 @@ pub async fn set_replace_shortcut(
     .await
     .unwrap_or_else(|_| DEFAULT_REPLACE_SHORTCUT.to_string());
 
+    // 尝试注销本功能先前注册的旧快捷键（绝不注销 clean，避免静默抢占）
     let _ = app.global_shortcut().unregister(old_shortcut.as_str());
-    if old_shortcut != clean {
-        let _ = app.global_shortcut().unregister(clean);
-    }
 
     let app_h = app.clone();
     let sel_flag = selection_ctx.sel_flag.clone();
@@ -1504,6 +1499,46 @@ pub async fn save_preferred_replace_engine(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_preferred_target_lang(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<String, String> {
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("preferred_target_lang")
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "zh-CN".to_string())
+    })
+    .await
+    .map_err(|e| format!("读取默认目标语言配置异常: {e}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_preferred_target_lang(
+    target_lang: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let clean = target_lang.trim().to_string();
+    if !transly_core::validate_language_code(&clean) || clean.eq_ignore_ascii_case("auto") {
+        return Err("无效或不受支持的目标语言代码".to_string());
+    }
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_ref.set_setting("preferred_target_lang", &clean)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("保存默认目标语言调度异常: {e}"))?
+    .map_err(|e| format!("写入系统配置失败: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn get_llm_style(
     cache: tauri::State<'_, Arc<TranslationCache>>,
 ) -> Result<String, String> {
@@ -1950,6 +1985,29 @@ mod tests {
             validate_preferred_replace_engine("offline"),
             Ok("offline".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_preferred_target_lang_persistence() {
+        let dir = std::env::temp_dir().join(format!("transly-lang-test-{}", rand::random::<u64>()));
+        let cache = TranslationCache::open_default(&dir);
+
+        // 未配置时默认 None（调用处回退 zh-CN）
+        assert_eq!(cache.get_setting("preferred_target_lang").unwrap(), None);
+
+        // 非法语言代码校验
+        assert!(!transly_core::validate_language_code("invalid-lang"));
+
+        // 保存合法语言代码
+        cache.set_setting("preferred_target_lang", "en").unwrap();
+        assert_eq!(
+            cache
+                .get_setting("preferred_target_lang")
+                .unwrap()
+                .as_deref(),
+            Some("en")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

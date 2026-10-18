@@ -132,23 +132,32 @@ pub async fn translate_batch_with_cache(
 
         let engine_results = engine.translate_batch_tolerant(&engine_reqs).await;
         // translate_batch_tolerant 保证与输入等长
+        let mut cache_entries = Vec::new();
         for ((idx, req, text), res) in pending.iter().zip(engine_results) {
             match res {
                 Ok(resp) => {
                     // ── 4. 写缓存（仅成功项，且存的是未经译文端替换的文本）
                     if cache_enabled {
-                        let _ = cache.set(
-                            text,
-                            &resp.text,
-                            &req.source_lang,
-                            &req.target_lang,
-                            &resp.engine,
-                        );
+                        cache_entries.push((
+                            *text,
+                            resp.text.clone(),
+                            req.source_lang.clone(),
+                            req.target_lang.clone(),
+                            resp.engine.clone(),
+                        ));
                     }
                     results[*idx] = Some(Ok(resp));
                 }
                 Err(e) => results[*idx] = Some(Err(e)),
             }
+        }
+
+        // 单次原子事务批量写入缓存，消除循环频繁加锁与多次磁盘 fsync
+        if cache_enabled && !cache_entries.is_empty() {
+            let rows = cache_entries.iter().map(|(txt, trans, s, t, eng)| {
+                (*txt, trans.as_str(), s.as_str(), t.as_str(), eng.as_str())
+            });
+            let _ = cache.set_batch(rows);
         }
     }
 

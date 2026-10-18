@@ -17,3 +17,11 @@ export function toFailureOutcome(err: unknown): TranslateFailure {
     },
   }
 }
+
+/**
+ * 清洗打断取消时的流式残缺文本，杜绝内部代码保护占位符（形如 `⟦TRANSLY_CODE_0⟧`）残留泄漏至用户界面。
+ */
+export function sanitizeCancelledStreamText(text: string): string {
+  if (!text) return ''
+  return text.replace(/⟦\s*TRANSLY_CODE_\d+\s*⟧/g, '[代码]').replace(/⟦\s*TRANSLY_CODE_[^⟧]*$/g, '')
+}

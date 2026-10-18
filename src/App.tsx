@@ -81,12 +81,26 @@ export default function App() {
   }, [])
 
   const [sourceText, setSourceText] = useState('')
-  const [targetLang, setTargetLang] = useState('zh-CN')
-  const [engine, setEngine] = useState('google')
+  const [targetLang, setTargetLang] = useState(
+    () => localStorage.getItem('transly_main_target_lang') || 'zh-CN',
+  )
+  const [engine, setEngine] = useState(
+    () => localStorage.getItem('transly_main_engine') || 'google',
+  )
   const [copied, setCopied] = useState(false)
   const [serverToken, setServerToken] = useState<string>('')
   const [tokenCopied, setTokenCopied] = useState(false)
   const [rotatingToken, setRotatingToken] = useState(false)
+
+  // 持久化主窗口引擎与目标语言偏好，并同步后端默认配置
+  useEffect(() => {
+    localStorage.setItem('transly_main_target_lang', targetLang)
+    commands.savePreferredTargetLang(targetLang).catch(() => {})
+  }, [targetLang])
+
+  useEffect(() => {
+    localStorage.setItem('transly_main_engine', engine)
+  }, [engine])
 
   // 设置面板状态
   const [showSettings, setShowSettings] = useState(false)

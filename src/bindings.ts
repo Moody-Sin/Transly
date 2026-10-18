@@ -57,6 +57,8 @@ export const commands = {
 	getShortcutStatus: () => __TAURI_INVOKE<ShortcutStatusDto>("get_shortcut_status"),
 	getPreferredReplaceEngine: () => typedError<string, string>(__TAURI_INVOKE("get_preferred_replace_engine")),
 	savePreferredReplaceEngine: (engine: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_replace_engine", { engine })),
+	getPreferredTargetLang: () => typedError<string, string>(__TAURI_INVOKE("get_preferred_target_lang")),
+	savePreferredTargetLang: (targetLang: string) => typedError<null, string>(__TAURI_INVOKE("save_preferred_target_lang", { targetLang })),
 	getProxyConfig: () => typedError<ProxyConfig, string>(__TAURI_INVOKE("get_proxy_config")),
 	saveProxyConfig: (config: ProxyConfig) => typedError<null, string>(__TAURI_INVOKE("save_proxy_config", { config })),
 	/**  触发一次截图翻译：选光标所在显示器、捕获冻结帧并弹出覆盖窗。 */
@@ -64,7 +66,7 @@ export const commands = {
 	/**  读取当前截图会话。幂等读，供覆盖窗挂载（含 StrictMode 二次执行）使用。 */
 	getScreenshotSession: () => typedError<ScreenshotSessionDto, OcrErrorDto>(__TAURI_INVOKE("get_screenshot_session")),
 	/**  提交框选区域，返回归一化到整张冻结帧的 OCR 块。 */
-	recognizeScreenshotSelection: (rect: NormRect, generation: number) => typedError<OcrBlockDto[], OcrErrorDto>(__TAURI_INVOKE("recognize_screenshot_selection", { rect, generation })),
+	recognizeScreenshotSelection: (rect: NormRect, generation: number, targetLang: string | null) => typedError<OcrBlockDto[], OcrErrorDto>(__TAURI_INVOKE("recognize_screenshot_selection", { rect, generation, targetLang })),
 	/**  取消并关闭覆盖窗。 */
 	cancelScreenshotTranslation: () => typedError<null, string>(__TAURI_INVOKE("cancel_screenshot_translation")),
 	/**  探测当前环境的截图翻译能力。 */

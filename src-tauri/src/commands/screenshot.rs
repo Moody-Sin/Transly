@@ -176,11 +176,14 @@ pub async fn recognize_screenshot_selection(
     app: AppHandle,
     rect: NormRect,
     generation: u32,
+    target_lang: Option<String>,
 ) -> Result<Vec<OcrBlockDto>, OcrErrorDto> {
     // OCR 是秒级阻塞操作（解码 PNG + 识别），必须派发到阻塞线程池。
-    tauri::async_runtime::spawn_blocking(move || crate::overlay::recognize(&app, rect, generation))
-        .await
-        .map_err(|e| OcrErrorDto::internal(format!("OCR 任务调度异常: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::overlay::recognize(&app, rect, generation, target_lang)
+    })
+    .await
+    .map_err(|e| OcrErrorDto::internal(format!("OCR 任务调度异常: {e}")))?
 }
 
 /// 读取截图翻译快捷键。
@@ -345,73 +348,62 @@ pub async fn translate_screenshot_blocks(
 
     let deps_arc = deps.inner().clone();
 
-    // 引擎解析与批量流水线都是阻塞操作（内部同步访问 SQLite 缓存）。
-    let results = tauri::async_runtime::spawn_blocking(move || {
-        tauri::async_runtime::block_on(async move {
-            let active_engine = match engine {
-                Some(ref name) => deps_arc.pool.get_engine(name).await,
-                None => deps_arc.pool.default_engine(),
-            };
-            let engine_id = active_engine.id().to_string();
+    let active_engine = match engine {
+        Some(ref name) => deps_arc.pool.get_engine(name).await,
+        None => deps_arc.pool.default_engine(),
+    };
+    let engine_id = active_engine.id().to_string();
 
-            let requests: Vec<transly_core::TranslationRequest> = texts
-                .iter()
-                .map(|t| transly_core::TranslationRequest {
-                    text: t.clone(),
-                    // 截图内容语言未知，交给引擎/离线检测
-                    source_lang: "auto".to_string(),
-                    target_lang: target_lang.clone(),
-                })
-                .collect();
-
-            let (cache_enabled, _gen) = deps_arc.cache_controller.snapshot();
-            let glossary = deps_arc.glossary.read().await.clone();
-
-            let outcome = transly_core::translate_batch_with_cache(
-                transly_core::BatchPipelineDeps {
-                    engine: active_engine.as_ref(),
-                    cache: &deps_arc.cache,
-                    glossary: &glossary,
-                    cache_enabled,
-                },
-                &requests,
-            )
-            .await;
-
-            outcome
-                .results
-                .into_iter()
-                .enumerate()
-                .map(|(idx, r)| match r {
-                    Ok(resp) => ScreenshotBlockResultDto {
-                        index: idx as u32,
-                        text: resp.text,
-                        failed: false,
-                        error_kind: None,
-                        error_message: None,
-                        engine: resp.engine,
-                    },
-                    Err(e) => {
-                        let dto = TranslateErrorDto::from_error(&e);
-                        ScreenshotBlockResultDto {
-                            index: idx as u32,
-                            text: String::new(),
-                            failed: true,
-                            error_kind: Some(dto.kind),
-                            error_message: Some(dto.message),
-                            engine: engine_id.clone(),
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
+    let requests: Vec<transly_core::TranslationRequest> = texts
+        .iter()
+        .map(|t| transly_core::TranslationRequest {
+            text: t.clone(),
+            // 截图内容语言未知，交给引擎/离线检测
+            source_lang: "auto".to_string(),
+            target_lang: target_lang.clone(),
         })
-    })
-    .await
-    .map_err(|e| {
-        TranslateErrorDto::from_error(&transly_core::Error::Internal(format!(
-            "批量翻译任务调度异常: {e}"
-        )))
-    })?;
+        .collect();
+
+    let (cache_enabled, _gen) = deps_arc.cache_controller.snapshot();
+    let glossary = deps_arc.glossary.read().await.clone();
+
+    let outcome = transly_core::translate_batch_with_cache(
+        transly_core::BatchPipelineDeps {
+            engine: active_engine.as_ref(),
+            cache: &deps_arc.cache,
+            glossary: &glossary,
+            cache_enabled,
+        },
+        &requests,
+    )
+    .await;
+
+    let results = outcome
+        .results
+        .into_iter()
+        .enumerate()
+        .map(|(idx, r)| match r {
+            Ok(resp) => ScreenshotBlockResultDto {
+                index: idx as u32,
+                text: resp.text,
+                failed: false,
+                error_kind: None,
+                error_message: None,
+                engine: resp.engine,
+            },
+            Err(e) => {
+                let dto = TranslateErrorDto::from_error(&e);
+                ScreenshotBlockResultDto {
+                    index: idx as u32,
+                    text: String::new(),
+                    failed: true,
+                    error_kind: Some(dto.kind),
+                    error_message: Some(dto.message),
+                    engine: engine_id.clone(),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(results)
 }

@@ -434,6 +434,7 @@ pub fn recognize(
     app: &AppHandle,
     rect: NormRect,
     generation: u32,
+    target_lang_override: Option<String>,
 ) -> Result<Vec<OcrBlockDto>, OcrErrorDto> {
     let session = app.state::<Arc<ScreenshotSession>>().inner().clone();
 
@@ -446,6 +447,13 @@ pub fn recognize(
         // 代际闸门：陈旧窗口的结果不得落到新会话上。
         if st.generation != generation {
             return Err(OcrErrorDto::no_image());
+        }
+
+        if let Some(ref lang) = target_lang_override {
+            let clean = lang.trim();
+            if !clean.is_empty() && transly_core::validate_language_code(clean) {
+                st.target_lang = clean.to_string();
+            }
         }
 
         // 选区越界的唯一权威钳制点。前端的钳制是 UX 便利，这里才是信任边界。

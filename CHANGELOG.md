@@ -7,7 +7,18 @@
 
 ## [未发布]
 
-### 新增
+### 优化与增强
+- **批量流水线单事务原子写入优化 (`batch_pipeline.rs`)**：`translate_batch_with_cache` 将原本在循环中逐条单事务写入缓存的模式，重构为收集全部成功项后单次调用 `cache.set_batch` 原子批量写入，极大降低磁盘 I/O 争用与锁开销；同时移除 `translate_screenshot_blocks` 中的 `spawn_blocking + block_on` 嵌套反模式，直接异步执行。
+- **划词原地替换首选目标语言配置与跨端联动 (`selection.rs`)**：新增 `get_preferred_target_lang` 与 `save_preferred_target_lang` IPC 命令，划词原地替换（`Alt+Shift+R`）自动遵循用户在主窗口或设置中持久化的目标语言偏好，不再硬编码为中文。
+- **截图覆盖窗重选区域目标语言动态同步 (`overlay/mod.rs`, `commands/screenshot.rs`, `ScreenshotOverlay.tsx`)**：`recognize_screenshot_selection` 支持接收当前界面目标语言参数并同步更新会话内部状态，解决用户在覆盖窗切换目标语言后重新框选时 OCR 语言提示回退至初始中文的问题。
+- **浏览器扩展富文本倒装语序容错与优雅降级 (`richText.ts`, `content/index.ts`)**：新增 `cleanCompositeText` 辅助函数；在双语对照模式下，针对日文/德文等倒装语序导致占位符顺序打乱的段落，优雅降级为在复合段落末尾追加完整双语译文，既维持了原地替换模式下不破坏 DOM 物理结构的 fail-closed 防线，又避免了双语对照模式下大面积弃翻报错。
+- **悬浮窗与截图覆盖窗补齐完整语言列表 (`FloatWindow.tsx`, `ScreenshotOverlay.tsx`)**：将悬浮窗与截图覆盖窗的语言下拉选项由原本写死的 3 种扩充为与主窗口对齐的 6 种主流语言（`zh-CN`, `en`, `ja`, `ko`, `fr`, `de`）。
+- **主窗口当前引擎与目标语言持久化 (`App.tsx`)**：在 `localStorage` 中持久化 `transly_main_target_lang` 与 `transly_main_engine`，并在切换时自动同步后端 `savePreferredTargetLang`，重启应用无需重新手动选择。
+- **系统原生托盘菜单文案支持国际化 (`src-tauri/src/main.rs`)**：构建系统托盘时自动读取当前语言偏好，当用户偏好为英文环境时，托盘菜单项与 Tooltip 自适应呈现英文文案。
+
+### 修复
+- **全局快捷键重复注销导致静默抢占他人按键缺陷 (`commands/mod.rs`)**：`set_shortcut` 与 `set_replace_shortcut` 移除 `if old_shortcut != clean { let _ = app.global_shortcut().unregister(clean); }`，严格遵循 `LESSONS.md` 第 24 条教训，仅注销自身旧键 `old_shortcut`；当目标新键已被其他功能或系统占用时，如实让 `on_shortcut` 抛出 `AlreadyRegistered` 错误并回滚通知用户，杜绝静默抢占。
+- **大模型流式翻译打断取消时占位符未还原泄漏至界面 (`useTaskRunner.ts`, `outcome.ts`)**：新增 `sanitizeCancelledStreamText` 纯函数，对流式打字中途取消（`cancel()`）时的残缺文本进行安全清洗，将内部专有括线占位符（如 `⟦TRANSLY_CODE_0⟧`）替换为友好的 `[代码]` 提示并剔除残缺标记，彻底消除内部标记泄露；新增单元测试覆盖。
 - **框选截图翻译（三平台）**：`Alt+Shift+S` / 托盘「截图翻译」/ 主窗口按钮三入口触发，屏幕冻结为覆盖窗后拖拽框选任意区域，自动 OCR 识别并**按原坐标叠加译文**（保排版），可一键「还原原文」；覆盖窗内可直接切换引擎与目标语言即时重译、复制全部译文、把识别/翻译结果发送到主窗口精修重译。
   - **三平台自研屏幕捕获**（统一入口 `capture_monitor`）：Windows GDI `BitBlt`、macOS `CGDisplayCreateImage`、Linux X11 `xcb`。**刻意不引入 `xcap`** —— 其 Linux 依赖链强制拉入 pipewire/libspa（非 optional），而 `libspa 0.10.1` 无条件引用 pipewire 1.0 才引入的字段，在 Ubuntu 22.04 上编译直接失败；这些依赖只服务于 Wayland，而 Wayland 本就不在支持范围内。
   - **三平台 OCR**（统一入口 `recognize_words`）：Windows `Windows.Media.Ocr`、macOS Vision、Linux 外呼 `tesseract`（`- - tsv` 管道，全流程内存零落盘）。

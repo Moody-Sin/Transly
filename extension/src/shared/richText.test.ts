@@ -4,6 +4,7 @@ import {
   extractPlaceholderTokens,
   buildRichTextComposite,
   restoreRichTextComposite,
+  cleanCompositeText,
   type TextPart,
 } from './richText.ts'
 
@@ -227,4 +228,10 @@ test('富文本正常语序不受语序校验影响（回归护栏）', () => {
   assert.equal(restored.get('p0'), '请访问')
   assert.equal(restored.get('p2'), '之后，请在')
   assert.equal(restored.get('p4'), '应用前操作。')
+})
+
+test('cleanCompositeText 清除占位符并提取闭合标签内文本', () => {
+  const mangled = '请访问⟦T_1⟧我们的站点⟦/T_1⟧之后，请在⟦T_3⟧下载⟦/T_3⟧应用前操作。'
+  assert.equal(cleanCompositeText(mangled), '请访问我们的站点之后，请在下载应用前操作。')
+  assert.equal(cleanCompositeText('前缀 ⟦T_0⟧ 孤立占位符 尾部'), '前缀  孤立占位符 尾部')
 })

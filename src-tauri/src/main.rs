@@ -431,14 +431,32 @@ fn main() {
                 }
             });
 
-            // 构建系统托盘菜单
-            let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
-            let shot_i = MenuItem::with_id(app, "screenshot", "截图翻译", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "退出 Transly", true, None::<&str>)?;
+            // 构建系统托盘菜单（支持根据语言偏好国际化）
+            let is_en = cache
+                .get_setting("transly_locale")
+                .ok()
+                .flatten()
+                .map(|v| v.starts_with("en"))
+                .unwrap_or(false);
+
+            let (show_text, shot_text, quit_text, tooltip_text) = if is_en {
+                (
+                    "Show Main Window",
+                    "Screenshot Translation",
+                    "Quit Transly",
+                    "Transly Desktop Translator",
+                )
+            } else {
+                ("显示主窗口", "截图翻译", "退出 Transly", "Transly 桌面翻译")
+            };
+
+            let show_i = MenuItem::with_id(app, "show", show_text, true, None::<&str>)?;
+            let shot_i = MenuItem::with_id(app, "screenshot", shot_text, true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", quit_text, true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &shot_i, &quit_i])?;
 
             let _tray = TrayIconBuilder::new()
-                .tooltip("Transly 桌面翻译")
+                .tooltip(tooltip_text)
                 .icon(
                     app.default_window_icon()
                         .expect("Tauri 上下文必须内置默认窗口图标")

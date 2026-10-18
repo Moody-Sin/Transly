@@ -211,7 +211,7 @@ export default function ScreenshotOverlay() {
     setError(null)
     setResults(new Map())
     try {
-      const res = await commands.recognizeScreenshotSelection(rect, session.generation)
+      const res = await commands.recognizeScreenshotSelection(rect, session.generation, targetLang)
       if (res.status === 'error') {
         setError({ source: 'ocr', dto: res.error })
         return
@@ -442,9 +442,12 @@ export default function ScreenshotOverlay() {
               }}
               className="rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[11px] text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
             >
-              <option value="zh-CN">{t.translation.languageZhCN}</option>
+              <option value="zh-CN">{t.languages['zh-CN']}</option>
               <option value="en">{t.languages.en}</option>
-              <option value="ja">{t.translation.languageJa}</option>
+              <option value="ja">{t.languages.ja}</option>
+              <option value="ko">{t.languages.ko}</option>
+              <option value="fr">{t.languages.fr}</option>
+              <option value="de">{t.languages.de}</option>
             </select>
             <button
               type="button"

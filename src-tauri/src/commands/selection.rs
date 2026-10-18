@@ -108,22 +108,29 @@ pub fn trigger_selection_replacement(
 
         // 第二阶段：无锁执行网络翻译与术语库处理（网络耗时不阻塞其他快捷键与剪贴板监听）
         let (cache_enabled, start_gen) = deps.cache_controller.snapshot();
-        let target_lang = transly_core::resolve_smart_target_lang(clean, "zh-CN");
 
-        let preferred_engine = {
+        let (preferred_engine, configured_target_lang) = {
             let cache_ref = deps.cache.clone();
             tokio::task::spawn_blocking(move || {
-                cache_ref
+                let eng = cache_ref
                     .get_setting("preferred_replace_engine")
                     .ok()
                     .flatten()
                     .or_else(|| crate::secrets::get_secret("preferred_replace_engine").ok())
                     .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| "google".to_string())
+                    .unwrap_or_else(|| "google".to_string());
+                let lang = cache_ref
+                    .get_setting("preferred_target_lang")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "zh-CN".to_string());
+                (eng, lang)
             })
             .await
-            .unwrap_or_else(|_| "google".to_string())
+            .unwrap_or_else(|_| ("google".to_string(), "zh-CN".to_string()))
         };
+        let target_lang = transly_core::resolve_smart_target_lang(clean, &configured_target_lang);
 
         let active_engine = deps.pool.get_engine(&preferred_engine).await;
 

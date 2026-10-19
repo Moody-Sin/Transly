@@ -12,6 +12,9 @@ import {
   Image as ImageIcon,
   Camera,
   Volume2,
+  Eye,
+  EyeOff,
+  Activity,
 } from 'lucide-react'
 import { commands } from './bindings'
 import type {
@@ -30,7 +33,7 @@ import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
 import DocumentPanel from './DocumentPanel'
 import ShortcutRecorder from './ShortcutRecorder'
-import { speakText } from './utils/speech'
+import { speakText, stopSpeaking } from './utils/speech'
 import { downloadBlob } from './utils/download'
 import { formatGlossaryCsv, parseGlossaryCsv } from './utils/csv'
 import { useDialogFocus } from './utils/useDialogFocus'
@@ -95,6 +98,7 @@ export default function App() {
     () => localStorage.getItem('transly_main_engine') || 'google',
   )
   const [copied, setCopied] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
   const [serverToken, setServerToken] = useState<string>('')
   const [tokenCopied, setTokenCopied] = useState(false)
   const [rotatingToken, setRotatingToken] = useState(false)
@@ -118,6 +122,16 @@ export default function App() {
   const [deeplKey, setDeeplKey] = useState('')
   const [deepseekKey, setDeepseekKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
+  const [showDeeplKey, setShowDeeplKey] = useState(false)
+  const [showDeepseekKey, setShowDeepseekKey] = useState(false)
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false)
+  const [engineTestStatus, setEngineTestStatus] = useState<
+    Record<string, { state: 'testing' | 'success' | 'error'; message: string }>
+  >({})
+  const [proxyTestStatus, setProxyTestStatus] = useState<{
+    state: 'testing' | 'success' | 'error'
+    message: string
+  } | null>(null)
   const [deepseekBaseUrl, setDeepseekBaseUrl] = useState('')
   const [deepseekModel, setDeepseekModel] = useState('')
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('')
@@ -172,10 +186,14 @@ export default function App() {
     }, 3000)
   }
 
-  // 卸载时清理 Toast 定时器，避免组件销毁后仍触发 setState
+  const isMountedRef = useRef(true)
+
+  // 卸载时清理 Toast 定时器与停止可能正在进行的语音播放，避免组件销毁后仍触发 setState
   useEffect(
     () => () => {
+      isMountedRef.current = false
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+      stopSpeaking()
     },
     [],
   )
@@ -899,6 +917,160 @@ export default function App() {
     }
   }
 
+  const handleTestEngine = async (engineId: string) => {
+    // 1. 若当前输入框中有未保存的输入，先同步持久化以测试最新配置
+    try {
+      if (engineId === 'deepl' && deeplKey.trim()) {
+        const res = await commands.saveApiKey('deepl', deeplKey.trim())
+        if (res.status === 'error') throw new Error(res.error)
+        setDeeplKey('')
+      } else if (engineId === 'deepseek') {
+        if (deepseekKey.trim()) {
+          const res = await commands.saveApiKey('deepseek', deepseekKey.trim())
+          if (res.status === 'error') throw new Error(res.error)
+          setDeepseekKey('')
+        }
+        await commands.saveLlmConfig(
+          'deepseek',
+          deepseekBaseUrl.trim() || null,
+          deepseekModel.trim() || null,
+        )
+      } else if (engineId === 'openai') {
+        if (openaiKey.trim()) {
+          const res = await commands.saveApiKey('openai', openaiKey.trim())
+          if (res.status === 'error') throw new Error(res.error)
+          setOpenaiKey('')
+        }
+        await commands.saveLlmConfig(
+          'openai',
+          openaiBaseUrl.trim() || null,
+          openaiModel.trim() || null,
+        )
+      }
+      checkConfiguredKeys()
+    } catch (saveErr) {
+      if (!isMountedRef.current) return
+      const msg = saveErr instanceof Error ? saveErr.message : String(saveErr)
+      setEngineTestStatus((prev) => ({
+        ...prev,
+        [engineId]: {
+          state: 'error',
+          message: t.settings.testFailed.replace('{msg}', msg),
+        },
+      }))
+      return
+    }
+
+    setEngineTestStatus((prev) => ({
+      ...prev,
+      [engineId]: { state: 'testing', message: t.settings.testingConnection },
+    }))
+    const start = performance.now()
+    try {
+      const res = await commands.translate('Hello', 'en', 'zh-CN', engineId)
+      const duration = Math.round(performance.now() - start)
+
+      // 2. 避免污染用户翻译历史：测试产生的 'Hello' 记录即测即清
+      try {
+        const histRes = await commands.getTranslationHistory(5, 0)
+        if (histRes.status === 'ok') {
+          const testEntry = histRes.data.find(
+            (item) => item.source_text === 'Hello' && item.engine === engineId,
+          )
+          if (testEntry) {
+            await commands.deleteHistoryEntry(testEntry.cache_key)
+          }
+        }
+      } catch {
+        // 清理失败忽略，不影响主测试结果
+      }
+
+      if (!isMountedRef.current) return
+      if (res.status === 'ok') {
+        setEngineTestStatus((prev) => ({
+          ...prev,
+          [engineId]: {
+            state: 'success',
+            message: t.settings.testSuccess.replace('{ms}', String(duration)),
+          },
+        }))
+      } else {
+        const errMsg = res.error.message || t.error[res.error.kind] || ''
+        setEngineTestStatus((prev) => ({
+          ...prev,
+          [engineId]: {
+            state: 'error',
+            message: t.settings.testFailed.replace('{msg}', errMsg),
+          },
+        }))
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return
+      const msg = err instanceof Error && err.message ? err.message : String(err)
+      setEngineTestStatus((prev) => ({
+        ...prev,
+        [engineId]: {
+          state: 'error',
+          message: t.settings.testFailed.replace('{msg}', msg),
+        },
+      }))
+    }
+  }
+
+  const handleTestProxy = async () => {
+    if (proxyMode === 'manual' && proxyUrl.trim()) {
+      try {
+        await handleSaveProxyConfig('manual', proxyUrl.trim())
+      } catch {
+        // 忽略
+      }
+    }
+
+    setProxyTestStatus({ state: 'testing', message: t.settings.testingConnection })
+    const start = performance.now()
+    try {
+      // 通过 Google 引擎测试代理是否可用（Google 服务需要代理才能在国内访问）
+      const res = await commands.translate('Hello', 'en', 'zh-CN', 'google')
+      const duration = Math.round(performance.now() - start)
+
+      // 清除产生的测试记录
+      try {
+        const histRes = await commands.getTranslationHistory(5, 0)
+        if (histRes.status === 'ok') {
+          const testEntry = histRes.data.find(
+            (item) => item.source_text === 'Hello' && item.engine === 'google',
+          )
+          if (testEntry) {
+            await commands.deleteHistoryEntry(testEntry.cache_key)
+          }
+        }
+      } catch {
+        // 忽略
+      }
+
+      if (!isMountedRef.current) return
+      if (res.status === 'ok') {
+        setProxyTestStatus({
+          state: 'success',
+          message: t.settings.proxyTestSuccess.replace('{ms}', String(duration)),
+        })
+      } else {
+        const errMsg = res.error.message || t.error[res.error.kind] || ''
+        setProxyTestStatus({
+          state: 'error',
+          message: t.settings.proxyTestFailed.replace('{msg}', errMsg),
+        })
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return
+      const msg = err instanceof Error && err.message ? err.message : String(err)
+      setProxyTestStatus({
+        state: 'error',
+        message: t.settings.proxyTestFailed.replace('{msg}', msg),
+      })
+    }
+  }
+
   const handleAddGlossary = async () => {
     if (!glossarySource.trim() || !glossaryTarget.trim()) return
     try {
@@ -955,7 +1127,17 @@ export default function App() {
   }
 
   const handleSpeak = (text: string, lang: string) => {
-    speakText(text, lang, runner.snapshot.detectedLang)
+    if (isSpeaking) {
+      stopSpeaking()
+      setIsSpeaking(false)
+      return
+    }
+    setIsSpeaking(true)
+    speakText(text, lang, runner.snapshot.detectedLang, {
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+      onError: () => setIsSpeaking(false),
+    })
   }
 
   const runOcrClipboard = async () => {
@@ -1241,6 +1423,11 @@ export default function App() {
                           forceTargetLang: true,
                         })
                       }
+                    } else if (e.key === 'Escape') {
+                      if (sourceText) {
+                        e.preventDefault()
+                        handleClearSource()
+                      }
                     }
                   }}
                   placeholder={t.translation.inputPlaceholder}
@@ -1323,7 +1510,13 @@ export default function App() {
                       </button>
                     )}
                     {sourceText.length > 0 && (
-                      <span className="text-[10px] text-slate-400">
+                      <span
+                        className={`text-[10px] ${
+                          sourceText.length > 4000
+                            ? 'text-amber-500 dark:text-amber-400 font-medium'
+                            : 'text-slate-400'
+                        }`}
+                      >
                         {t.translation.charCount.replace('{n}', String(sourceText.length))}
                       </span>
                     )}
@@ -1398,11 +1591,17 @@ export default function App() {
                       </button>
                       <button
                         onClick={() => handleSpeak(translatedText, targetLang)}
-                        className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-                        title={t.translation.speak}
+                        className={`flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors ${
+                          isSpeaking
+                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400'
+                            : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                        }`}
+                        title={isSpeaking ? t.translation.stopSpeak : t.translation.speak}
                       >
-                        <Volume2 className="h-3.5 w-3.5" />
-                        <span>{t.translation.speak}</span>
+                        <Volume2
+                          className={`h-3.5 w-3.5 ${isSpeaking ? 'animate-pulse text-indigo-600 dark:text-indigo-400' : ''}`}
+                        />
+                        <span>{isSpeaking ? t.translation.speaking : t.translation.speak}</span>
                       </button>
                       <button
                         onClick={handleCopy}
@@ -1509,17 +1708,59 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <input
-                    type="password"
-                    value={deeplKey}
-                    onChange={(e) => setDeeplKey(e.target.value)}
-                    placeholder={
-                      deeplConfigured
-                        ? t.settings.keyPlaceholderOverwrite
-                        : t.settings.keyPlaceholderDeepl
-                    }
-                    className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      type={showDeeplKey ? 'text' : 'password'}
+                      value={deeplKey}
+                      onChange={(e) => setDeeplKey(e.target.value)}
+                      placeholder={
+                        deeplConfigured
+                          ? t.settings.keyPlaceholderOverwrite
+                          : t.settings.keyPlaceholderDeepl
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-2.5 pr-8 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDeeplKey(!showDeeplKey)}
+                      className="absolute right-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                      title={showDeeplKey ? t.settings.hidePassword : t.settings.showPassword}
+                    >
+                      {showDeeplKey ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between min-h-[16px]">
+                    {(deeplConfigured || deeplKey.trim()) && (
+                      <button
+                        type="button"
+                        onClick={() => handleTestEngine('deepl')}
+                        disabled={engineTestStatus['deepl']?.state === 'testing'}
+                        className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50"
+                      >
+                        <Activity
+                          className={`h-3 w-3 ${engineTestStatus['deepl']?.state === 'testing' ? 'animate-spin' : ''}`}
+                        />
+                        <span>
+                          {engineTestStatus['deepl']?.state === 'testing'
+                            ? t.settings.testingConnection
+                            : t.settings.testConnection}
+                        </span>
+                      </button>
+                    )}
+                    {engineTestStatus['deepl'] && (
+                      <span
+                        className={`text-[10px] ${engineTestStatus['deepl'].state === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}
+                      >
+                        {engineTestStatus['deepl'].message}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -1538,17 +1779,33 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <input
-                    type="password"
-                    value={deepseekKey}
-                    onChange={(e) => setDeepseekKey(e.target.value)}
-                    placeholder={
-                      deepseekConfigured
-                        ? t.settings.keyPlaceholderOverwrite
-                        : t.settings.keyPlaceholderDeepseek
-                    }
-                    className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      type={showDeepseekKey ? 'text' : 'password'}
+                      value={deepseekKey}
+                      onChange={(e) => setDeepseekKey(e.target.value)}
+                      placeholder={
+                        deepseekConfigured
+                          ? t.settings.keyPlaceholderOverwrite
+                          : t.settings.keyPlaceholderDeepseek
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-2.5 pr-8 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDeepseekKey(!showDeepseekKey)}
+                      className="absolute right-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                      title={showDeepseekKey ? t.settings.hidePassword : t.settings.showPassword}
+                    >
+                      {showDeepseekKey ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {t.settings.deepseekCustomTitle}
                   </div>
@@ -1568,6 +1825,32 @@ export default function App() {
                       className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                   </div>
+                  <div className="mt-1 flex items-center justify-between min-h-[16px]">
+                    {(deepseekConfigured || deepseekKey.trim()) && (
+                      <button
+                        type="button"
+                        onClick={() => handleTestEngine('deepseek')}
+                        disabled={engineTestStatus['deepseek']?.state === 'testing'}
+                        className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50"
+                      >
+                        <Activity
+                          className={`h-3 w-3 ${engineTestStatus['deepseek']?.state === 'testing' ? 'animate-spin' : ''}`}
+                        />
+                        <span>
+                          {engineTestStatus['deepseek']?.state === 'testing'
+                            ? t.settings.testingConnection
+                            : t.settings.testConnection}
+                        </span>
+                      </button>
+                    )}
+                    {engineTestStatus['deepseek'] && (
+                      <span
+                        className={`text-[10px] ${engineTestStatus['deepseek'].state === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}
+                      >
+                        {engineTestStatus['deepseek'].message}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -1586,17 +1869,33 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <input
-                    type="password"
-                    value={openaiKey}
-                    onChange={(e) => setOpenaiKey(e.target.value)}
-                    placeholder={
-                      openaiConfigured
-                        ? t.settings.keyPlaceholderOverwrite
-                        : t.settings.keyPlaceholderOpenai
-                    }
-                    className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      type={showOpenaiKey ? 'text' : 'password'}
+                      value={openaiKey}
+                      onChange={(e) => setOpenaiKey(e.target.value)}
+                      placeholder={
+                        openaiConfigured
+                          ? t.settings.keyPlaceholderOverwrite
+                          : t.settings.keyPlaceholderOpenai
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="w-full rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-2.5 pr-8 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowOpenaiKey(!showOpenaiKey)}
+                      className="absolute right-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                      title={showOpenaiKey ? t.settings.hidePassword : t.settings.showPassword}
+                    >
+                      {showOpenaiKey ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                   <div className="mt-1.5 text-[11px] text-slate-400">
                     {t.settings.openaiCustomTitle}
                   </div>
@@ -1616,18 +1915,44 @@ export default function App() {
                       className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-700 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                   </div>
-                  <div className="mt-1 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenaiBaseUrl('http://localhost:11434/v1')
-                        setOpenaiModel('qwen2.5:7b')
-                        if (!openaiKey) setOpenaiKey('ollama')
-                      }}
-                      className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline"
-                    >
-                      💡 {t.settings.ollamaPresetBtn}
-                    </button>
+                  <div className="mt-1 flex items-center justify-between min-h-[16px]">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenaiBaseUrl('http://localhost:11434/v1')
+                          setOpenaiModel('qwen2.5:7b')
+                          if (!openaiKey) setOpenaiKey('ollama')
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        💡 {t.settings.ollamaPresetBtn}
+                      </button>
+                      {(openaiConfigured || openaiKey.trim()) && (
+                        <button
+                          type="button"
+                          onClick={() => handleTestEngine('openai')}
+                          disabled={engineTestStatus['openai']?.state === 'testing'}
+                          className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50"
+                        >
+                          <Activity
+                            className={`h-3 w-3 ${engineTestStatus['openai']?.state === 'testing' ? 'animate-spin' : ''}`}
+                          />
+                          <span>
+                            {engineTestStatus['openai']?.state === 'testing'
+                              ? t.settings.testingConnection
+                              : t.settings.testConnection}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                    {engineTestStatus['openai'] && (
+                      <span
+                        className={`text-[10px] ${engineTestStatus['openai'].state === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}
+                      >
+                        {engineTestStatus['openai'].message}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex justify-end pt-1">
@@ -1805,6 +2130,30 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                <div className="flex items-center justify-between pt-1 min-h-[16px]">
+                  <button
+                    type="button"
+                    onClick={handleTestProxy}
+                    disabled={proxyTestStatus?.state === 'testing'}
+                    className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline disabled:opacity-50"
+                  >
+                    <Activity
+                      className={`h-3 w-3 ${proxyTestStatus?.state === 'testing' ? 'animate-spin' : ''}`}
+                    />
+                    <span>
+                      {proxyTestStatus?.state === 'testing'
+                        ? t.settings.testingConnection
+                        : t.settings.testConnection}
+                    </span>
+                  </button>
+                  {proxyTestStatus && (
+                    <span
+                      className={`text-[10px] ${proxyTestStatus.state === 'success' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}
+                    >
+                      {proxyTestStatus.message}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* 剪贴板监听开关 */}
@@ -2086,15 +2435,33 @@ export default function App() {
                     type="text"
                     value={glossarySource}
                     onChange={(e) => setGlossarySource(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.nativeEvent.isComposing) return
+                      if (e.key === 'Enter' && glossarySource.trim() && glossaryTarget.trim()) {
+                        e.preventDefault()
+                        handleAddGlossary()
+                      }
+                    }}
                     placeholder={t.settings.glossarySourcePlaceholder}
-                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 text-xs"
                   />
                   <input
                     type="text"
                     value={glossaryTarget}
                     onChange={(e) => setGlossaryTarget(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.nativeEvent.isComposing) return
+                      if (e.key === 'Enter' && glossarySource.trim() && glossaryTarget.trim()) {
+                        e.preventDefault()
+                        handleAddGlossary()
+                      }
+                    }}
                     placeholder={t.settings.glossaryTargetPlaceholder}
-                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 text-xs"
                   />
                 </div>
                 <div className="flex items-center justify-between pt-1">
@@ -2127,8 +2494,8 @@ export default function App() {
                       className="rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-[11px] text-slate-800 dark:text-slate-200 outline-none focus:border-indigo-500"
                     />
                     <div className="max-h-36 overflow-y-auto flex flex-col gap-1.5">
-                      {glossaryList
-                        .filter((item) => {
+                      {(() => {
+                        const filtered = glossaryList.filter((item) => {
                           const kw = glossarySearch.trim().toLowerCase()
                           if (!kw) return true
                           return (
@@ -2136,7 +2503,14 @@ export default function App() {
                             item.target.toLowerCase().includes(kw)
                           )
                         })
-                        .map((item) => (
+                        if (filtered.length === 0) {
+                          return (
+                            <div className="py-3 text-center text-[11px] text-slate-400">
+                              {t.settings.glossaryNoMatch}
+                            </div>
+                          )
+                        }
+                        return filtered.map((item) => (
                           <div
                             key={item.source}
                             className="flex items-center justify-between rounded bg-white dark:bg-slate-800 px-2 py-1 border border-slate-200 dark:border-slate-700 text-xs"
@@ -2163,7 +2537,8 @@ export default function App() {
                               <X className="h-3 w-3" />
                             </button>
                           </div>
-                        ))}
+                        ))
+                      })()}
                     </div>
                   </div>
                 )}

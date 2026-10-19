@@ -46,18 +46,61 @@ export function normalizeLanguageCode(lang?: string | null, text?: string): stri
   return 'en-US'
 }
 
-export function speakText(text: string, lang?: string | null, detectedLang?: string | null): void {
+export interface SpeakOptions {
+  onStart?: () => void
+  onEnd?: () => void
+  onError?: (err: unknown) => void
+}
+
+let activeUtterance: SpeechSynthesisUtterance | null = null
+
+export function stopSpeaking(): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return
+  try {
+    window.speechSynthesis.cancel()
+    activeUtterance = null
+  } catch (err) {
+    console.warn('[Transly TTS] 停止语音播放异常：', err)
+  }
+}
+
+export function isSpeaking(): boolean {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false
+  return Boolean(activeUtterance || window.speechSynthesis.speaking)
+}
+
+export function speakText(
+  text: string,
+  lang?: string | null,
+  detectedLang?: string | null,
+  options?: SpeakOptions,
+): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return
   const cleanText = text.trim()
   if (!cleanText) return
 
   try {
-    window.speechSynthesis.cancel()
+    stopSpeaking()
     const targetLang = normalizeLanguageCode(lang || detectedLang, cleanText)
     const utterance = new SpeechSynthesisUtterance(cleanText)
     utterance.lang = targetLang
+    activeUtterance = utterance
+
+    utterance.onstart = () => {
+      options?.onStart?.()
+    }
+    utterance.onend = () => {
+      activeUtterance = null
+      options?.onEnd?.()
+    }
+    utterance.onerror = (e) => {
+      activeUtterance = null
+      options?.onError?.(e)
+    }
     window.speechSynthesis.speak(utterance)
   } catch (err) {
+    activeUtterance = null
     console.warn('[Transly TTS] 语音播放异常：', err)
+    options?.onError?.(err)
   }
 }

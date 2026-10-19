@@ -210,3 +210,16 @@
 - **教训**：
   - Tailwind 暗黑适配不仅要检查主容器背景，更要重点排查未激活 Tab、Badge、轻量辅助按钮及 Hover 态；
   - 所有面向用户的状态提示与按钮文案必须统一纳入 `i18n` 字典架构，严禁在 JSX/TSX 中裸写字符串。
+
+### 31. Web Speech API Utterance 必须维持全局引用防止 GC 状态假死
+- **现象**：在 Chromium 和 WebKit（Tauri WebView）内核中，`SpeechSynthesisUtterance` 实例若仅作为函数局部变量，长文本发音时极易被 JavaScript 引擎垃圾回收，导致底层的 `onend` 与 `onerror` 回调静默丢失，前端按钮状态永久卡在“播放中”。
+- **教训**：
+  - 必须在模块作用域持有 `activeUtterance` 强引用，并在 `stopSpeaking`、`onend`、`onerror` 中主动释放；
+  - 每次触发新发音前应显式调用 `window.speechSynthesis.cancel()` 避免堆叠和串音。
+
+### 32. 连通性测试复用业务接口时必须保证即测即清与前置自动保存
+- **现象**：设置面板若复用业务翻译接口 `commands.translate` 进行连通性探测，会将测试用例（如 `'Hello' -> '你好'`）落盘到 SQLite 缓存并在历史面板中造成脏条目；且未保存新输入的 Key 时直接测试会产生旧配置的假通过。
+- **教训**：
+  - 测试前必须自动同步保存输入框中的最新密钥与端点配置；
+  - 测试完成后必须立即从历史中检索并删除该测试条目，实现零副作用的即测即清。
+

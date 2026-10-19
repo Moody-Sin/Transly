@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Languages,
-  ArrowRight,
+  ArrowLeftRight,
   Copy,
   Check,
   Key,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { commands } from './bindings'
 import type {
+  CacheEntry,
   EngineCapabilitiesDto,
   OfflineEngineStatusDto,
   ProxyMode,
@@ -1003,6 +1004,53 @@ export default function App() {
     }
   }
 
+  /** 快捷对调源与目标语言并支持反向翻译 */
+  const handleSwapLanguages = () => {
+    const currentTarget = runner.snapshot.effectiveTargetLang || targetLang
+    const currentDetected = runner.snapshot.detectedLang
+    let nextTarget: string
+    if (currentTarget === 'en') {
+      nextTarget = currentDetected && currentDetected.startsWith('zh') ? currentDetected : 'zh-CN'
+    } else if (currentTarget === 'zh-CN' || currentTarget.startsWith('zh')) {
+      nextTarget =
+        currentDetected && currentDetected !== 'zh-CN' && currentDetected !== 'zh'
+          ? currentDetected
+          : 'en'
+    } else {
+      nextTarget = currentDetected && currentDetected.startsWith('zh') ? 'zh-CN' : 'en'
+    }
+
+    setTargetLang(nextTarget)
+
+    if (translatedText && translatedText.trim()) {
+      const newSource = translatedText
+      setSourceText(newSource)
+      runner.run(newSource, {
+        source: 'input',
+        targetLang: nextTarget,
+        forceTargetLang: true,
+      })
+    } else if (sourceText.trim()) {
+      runner.run(sourceText, {
+        source: 'input',
+        targetLang: nextTarget,
+        forceTargetLang: true,
+      })
+    }
+  }
+
+  /** 在翻译工作区直接使用并激活历史记录条目 */
+  const handleUseHistoryEntry = (entry: CacheEntry) => {
+    setSourceText(entry.source_text)
+    setTargetLang(entry.target_lang)
+    setActiveTab('translate')
+    runner.run(entry.source_text, {
+      source: 'input',
+      targetLang: entry.target_lang,
+      forceTargetLang: true,
+    })
+  }
+
   return (
     <div className="flex h-screen flex-col bg-slate-50 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100">
       {/* 顶部标题栏 */}
@@ -1048,10 +1096,10 @@ export default function App() {
           <button
             data-testid="tab-translate"
             onClick={() => setActiveTab('translate')}
-            className={`rounded px-3 py-1 text-xs font-medium ${
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${
               activeTab === 'translate'
                 ? 'bg-indigo-600 text-white'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
           >
             {t.history.tabTranslate}
@@ -1059,10 +1107,10 @@ export default function App() {
           <button
             data-testid="tab-history"
             onClick={() => setActiveTab('history')}
-            className={`rounded px-3 py-1 text-xs font-medium ${
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${
               activeTab === 'history'
                 ? 'bg-indigo-600 text-white'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
           >
             {t.history.tabHistory}
@@ -1070,10 +1118,10 @@ export default function App() {
           <button
             data-testid="tab-document"
             onClick={() => setActiveTab('document')}
-            className={`rounded px-3 py-1 text-xs font-medium ${
+            className={`rounded px-3 py-1 text-xs font-medium transition-colors ${
               activeTab === 'document'
                 ? 'bg-indigo-600 text-white'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
           >
             {t.history.tabDocument}
@@ -1084,12 +1132,20 @@ export default function App() {
           <>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <span className="text-xs font-medium text-slate-500">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   {runner.snapshot.detectedLang
                     ? `${t.translation.detectedLang}: ${runner.snapshot.detectedLang}`
                     : t.translation.autoDetect}
                 </span>
-                <ArrowRight className="h-4 w-4 text-slate-400" />
+                <button
+                  type="button"
+                  data-testid="swap-languages"
+                  onClick={handleSwapLanguages}
+                  title={t.translation.swapLanguages}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                </button>
                 <div className="flex items-center gap-1.5">
                   <select
                     value={targetLang}
@@ -1176,6 +1232,17 @@ export default function App() {
                     // 即输即译：500ms 防抖，新输入立即作废上一代在途结果
                     runner.run(v, { source: 'input', debounceMs: 500 })
                   }}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      e.preventDefault()
+                      if (sourceText.trim() && !isTranslating) {
+                        runner.run(sourceText, {
+                          source: 'input',
+                          forceTargetLang: true,
+                        })
+                      }
+                    }
+                  }}
                   placeholder={t.translation.inputPlaceholder}
                   className="flex-1 resize-none bg-transparent text-sm text-slate-800 dark:text-slate-100 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"
                 />
@@ -1186,7 +1253,7 @@ export default function App() {
                       {canRetry(state, error) && (
                         <button
                           onClick={runner.retry}
-                          className="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 font-medium text-rose-600 hover:bg-rose-100"
+                          className="rounded border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 px-1.5 py-0.5 font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/60"
                         >
                           {t.task.btnRetry}
                         </button>
@@ -1203,11 +1270,11 @@ export default function App() {
                   </div>
                 )}
                 {ocrError && (
-                  <div className="mt-1 flex items-center justify-between rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">
+                  <div className="mt-1 flex items-center justify-between rounded bg-rose-50 dark:bg-rose-950/40 px-2 py-1 text-xs text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60">
                     <span>{ocrError}</span>
                     <button
                       onClick={() => setOcrError(null)}
-                      className="text-slate-400 hover:text-slate-600 ml-2"
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 ml-2"
                       title={t.translation.btnClose}
                     >
                       ✕
@@ -1223,7 +1290,7 @@ export default function App() {
                         isTranslating ||
                         (screenshotCapability !== null && !screenshotCapability.supported)
                       }
-                      className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+                      className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-300 shadow-sm hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
                       title={
                         screenshotCapability && !screenshotCapability.supported
                           ? (screenshotCapability.reason ?? t.translation.screenshotUnsupported)
@@ -1237,7 +1304,7 @@ export default function App() {
                       type="button"
                       onClick={handleOcrClipboard}
                       disabled={ocrLoading || isTranslating}
-                      className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600 shadow-sm hover:bg-slate-100 disabled:opacity-50"
+                      className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-300 shadow-sm hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
                       title={t.translation.btnOcrPaste}
                     >
                       <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
@@ -1279,8 +1346,9 @@ export default function App() {
                           forceTargetLang: true,
                         })
                       }
+                      title={t.translation.shortcutHint}
                       disabled={isTranslating || !sourceText.trim()}
-                      className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                      className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                     >
                       {isTranslating ? t.translation.translating : t.translation.btnTranslate}
                     </button>
@@ -1288,7 +1356,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex flex-col rounded-lg border border-slate-200 bg-white dark:bg-slate-900 p-3 shadow-sm">
+              <div className="flex flex-col rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 shadow-sm">
                 <div className="flex-1 overflow-auto text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap">
                   {translatedText ? (
                     <span>
@@ -1320,8 +1388,17 @@ export default function App() {
                   {translatedText && (
                     <div className="flex items-center gap-1.5 justify-end">
                       <button
+                        data-testid="btn-reverse-translate"
+                        onClick={handleSwapLanguages}
+                        className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                        title={t.translation.reverseTranslate}
+                      >
+                        <ArrowLeftRight className="h-3.5 w-3.5 text-indigo-500" />
+                        <span>{t.translation.reverseTranslate}</span>
+                      </button>
+                      <button
                         onClick={() => handleSpeak(translatedText, targetLang)}
-                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                        className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                         title={t.translation.speak}
                       >
                         <Volume2 className="h-3.5 w-3.5" />
@@ -1329,7 +1406,7 @@ export default function App() {
                       </button>
                       <button
                         onClick={handleCopy}
-                        className="flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                        className="flex items-center gap-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                       >
                         {copied ? (
                           <Check className="h-3.5 w-3.5 text-emerald-600" />
@@ -1346,7 +1423,9 @@ export default function App() {
           </>
         )}
 
-        {activeTab === 'history' && <HistoryPanel t={t} locale={locale} />}
+        {activeTab === 'history' && (
+          <HistoryPanel t={t} locale={locale} onSelectEntry={handleUseHistoryEntry} />
+        )}
         {activeTab === 'document' && (
           <DocumentPanel t={t} targetLang={targetLang} engine={engine} />
         )}
@@ -1410,10 +1489,14 @@ export default function App() {
 
               {/* API 密钥管理 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/80 p-3 border border-slate-100 dark:border-slate-800">
-                <span className="font-medium text-slate-700">{t.settings.credentialsTitle}</span>
+                <span className="font-medium text-slate-700 dark:text-slate-200">
+                  {t.settings.credentialsTitle}
+                </span>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-slate-500">{t.settings.deeplKeyLabel}</label>
+                    <label className="text-slate-500 dark:text-slate-400">
+                      {t.settings.deeplKeyLabel}
+                    </label>
                     {deeplConfigured && (
                       <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
                         {t.settings.configuredBadge}
@@ -1440,7 +1523,9 @@ export default function App() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-slate-500">{t.settings.deepseekKeyLabel}</label>
+                    <label className="text-slate-500 dark:text-slate-400">
+                      {t.settings.deepseekKeyLabel}
+                    </label>
                     {deepseekConfigured && (
                       <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
                         {t.settings.configuredBadge}
@@ -1486,7 +1571,9 @@ export default function App() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-slate-500">{t.settings.openaiKeyLabel}</label>
+                    <label className="text-slate-500 dark:text-slate-400">
+                      {t.settings.openaiKeyLabel}
+                    </label>
                     {openaiConfigured && (
                       <span className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
                         {t.settings.configuredBadge}
@@ -1806,7 +1893,7 @@ export default function App() {
                       )}
                     </span>
                     <span className="inline-flex items-center text-emerald-600 dark:text-emerald-400 font-medium">
-                      ● 就绪
+                      {t.settings.offlineStatusReady}
                     </span>
                   </div>
 
@@ -1826,7 +1913,9 @@ export default function App() {
                           : 'text-slate-400'
                       }
                     >
-                      {offlineStatus?.has_local_model ? '● 模型已装载' : '○ 词库优先'}
+                      {offlineStatus?.has_local_model
+                        ? t.settings.offlineModelLoaded
+                        : t.settings.offlineLexiconOnly}
                     </span>
                   </div>
 

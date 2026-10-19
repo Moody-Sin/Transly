@@ -7,8 +7,9 @@ pub mod tsv;
 
 pub use blocks::{
     filter_blocks, merge_lines_into_paragraphs, merge_words_into_lines, plan_block_batches,
-    words_to_blocks, OcrBlockDto, PixelBox, LINE_MERGE_Y_TOLERANCE_RATIO, MIN_BLOCK_CONFIDENCE,
-    PARAGRAPH_MAX_GAP_RATIO, PARAGRAPH_MIN_X_OVERLAP,
+    words_to_blocks, OcrBlockDto, PixelBox, LINE_MERGE_MAX_X_GAP_RATIO,
+    LINE_MERGE_Y_TOLERANCE_RATIO, MIN_BLOCK_CONFIDENCE, PARAGRAPH_MAX_GAP_RATIO,
+    PARAGRAPH_MIN_X_OVERLAP,
 };
 pub use geom::{find_monitor_for_point, MonitorRect, NormRect};
 pub use screencap::{

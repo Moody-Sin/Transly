@@ -536,6 +536,64 @@ async fn test_translate_structured_batch_items() {
 }
 
 #[tokio::test]
+async fn test_translate_structured_batch_items_with_numeric_ids() {
+    let cache = Arc::new(TranslationCache::in_memory().unwrap());
+    let pool = Arc::new(crate::engine_pool::EnginePool::with_default_engine(
+        Arc::new(crate::engine_pool::testing::StubEngine),
+    ));
+    let glossary = Arc::new(RwLock::new(Glossary::new()));
+    let cache_controller = Arc::new(crate::cache_controller::CacheController::new(true));
+    let token = Arc::new(RwLock::new("valid-token".to_string()));
+
+    cache
+        .set(
+            "num-cached",
+            "数字ID缓存译文",
+            "auto",
+            "zh-CN",
+            "google_web",
+        )
+        .unwrap();
+
+    let state = ServerState::new(token, pool, cache, glossary, cache_controller);
+
+    let app = Router::new()
+        .route(
+            "/translate",
+            post(translate_batch_handler).layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            )),
+        )
+        .with_state(state);
+
+    let req = local_builder()
+        .method("POST")
+        .uri("/translate")
+        .header(header::AUTHORIZATION, "Bearer valid-token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{
+                "items": [
+                    {"id": 101, "text": "num-cached"},
+                    {"id": "str-2", "text": "num-cached"}
+                ],
+                "target_lang": "zh-CN"
+            }"#,
+        ))
+        .unwrap();
+
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let resp: TranslateBatchResponse = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp.items.len(), 2);
+    assert_eq!(resp.items[0].id(), "101");
+    assert_eq!(resp.items[1].id(), "str-2");
+}
+
+#[tokio::test]
 async fn test_cache_hit_isolation_without_fallback() {
     let cache = Arc::new(TranslationCache::in_memory().unwrap());
     let pool = Arc::new(crate::engine_pool::EnginePool::new());

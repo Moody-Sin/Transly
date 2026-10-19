@@ -594,7 +594,26 @@ async function runDesktopUiE2E() {
     await copyButton.waitFor({ state: 'visible', timeout: 5000 })
     await copyButton.click()
     await page.waitForTimeout(200)
-    console.log('✔ [用例 3] 文本输入、防抖调度、IPC 调用与译文回填全链路正常')
+
+    // 验证语言对调与反向对译
+    const reverseBtn = page.locator('[data-testid="btn-reverse-translate"]')
+    await reverseBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await reverseBtn.click()
+    await page.waitForTimeout(600)
+    const reversedInput = await inputArea.inputValue()
+    assert(
+      reversedInput.includes('[E2E译文:'),
+      `点击反向对译后，输入框应填入上一次译文，实际: ${reversedInput}`,
+    )
+
+    // 验证 Ctrl+Enter 快捷键触发翻译
+    await inputArea.fill('Test shortcut key trigger')
+    await inputArea.press('Control+Enter')
+    await page.waitForTimeout(600)
+    const afterShortcutResult = await page.textContent('body')
+    assert(afterShortcutResult.includes('[E2E译文:'), 'Ctrl+Enter 快捷键必须成功触发翻译')
+
+    console.log('✔ [用例 3] 文本输入、防抖调度、快捷键、反向对译与译文回填全链路正常')
 
     // ==========================================
     // 用例 4: 历史记录面板（列表渲染、搜索过滤、删除条目、导出 CSV）
@@ -626,10 +645,18 @@ async function runDesktopUiE2E() {
     const filteredContent = await page.textContent('body')
     assert(filteredContent.includes('Continuous Integration'), '搜索结果必须包含匹配条目')
 
-    // 切换回主翻译 Tab
-    const translateTab = page.locator('[data-testid="tab-translate"]')
-    await translateTab.click()
-    await page.waitForTimeout(300)
+    // 验证从历史记录条目直接一键导入到主翻译框
+    const useHistoryBtn = page.locator('[data-testid="history-use-entry"]').first()
+    await useHistoryBtn.waitFor({ state: 'attached', timeout: 5000 })
+    await useHistoryBtn.click({ force: true })
+    await page.waitForTimeout(500)
+    // 应自动切回翻译 Tab 且输入框填入该条目的原文
+    const currentInputVal = await page.locator('textarea').first().inputValue()
+    assert(
+      currentInputVal.includes('Continuous Integration'),
+      `点击历史记录导入按钮应自动填入主输入框，实际: ${currentInputVal}`,
+    )
+
     console.log('✔ [用例 4] 历史记录检索、过滤与交互闭环正常')
 
     // ==========================================
@@ -958,11 +985,18 @@ async function runDesktopUiE2E() {
     assert(blockTexts[0].includes('[E2E译:'), `块0 应显示译文而非原文，实际: ${blockTexts[0]}`)
     assert(blockTexts[1].includes('Block one'), `失败块应回落到显示原文，实际: ${blockTexts[1]}`)
     // 失败块必须有重试入口
-    assert.strictEqual(
-      await trPage.locator('[data-testid="shot-block-retry"]').count(),
-      1,
-      '失败块必须提供单块重试入口',
-    )
+    const retryBtn = trPage.locator('[data-testid="shot-block-retry"]')
+    assert.strictEqual(await retryBtn.count(), 1, '失败块必须提供单块重试入口')
+
+    // 断言 2.1: 点击单块重试按钮，必须触发针对该单块的重新翻译，且不会因冒泡销毁已有文字块
+    await retryBtn.click()
+    await trPage.waitForTimeout(500)
+    const blocksAfterRetry = await trPage.locator('[data-testid="shot-block"]').count()
+    assert.strictEqual(blocksAfterRetry, 2, '点击重试后不得销毁已有文字块')
+    const failedAfterRetry = await trPage
+      .locator('[data-testid="shot-block"][data-failed="true"]')
+      .count()
+    assert.strictEqual(failedAfterRetry, 0, '重试成功后失败标记必须消除')
 
     // 断言 3: 切语言只重发翻译，绝不重跑 OCR
     const logsBefore = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
@@ -992,6 +1026,18 @@ async function runDesktopUiE2E() {
     await trPage.waitForTimeout(200)
     assert.strictEqual(await blocks.count(), 0, '还原原文后译文层必须不可见')
     assert(await frame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    // 断言 5: 还原原文状态下点击发送到主窗口，应发送 OCR 原文而非空串或旧译文
+    await trPage.locator('[data-testid="shot-to-main"]').click()
+    await trPage.waitForTimeout(200)
+    const logsFinal = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const pushCalls = logsFinal.filter((l) => l.cmd === 'push_screenshot_text_to_main')
+    assert(pushCalls.length > 0, '必须调用 push_screenshot_text_to_main')
+    const pushedText = pushCalls[pushCalls.length - 1].args.text
+    assert(
+      pushedText.includes('Block zero') && pushedText.includes('Block one'),
+      `还原原文状态下必须发送 OCR 原文，实际: ${pushedText}`,
+    )
 
     await trPage.close()
     console.log('✔ [用例 10] 译文按 index 回填、单块容错、切语言只重译且还原原文正常')

@@ -116,6 +116,36 @@ fn test_recognize_blocks_places_text_in_correct_quadrants() {
     );
 }
 
+/// 关键回归：**同一水平线上的多栏排版不得横向合并成单块**。
+///
+/// 若聚合只看垂直容差而忽略水平间距，两栏的首行会被捏成一行。
+#[test]
+fn test_recognize_blocks_splits_horizontal_columns() {
+    // 1000x300 白底图，左侧 "HELLO" (x=40, y=40)，右侧 "WORLD" (x=600, y=40)
+    let mut img = RgbaImage::from_pixel(1000, 300, Rgba([255, 255, 255, 255]));
+    draw_text(&mut img, 40, 40, "HELLO", 5);
+    draw_text(&mut img, 600, 40, "WORLD", 5);
+
+    let blocks = src_tauri::ocr::recognize_blocks(&img, "en").expect("OCR 应识别出文字");
+
+    assert_eq!(
+        blocks.len(),
+        2,
+        "左右两栏应识别为 2 个独立块而非横向合并: {blocks:?}"
+    );
+    let left = blocks
+        .iter()
+        .find(|b| b.text.contains("HEL"))
+        .expect("左栏块");
+    let right = blocks
+        .iter()
+        .find(|b| b.text.contains("WOR"))
+        .expect("右栏块");
+    assert!(!left.text.contains("WOR"), "左栏不应包含右栏内容");
+    assert!(!right.text.contains("HEL"), "右栏不应包含左栏内容");
+    assert!(left.x < 0.3 && right.x > 0.5);
+}
+
 /// 关键回归：**裁剪后必须把块坐标映射回整图**。
 ///
 /// 这是 [`src_tauri::overlay::recognize_in_region`] 的核心不变量。

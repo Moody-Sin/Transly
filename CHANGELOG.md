@@ -7,6 +7,21 @@
 
 ## [未发布]
 
+### 优化与增强
+- **交互与使用体验全面深度优化 (`App.tsx`, `HistoryPanel.tsx`, `DocumentPanel.tsx`, `FloatWindow.tsx`)**：
+  - **双向语言快速对调与一键反向对译 (`App.tsx`)**：输入栏箭头升级为交互式对调语言按钮，译文卡片新增「作为原文反向对译」按钮，一键将当前译文转为原文并反转目标语言立即发起翻译，极大提升润色与双语核对效率；
+  - **全界面快捷键流体验 (`App.tsx`)**：主输入框支持 `Ctrl+Enter` / `Cmd+Enter` 立即触发翻译，与文档翻译面板操作逻辑保持统一；
+  - **历史记录一键导入翻译框 (`HistoryPanel.tsx`)**：历史记录卡片悬浮新增一键导入按钮，点击后自动填入主输入框、同步目标语言并切换至翻译 Tab 立即运行，免去手动复制粘贴的繁琐步骤；
+  - **全界面暗黑模式 (Dark Mode) 对比度与质感细节统一**：
+    - 主窗口顶层非活动 Tab 补齐 `dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700`，根除深色模式下 Tab 呈现刺眼浅灰块的割裂感；
+    - 历史记录卡片补齐 `dark:border-slate-800 dark:bg-slate-800/40` 与 `dark:text-slate-400`；
+    - 迷你悬浮窗底部朗读与复制按钮补齐深色主题背景与文字颜色，杜绝暗黑模式下的反白眩光；
+    - 译文卡片边框、重试按钮、错误警告条与设置中心凭据标签全量完成暗黑模式颜色规范化；
+    - 截图覆盖窗单块重试按钮补充暗黑模式高对比度样式。
+  - **文档面板与设置中心国际化纯净化 (`DocumentPanel.tsx`, `zh-CN.json`, `en.json`)**：
+    - 清除文档面板中「重新选择」、「未翻译」、「点击上方“开始翻译”按钮生成译文」以及字符单位等硬编码中文；
+    - 清除设置中心离线引擎状态「● 就绪」、「● 模型已装载」等硬编码，中英文多语言环境均 100% 优雅呈现。
+
 ### 新增
 - **文档与字幕文件翻译 (`transly-core/src/document/`, `commands/document.rs`, `DocumentPanel.tsx`)**：
   - 核心解析与保真重构：纯 Rust 实现 `.txt`（段落切分与空行定界保真）、`.md`（YAML Frontmatter 免翻保护、代码块/公式占位保护）、`.srt`（序号行与时间轴 100% 锁定保真，仅回填字幕译文）、`.json`（递归提取叶子值翻译，严格保护 Key 键名与嵌套结构）、`.html`（仅提取正文节点，100% 保留 HTML 标签、属性与代码）；
@@ -24,6 +39,17 @@
   - **Linux Wayland 桌面环境上下文提示**：在检测到 Wayland 时提取 `XDG_CURRENT_DESKTOP`（如 GNOME / KDE Plasma / Sway / Hyprland），向用户呈现带有桌面环境标识的精准降级指引；
   - **Linux OCR 缺失前置报错与指引**：在未安装系统级 `tesseract` 工具时，能力探测接口前置置 `supported: false` 并展示确切的 apt 安装命令，禁用截图按钮并悬浮提示，杜绝用户点击后才抛出截屏失败；
   - **显示器几何退化尺寸守护 (`find_monitor_for_point`)**：增加对无效/休眠退化显示器尺寸（宽或高为 0）的拦截，防止多屏断开瞬间的伪矩形导致光标映射异常。
+
+### 修复
+- **截图翻译端到端真机交互与识别聚合全链路缺陷修复**：
+  - **Windows OCR 4K/大图尺寸下采样后坐标严重缩小偏移 (`windows.rs`)**：WinRT OCR 在图片超过 2600 像素执行下采样后，词框像素坐标未按比例还原回原图空间，导致 4K 屏幕上 OCR 框整体缩至 67.7% 并向左上角严重偏移。现返回前统一按缩放比例还原，保证与原图像素契约严格对齐；
+  - **CJK 语义单字（如“门”、“开”）被误杀过滤 (`blocks.rs`)**：`filter_blocks` 调整单字符过滤条件，明确区分西文字母与 CJK 表意字符，保留合法的单个汉字/假名/谚文 OCR 块，彻底解决单字截图报“未能识别到有效文字”的问题；
+  - **高分屏/DPI缩放屏幕上译文字号算大导致截断 (`ScreenshotOverlay.tsx`)**：`fitFontSize` 尺寸计算由物理像素改用视口 CSS 逻辑像素，解决 Retina 与 Windows 150% 缩放下译文因过大而被 `overflow-hidden` 裁切丢失的问题；
+  - **单块重试按钮冒泡导致所有文字块被清空销毁 (`ScreenshotOverlay.tsx`)**：重试按钮增加 `pointerdown` 阻止冒泡，并优化画板非拖拽点击时不误清空已有 blocks；
+  - **还原原文模式下复制与发送到主窗口失效 (`ScreenshotOverlay.tsx`)**：`getSelectedText` 响应 `showTranslation` 状态，并在翻译失败或原文查看模式下正确提取 OCR 原文，避免发送空字符串；
+  - **Linux 与 macOS OCR 语言映射缺失中英双向支持 (`tsv.rs`, `macos.rs`)**：修正 Tesseract 与 Vision 语言映射参数，中英双向场景统一加载双语模型，解决目标语言为英文时截图中文完全无法识别（乱码输出为 "PICA"）的严重缺陷；
+  - **水平多栏排版同行横向串联 (`blocks.rs`)**：引入 `LINE_MERGE_MAX_X_GAP_RATIO`（2.5），在词聚合成行时按水平间距自动断开独立分栏片段，保留分栏排版语序；
+  - **主窗口截图与剪贴板识别按钮暗黑模式样式补齐 (`App.tsx`)**：补充 `dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300` 样式。
 
 
 ## [0.4.1] - 2026-10-18

@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Copy, Check, Trash2, RefreshCw, Search, Download, Volume2 } from 'lucide-react'
+import {
+  Copy,
+  Check,
+  Trash2,
+  RefreshCw,
+  Search,
+  Download,
+  Volume2,
+  CornerUpLeft,
+} from 'lucide-react'
 import { commands } from './bindings'
 import type { CacheEntry } from './bindings'
 import type { I18nSchema, Locale } from './i18n'
@@ -13,13 +22,14 @@ const PAGE_SIZE = 50
 interface Props {
   t: I18nSchema
   locale: Locale
+  onSelectEntry?: (entry: CacheEntry) => void
 }
 
 /**
  * 翻译历史面板：把已存在的 `translation_cache` 表变为用户可见的「最近翻译」。
  * 支持关键词搜索过滤、CSV/JSON 一键导出、发音朗读。
  */
-export default function HistoryPanel({ t, locale }: Props) {
+export default function HistoryPanel({ t, locale, onSelectEntry }: Props) {
   const [entries, setEntries] = useState<CacheEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [hasMore, setHasMore] = useState(false)
@@ -240,7 +250,7 @@ export default function HistoryPanel({ t, locale }: Props) {
       )}
 
       {error && (
-        <div className="mx-4 mt-3 rounded bg-rose-50 px-2 py-1 text-xs text-rose-600 border border-rose-200">
+        <div className="mx-4 mt-3 rounded bg-rose-50 dark:bg-rose-950/40 px-2 py-1 text-xs text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60">
           {error}
         </div>
       )}
@@ -249,30 +259,42 @@ export default function HistoryPanel({ t, locale }: Props) {
         {entries.length === 0 && !loading ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
             <span className="text-sm text-slate-400">{t.history.empty}</span>
-            <span className="text-[11px] text-slate-300">{t.history.emptyHint}</span>
+            <span className="text-[11px] text-slate-400 dark:text-slate-500">
+              {t.history.emptyHint}
+            </span>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
             {entries.map((entry) => (
               <div
                 key={entry.cache_key}
-                className="group flex flex-col gap-1 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5"
+                className="group flex flex-col gap-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 p-2.5"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <span className="line-clamp-2 flex-1 text-xs text-slate-500">
+                  <span className="line-clamp-2 flex-1 text-xs text-slate-500 dark:text-slate-400">
                     {entry.source_text}
                   </span>
                   <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    {onSelectEntry && (
+                      <button
+                        data-testid="history-use-entry"
+                        onClick={() => onSelectEntry(entry)}
+                        className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400"
+                        title={t.history.useAsInput}
+                      >
+                        <CornerUpLeft className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleSpeak(entry.source_text, entry.source_lang)}
-                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600"
+                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400"
                       title={t.history.speak}
                     >
                       <Volume2 className="h-3.5 w-3.5" />
                     </button>
                     <button
                       onClick={() => handleCopy(entry)}
-                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600"
+                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400"
                       title={t.history.copy}
                     >
                       {copiedKey === entry.cache_key ? (
@@ -283,7 +305,7 @@ export default function HistoryPanel({ t, locale }: Props) {
                     </button>
                     <button
                       onClick={() => handleDelete(entry)}
-                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-rose-600"
+                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-rose-600 dark:hover:text-rose-400"
                       title={t.history.delete}
                     >
                       <Trash2 className="h-3.5 w-3.5" />

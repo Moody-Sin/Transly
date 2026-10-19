@@ -63,9 +63,13 @@ async fn main() -> anyhow::Result<()> {
 
     let token = Arc::new(RwLock::new(token_str));
     let cache = Arc::new(TranslationCache::in_memory()?);
-    let pool = Arc::new(src_tauri::engine_pool::EnginePool::with_default_engine(
-        Arc::new(src_tauri::engine_pool::testing::StubEngine),
-    ));
+    let pool = if std::env::var("TRANSLY_TEST_REAL_ENGINE").as_deref() == Ok("1") {
+        Arc::new(src_tauri::engine_pool::EnginePool::new())
+    } else {
+        Arc::new(src_tauri::engine_pool::EnginePool::with_default_engine(
+            Arc::new(src_tauri::engine_pool::testing::StubEngine),
+        ))
+    };
 
     let mut glossary_inst = Glossary::new();
     glossary_inst.insert_with_options("pipeline", "流水线", false);

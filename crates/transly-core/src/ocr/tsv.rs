@@ -163,23 +163,19 @@ fn is_tsv_header(line: &str) -> bool {
 /// ⚠️ **不能复用 `build_candidate_languages`** —— 它产出的 `"system"` 是
 /// Windows OCR 的语义（"用系统已装语言"），传给 tesseract 的 `-l` 会直接失败。
 ///
-/// 只覆盖本项目支持的目标语言；其余回落英文（tesseract 的 `eng` 是最普及的包）。
+/// 截图翻译通常在中英之间双向互译；若目标语言为英文，源图多为中文，若仅传 `eng`
+/// 则 tesseract 无法识别中文汉字（输出乱码或空文本）。
+/// 故无论目标语言是中文还是英文，均采用 `chi_sim+eng` 双包，支持中英双向混合识别；
+/// 若目标为日韩则优先搭载对应语言包并以英文兜底。
 pub fn tesseract_lang_arg(target_lang: &str) -> &'static str {
     let clean = target_lang.trim().to_lowercase();
-    // 中文（简繁均用 chi_sim：chi_tra 安装率低，且简体模型对繁体文本仍有可用识别率）
-    if clean.starts_with("zh") {
-        return "chi_sim";
-    }
     if clean.starts_with("ja") {
-        return "jpn";
+        return "jpn+eng";
     }
     if clean.starts_with("ko") {
-        return "kor";
+        return "kor+eng";
     }
-    if clean.starts_with("en") {
-        return "eng";
-    }
-    "eng"
+    "chi_sim+eng"
 }
 
 #[cfg(test)]
@@ -333,16 +329,16 @@ mod tests {
 
     #[test]
     fn test_tesseract_lang_arg_mappings() {
-        assert_eq!(tesseract_lang_arg("zh-CN"), "chi_sim");
-        assert_eq!(tesseract_lang_arg("zh-Hant"), "chi_sim");
-        assert_eq!(tesseract_lang_arg("en"), "eng");
-        assert_eq!(tesseract_lang_arg("en-US"), "eng");
-        assert_eq!(tesseract_lang_arg("ja"), "jpn");
-        assert_eq!(tesseract_lang_arg("ko"), "kor");
-        // 未支持语言回落英文
-        assert_eq!(tesseract_lang_arg("fr"), "eng");
-        assert_eq!(tesseract_lang_arg(""), "eng");
+        assert_eq!(tesseract_lang_arg("zh-CN"), "chi_sim+eng");
+        assert_eq!(tesseract_lang_arg("zh-Hant"), "chi_sim+eng");
+        assert_eq!(tesseract_lang_arg("en"), "chi_sim+eng");
+        assert_eq!(tesseract_lang_arg("en-US"), "chi_sim+eng");
+        assert_eq!(tesseract_lang_arg("ja"), "jpn+eng");
+        assert_eq!(tesseract_lang_arg("ko"), "kor+eng");
+        // 未支持语言回落双语包
+        assert_eq!(tesseract_lang_arg("fr"), "chi_sim+eng");
+        assert_eq!(tesseract_lang_arg(""), "chi_sim+eng");
         // 大小写与前导空白
-        assert_eq!(tesseract_lang_arg("  ZH-CN  "), "chi_sim");
+        assert_eq!(tesseract_lang_arg("  ZH-CN  "), "chi_sim+eng");
     }
 }

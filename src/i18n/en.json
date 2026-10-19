@@ -21,6 +21,9 @@
     "outputPlaceholder": "Translation will appear here...",
     "btnTranslate": "Translate",
     "translating": "Translating...",
+    "swapLanguages": "Swap Languages",
+    "reverseTranslate": "Use as source & reverse translate",
+    "shortcutHint": "Press Ctrl+Enter to translate",
     "copy": "Copy",
     "copied": "Copied",
     "engineSelect": "Engine",
@@ -70,6 +73,7 @@
     "exportCsv": "Export CSV",
     "exportSuccess": "Successfully exported to file",
     "exportFailed": "Export failed",
+    "useAsInput": "Send to translate box",
     "speak": "Read Aloud"
   },
   "document": {
@@ -94,7 +98,11 @@
     "readFailed": "Failed to read file",
     "translateFailed": "Document translation failed: ",
     "emptyFile": "File is empty",
-    "duration": "Completed in {s}s"
+    "duration": "Completed in {s}s",
+    "btnReselect": "Reselect",
+    "untranslated": "Untranslated",
+    "startHint": "Click 'Start Translation' above to generate translation",
+    "charUnit": "chars"
   },
   "ocrError": {
     "no_image": "No image in clipboard. Copy or take a screenshot first.",
@@ -243,6 +251,9 @@
     "offlineLexiconCount": "Built-in lexicon: {n} high-frequency and technical entries loaded",
     "offlineModelDetected": "Loaded external model: {name}",
     "offlineModelNotDetected": "No external model file found (built-in lexicon & phrase-table active)",
-    "offlineModelDirLabel": "Local model directory (drop .onnx / .bin / .gguf files here to load):"
+    "offlineModelDirLabel": "Local model directory (drop .onnx / .bin / .gguf files here to load):",
+    "offlineStatusReady": "● Ready",
+    "offlineModelLoaded": "● Model Loaded",
+    "offlineLexiconOnly": "○ Lexicon Only"
   }
 }

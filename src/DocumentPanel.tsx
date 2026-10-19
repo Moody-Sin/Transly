@@ -245,7 +245,7 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
                 className="text-xs px-2.5 py-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
               >
                 <RefreshCw className="h-3.5 w-3.5 inline mr-1" />
-                重新选择
+                {t.document.btnReselect}
               </button>
               <button
                 data-testid="start-document-translate"
@@ -352,9 +352,9 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
             <span className="text-xs text-slate-400 font-mono">
               {previewTab === 'translated'
                 ? outcome
-                  ? `${outcome.translated_content.length} 字符`
-                  : '未翻译'
-                : `${file.content.length} 字符`}
+                  ? `${outcome.translated_content.length} ${t.document.charUnit}`
+                  : t.document.untranslated
+                : `${file.content.length} ${t.document.charUnit}`}
             </span>
           </div>
 
@@ -362,7 +362,7 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
             {previewTab === 'translated'
               ? outcome?.translated_content || (
                   <span className="text-slate-400 dark:text-slate-500 italic font-sans">
-                    {isTranslating ? t.document.translating : '点击上方“开始翻译”按钮生成译文'}
+                    {isTranslating ? t.document.translating : t.document.startHint}
                   </span>
                 )
               : file.content}

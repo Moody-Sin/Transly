@@ -21,6 +21,9 @@
     "outputPlaceholder": "译文将显示在这里...",
     "btnTranslate": "翻译",
     "translating": "翻译中...",
+    "swapLanguages": "对调语言",
+    "reverseTranslate": "作为原文反向对译",
+    "shortcutHint": "按 Ctrl+Enter 快捷翻译",
     "copy": "复制",
     "copied": "已复制",
     "engineSelect": "翻译引擎",
@@ -70,6 +73,7 @@
     "exportCsv": "导出 CSV",
     "exportSuccess": "已成功导出至文件",
     "exportFailed": "导出失败",
+    "useAsInput": "填入输入框并翻译",
     "speak": "朗读发音"
   },
   "document": {
@@ -94,7 +98,11 @@
     "readFailed": "读取文件内容失败",
     "translateFailed": "文档翻译失败：",
     "emptyFile": "文件内容为空",
-    "duration": "耗时 {s} 秒"
+    "duration": "耗时 {s} 秒",
+    "btnReselect": "重新选择",
+    "untranslated": "未翻译",
+    "startHint": "点击上方“开始翻译”按钮生成译文",
+    "charUnit": "字符"
   },
   "ocrError": {
     "no_image": "剪贴板中未找到图片，请先截图或复制图片",
@@ -243,6 +251,9 @@
     "offlineLexiconCount": "内置词条：已装载 {n} 条常用与计算机专业词汇",
     "offlineModelDetected": "已加载外部模型：{name}",
     "offlineModelNotDetected": "未放入外部模型文件（已启用内置高频词库与短语表）",
-    "offlineModelDirLabel": "本地模型目录（放入 .onnx / .bin / .gguf 可自动识别）："
+    "offlineModelDirLabel": "本地模型目录（放入 .onnx / .bin / .gguf 可自动识别）：",
+    "offlineStatusReady": "● 就绪",
+    "offlineModelLoaded": "● 模型已装载",
+    "offlineLexiconOnly": "○ 词库优先"
   }
 }

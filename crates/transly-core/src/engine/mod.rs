@@ -28,9 +28,55 @@ pub struct TranslationResponse {
     pub engine: String,
 }
 
+fn deserialize_string_or_integer<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrIntegerVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrIntegerVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or integer identifier")
+        }
+
+        fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E>(self, v: String) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v)
+        }
+
+        fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrIntegerVisitor)
+}
+
 /// 批量翻译中单项请求契约（保证输入与输出具备稳定映射）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchItemRequest {
+    #[serde(deserialize_with = "deserialize_string_or_integer")]
     pub id: String,
     pub text: String,
 }
@@ -489,5 +535,27 @@ mod tests {
         }];
         let batch_deepl = lookup_batch_with_fallback(&cache, &deepl, &items, "en", "zh-CN");
         assert_eq!(batch_deepl, vec![None]);
+    }
+
+    #[test]
+    fn test_batch_item_request_id_deserialization_compatibility() {
+        // 字符串 ID
+        let json_str = r#"{"id":"str-id-123","text":"hello"}"#;
+        let item_str: BatchItemRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(item_str.id, "str-id-123");
+        assert_eq!(item_str.text, "hello");
+
+        // 正整数 ID
+        let json_int = r#"{"id":42,"text":"world"}"#;
+        let item_int: BatchItemRequest = serde_json::from_str(json_int).unwrap();
+        assert_eq!(item_int.id, "42");
+        assert_eq!(item_int.text, "world");
+
+        // 批量混合 ID
+        let json_array = r#"[{"id":1,"text":"first"},{"id":"2","text":"second"}]"#;
+        let items: Vec<BatchItemRequest> = serde_json::from_str(json_array).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "1");
+        assert_eq!(items[1].id, "2");
     }
 }

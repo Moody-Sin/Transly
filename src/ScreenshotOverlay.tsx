@@ -163,10 +163,7 @@ export default function ScreenshotOverlay() {
     if (busy || e.button !== 0) return
     const point = toNormalized(e)
     dragging.current = true
-    // 新的框选开始即清掉上一轮的错误与译文块：否则旧译文会浮在屏幕上，
-    // 旧错误横幅也会在后续成功识别后依然挂在那里。
     setError(null)
-    setBlocks([])
     setAnchor(point)
     setPointer(point)
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -209,6 +206,7 @@ export default function ScreenshotOverlay() {
     if (!session) return
     setBusy(true)
     setError(null)
+    setBlocks([])
     setResults(new Map())
     try {
       const res = await commands.recognizeScreenshotSelection(rect, session.generation, targetLang)
@@ -272,6 +270,17 @@ export default function ScreenshotOverlay() {
       if (mine === translateGen.current) setTranslating(false)
     }
   }
+
+  /** 提取当前展示文本（支持还原原文状态下复制原文、译文模式下优先译文，失败或为空时回退原文）。 */
+  const getSelectedText = () =>
+    blocks
+      .map((b) => {
+        if (!showTranslation) return b.text
+        const r = results.get(b.index)
+        return r && !r.failed && r.text ? r.text : b.text
+      })
+      .filter((text) => text.trim().length > 0)
+      .join('\n')
 
   const selection: Selection | null =
     anchor && pointer
@@ -339,11 +348,11 @@ export default function ScreenshotOverlay() {
           const r = results.get(block.index)
           const failed = r?.failed === true
           const text = r && !r.failed ? r.text : block.text
-          // 字号按「原文框的物理像素」自适应；放不下则用最小字号 + 溢出隐藏
-          // （缩到 2px 的鬼影字既不可读也没意义）。
+          // 字号按「原文框在视口中的 CSS 逻辑像素」自适应，避免高分屏 (Retina / Windows 150%)
+          // 因混用物理像素导致字号严重虚大并被 overflow-hidden 裁切。
           const boxPx = {
-            w: (block.w ?? 0) * (session?.image_width ?? 0),
-            h: (block.h ?? 0) * (session?.image_height ?? 0),
+            w: (block.w ?? 0) * window.innerWidth,
+            h: (block.h ?? 0) * window.innerHeight,
           }
           const fitted = fitFontSize(text, boxPx, { maxPx: 22, minPx: 9 })
           const fontSize = fitted ?? 9
@@ -373,7 +382,8 @@ export default function ScreenshotOverlay() {
                 <button
                   type="button"
                   data-testid="shot-block-retry"
-                  className="pointer-events-auto ml-1 rounded bg-rose-200 px-1 text-[10px] font-medium text-rose-800 hover:bg-rose-300"
+                  className="pointer-events-auto ml-1 rounded bg-rose-200 dark:bg-rose-900/60 px-1 text-[10px] font-medium text-rose-800 dark:text-rose-200 hover:bg-rose-300 dark:hover:bg-rose-800/60"
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation()
                     void translate(blocks, targetLang, engine, [block.index])
@@ -454,13 +464,9 @@ export default function ScreenshotOverlay() {
               data-testid="shot-copy"
               className="rounded bg-slate-100 px-2 py-0.5 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
               onClick={() => {
-                const joined = blocks
-                  .map((b) => results.get(b.index))
-                  .filter((r): r is NonNullable<typeof r> => !!r && !r.failed)
-                  .map((r) => r.text)
-                  .join('\n')
+                const text = getSelectedText()
                 navigator.clipboard
-                  .writeText(joined)
+                  .writeText(text)
                   .then(() => {
                     setCopyState('ok')
                     setTimeout(() => setCopyState('idle'), 1500)
@@ -478,12 +484,8 @@ export default function ScreenshotOverlay() {
               data-testid="shot-to-main"
               className="rounded bg-slate-100 px-2 py-0.5 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
               onClick={() => {
-                const joined = blocks
-                  .map((b) => results.get(b.index))
-                  .filter((r): r is NonNullable<typeof r> => !!r && !r.failed)
-                  .map((r) => r.text)
-                  .join('\n')
-                commands.pushScreenshotTextToMain(joined).catch(() => {})
+                const text = getSelectedText()
+                commands.pushScreenshotTextToMain(text).catch(() => {})
               }}
             >
               {t.screenshot.sendToMain}

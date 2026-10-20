@@ -105,6 +105,14 @@ export const commands = {
 	/**  主动取消在途文档翻译任务 */
 	cancelDocumentTask: (taskId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_document_task", { taskId })),
 	getOfflineEngineStatus: () => typedError<OfflineEngineStatusDto, string>(__TAURI_INVOKE("get_offline_engine_status")),
+	/**  查询是否有新版本；无更新时返回 `None`。 */
+	checkForUpdate: () => typedError<{
+	version: string,
+	/**  发布说明（来自 latest.json 的 notes 字段） */
+	notes: string | null,
+} | null, string>(__TAURI_INVOKE("check_for_update")),
+	/**  下载并安装当前可用更新，安装完成后重启应用。 */
+	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
 };
 
 /* Types */
@@ -345,6 +353,13 @@ export type TranslateErrorDto = {
 export type TranslateOutcomeDto = {
 	text: string,
 	engine: string,
+};
+
+/**  可更新版本信息（仅暴露 UI 需要的字段） */
+export type UpdateInfoDto = {
+	version: string,
+	/**  发布说明（来自 latest.json 的 notes 字段） */
+	notes: string | null,
 };
 
 /* Tauri Specta runtime */

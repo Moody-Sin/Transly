@@ -277,6 +277,15 @@
     "offlineModelDirLabel": "Local model directory (drop .onnx / .bin / .gguf files here to load):",
     "offlineStatusReady": "● Ready",
     "offlineModelLoaded": "● Model File Detected",
-    "offlineLexiconOnly": "○ Lexicon Only"
+    "offlineLexiconOnly": "○ Lexicon Only",
+    "updateSectionTitle": "Software Update",
+    "updateSectionDesc": "Check GitHub Releases and install a newer version (manual trigger)",
+    "updateCheck": "Check for Updates",
+    "updateChecking": "Checking…",
+    "updateUpToDate": "You are on the latest version",
+    "updateAvailable": "Version {version} is available",
+    "updateInstall": "Install & Restart",
+    "updateInstalling": "Downloading and installing…",
+    "updateFailed": "Update failed: {msg}"
   }
 }

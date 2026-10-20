@@ -770,6 +770,7 @@ pub async fn get_offline_engine_status(
 pub mod document;
 pub mod screenshot;
 pub mod selection;
+pub mod updater;
 
 pub use document::{translate_document, DocumentTranslateOutcomeDto};
 

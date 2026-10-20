@@ -277,6 +277,15 @@
     "offlineModelDirLabel": "本地模型目录（放入 .onnx / .bin / .gguf 可自动识别）：",
     "offlineStatusReady": "● 就绪",
     "offlineModelLoaded": "● 模型文件已检测",
-    "offlineLexiconOnly": "○ 词库优先"
+    "offlineLexiconOnly": "○ 词库优先",
+    "updateSectionTitle": "软件更新",
+    "updateSectionDesc": "从 GitHub Releases 检查并安装新版本（需手动触发）",
+    "updateCheck": "检查更新",
+    "updateChecking": "检查中…",
+    "updateUpToDate": "已是最新版本",
+    "updateAvailable": "发现新版本 {version}",
+    "updateInstall": "安装并重启",
+    "updateInstalling": "正在下载并安装…",
+    "updateFailed": "更新失败：{msg}"
   }
 }

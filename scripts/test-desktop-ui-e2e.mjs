@@ -256,6 +256,10 @@ const TAURI_MOCK_INIT_SCRIPT = `
             model_dir: '/mock/app/data/models'
           };
 
+        case 'check_for_update':
+          // 无可用更新：前端应展示「已是最新版本」，不触发下载
+          return null;
+
         case 'get_server_token':
           return state.serverToken;
 
@@ -699,6 +703,12 @@ async function runDesktopUiE2E() {
     assert(await addGlossaryBtn.isEnabled(), '添加规则按钮在填入术语后必须可用')
     await addGlossaryBtn.click()
     await page.waitForTimeout(300)
+
+    // 应用内自动更新：点击「检查更新」后应展示无更新状态（mock 返回 null）
+    const checkUpdateBtn = page.getByRole('button', { name: '检查更新' })
+    await checkUpdateBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await checkUpdateBtn.click()
+    await page.getByText('已是最新版本').waitFor({ state: 'visible', timeout: 5000 })
 
     // 关闭设置弹窗
     const closeBtn2 = page.locator('button[aria-label="关闭"]').first()

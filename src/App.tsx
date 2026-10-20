@@ -28,6 +28,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getTranslation, Locale } from './i18n'
 import type { I18nSchema } from './i18n'
+import { UpdateSection } from './UpdateSection'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
@@ -2280,6 +2281,9 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {/* 软件更新 */}
+              <UpdateSection locale={locale} />
 
               {/* 缓存数据管理 */}
               <div className="flex flex-col gap-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 p-3 border border-slate-100 dark:border-slate-800">

@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 新增
+- **应用内自动更新 (`commands/updater.rs`, `UpdateSection.tsx`, `tauri.conf.json`, `release.yml`)**：
+  - 接入 `tauri-plugin-updater`，从 GitHub Releases 的 `latest.json` 检查新版本；更新包由流水线使用 minisign 私钥签名，客户端以内置公钥验签，拒绝被篡改的安装包；
+  - 设置中心新增「软件更新」区块：手动检查、展示新版本号与发布说明、一键下载安装并重启；
+  - 发布流水线注入 `TAURI_SIGNING_PRIVATE_KEY`，自动产出 `.sig` 与 `latest.json` 更新清单；
+  - 桌面端 UI E2E 增加「检查更新」链路断言（mock 无更新场景）。
+
 ## [0.5.0] - 2026-10-20
 
 ### 优化与增强

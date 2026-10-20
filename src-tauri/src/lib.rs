@@ -84,7 +84,9 @@ macro_rules! app_command_builder {
             $crate::commands::screenshot::push_screenshot_text_to_main,
             $crate::commands::document::translate_document,
             $crate::commands::document::cancel_document_task,
-            $crate::commands::get_offline_engine_status
+            $crate::commands::get_offline_engine_status,
+            $crate::commands::updater::check_for_update,
+            $crate::commands::updater::install_update
         ])
     };
 }

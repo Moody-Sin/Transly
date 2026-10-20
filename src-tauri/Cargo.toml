@@ -1,6 +1,6 @@
 [package]
 name = "src-tauri"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 authors = ["Transly Authors"]
 description = "Tauri backend and platform integration for Transly."

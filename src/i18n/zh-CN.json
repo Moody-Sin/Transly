@@ -272,11 +272,11 @@
     "offlineSectionTitle": "纯本地离线引擎与模型",
     "offlineSectionDesc": "无需外网外呼、零第三方服务依赖。内置常用与开发高频词库，并支持自动发现本地离线模型文件",
     "offlineLexiconCount": "内置词条：已装载 {n} 条常用与计算机专业词汇",
-    "offlineModelDetected": "已加载外部模型：{name}",
+    "offlineModelDetected": "已检测到外部模型文件：{name}",
     "offlineModelNotDetected": "未放入外部模型文件（已启用内置高频词库与短语表）",
     "offlineModelDirLabel": "本地模型目录（放入 .onnx / .bin / .gguf 可自动识别）：",
     "offlineStatusReady": "● 就绪",
-    "offlineModelLoaded": "● 模型已装载",
+    "offlineModelLoaded": "● 模型文件已检测",
     "offlineLexiconOnly": "○ 词库优先"
   }
 }

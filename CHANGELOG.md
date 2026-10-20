@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.5.0] - 2026-10-20
 
 ### 优化与增强
 - **文档翻译全链路流式进度广播与主动打断取消机制 (`document/mod.rs`, `commands/document.rs`, `DocumentPanel.tsx`, `bindings.ts`)**：
@@ -94,6 +94,10 @@
   - **Linux 与 macOS OCR 语言映射缺失中英双向支持 (`tsv.rs`, `macos.rs`)**：修正 Tesseract 与 Vision 语言映射参数，中英双向场景统一加载双语模型，解决目标语言为英文时截图中文完全无法识别（乱码输出为 "PICA"）的严重缺陷；
   - **水平多栏排版同行横向串联 (`blocks.rs`)**：引入 `LINE_MERGE_MAX_X_GAP_RATIO`（2.5），在词聚合成行时按水平间距自动断开独立分栏片段，保留分栏排版语序；
   - **主窗口截图与剪贴板识别按钮暗黑模式样式补齐 (`App.tsx`)**：补充 `dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300` 样式。
+- **文档与文案诚实性校正 (`README.md`, `zh-CN.json`, `en.json`, `docs/superpowers/plans/`)**：
+  - 移除 macOS 归档包「应用内自动更新用」的错误描述（项目尚未接入 `tauri-plugin-updater`）；
+  - 离线模型相关文案由「已加载 / 已装载」校正为「检测到模型文件」，如实反映当前版本仅扫描模型文件、不执行推理的能力边界；
+  - 为 4 份已交付的计划文档补充状态说明，避免复选框全部未勾选造成进度误判。
 
 
 ## [0.4.1] - 2026-10-18
@@ -577,7 +581,8 @@
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.4.1...HEAD
+[0.5.0]: https://github.com/Moody-Sin/Transly/compare/v0.4.1...v0.5.0
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.5.0...HEAD
 [0.4.1]: https://github.com/Moody-Sin/Transly/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...v0.3.1

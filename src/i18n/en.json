@@ -272,11 +272,11 @@
     "offlineSectionTitle": "Offline Engine & Local Models",
     "offlineSectionDesc": "Zero network calls and zero third-party dependencies. Built-in high-frequency lexicon with automatic local model discovery",
     "offlineLexiconCount": "Built-in lexicon: {n} high-frequency and technical entries loaded",
-    "offlineModelDetected": "Loaded external model: {name}",
+    "offlineModelDetected": "Detected external model file: {name}",
     "offlineModelNotDetected": "No external model file found (built-in lexicon & phrase-table active)",
     "offlineModelDirLabel": "Local model directory (drop .onnx / .bin / .gguf files here to load):",
     "offlineStatusReady": "● Ready",
-    "offlineModelLoaded": "● Model Loaded",
+    "offlineModelLoaded": "● Model File Detected",
     "offlineLexiconOnly": "○ Lexicon Only"
   }
 }

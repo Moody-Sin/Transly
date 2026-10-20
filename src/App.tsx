@@ -1917,17 +1917,39 @@ export default function App() {
                     />
                   </div>
                   <div className="mt-1 flex items-center justify-between min-h-[16px]">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
                         onClick={() => {
                           setOpenaiBaseUrl('http://localhost:11434/v1')
                           setOpenaiModel('qwen2.5:7b')
-                          if (!openaiKey) setOpenaiKey('ollama')
+                          if (!openaiKey) setOpenaiKey('local')
                         }}
                         className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline"
                       >
                         💡 {t.settings.ollamaPresetBtn}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenaiBaseUrl('http://localhost:1234/v1')
+                          setOpenaiModel('local-model')
+                          if (!openaiKey) setOpenaiKey('local')
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        💡 {t.settings.lmStudioPresetBtn}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenaiBaseUrl('http://localhost:8080/v1')
+                          setOpenaiModel('local-model')
+                          if (!openaiKey) setOpenaiKey('local')
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline"
+                      >
+                        💡 {t.settings.llamaCppPresetBtn}
                       </button>
                       {(openaiConfigured || openaiKey.trim()) && (
                         <button

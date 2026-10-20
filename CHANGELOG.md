@@ -21,7 +21,7 @@
 - **工程结构与可维护性重构**：
   - `crates/transly-core/src/cache.rs`（1552 行）拆分为 `cache/mod.rs`、`cache/export.rs`、`cache/tests.rs`；
   - `src-tauri/src/commands/mod.rs`（1779 行）按领域拆分为 `translation` / `history` / `shortcuts` / `runtime` / `settings` 五个子模块，命令注册路径同步迁移；
-  - `src/App.tsx` 的设置中心术语库区块拆为独立 `GlossarySection.tsx`，入口文件由 2713 行降至 2521 行。
+  - `src/App.tsx` 的设置中心术语库与 API 凭据区块拆为 `GlossarySection.tsx`、`CredentialsSection.tsx`，入口文件由 2713 行降至 2252 行。
 
 ## [0.5.0] - 2026-10-20
 

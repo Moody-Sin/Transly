@@ -250,3 +250,9 @@
 
 
 
+
+### 37. tauri-specta 跨模块命令必须使用定义模块的完整路径
+- **现象**：把 `commands/mod.rs` 按领域拆成 `translation`、`history` 等子模块后，仅在 `mod.rs` 用 `pub use` 重导出命令函数，`collect_commands!` 仍报 `cannot find __cmd__translate` / `__tauri_command_name_translate`。
+- **教训**：
+  - `#[tauri::command]` 在**函数定义所在模块**生成 `__cmd__*`、`__tauri_command_name_*` 与 specta 的 `__specta__fn__*` 宏；`pub use` 只导出函数，不导出这些宏；
+  - `app_command_builder!` 中每条命令必须写成 `$crate::commands::<子模块>::<函数>`，与函数定义位置严格一致。

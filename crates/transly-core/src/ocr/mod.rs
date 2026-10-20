@@ -138,8 +138,20 @@ pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
         || clean == "zh-tw"
         || clean == "zh-hant";
 
-    let mut list = Vec::with_capacity(4);
-    if is_target_zh {
+    let mut list = Vec::with_capacity(6);
+    if clean.starts_with("ja") {
+        for cand in ["ja-JP", "zh-Hans-CN", "zh-CN", "system", "en-US"] {
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
+        }
+    } else if clean.starts_with("ko") {
+        for cand in ["ko-KR", "zh-Hans-CN", "zh-CN", "system", "en-US"] {
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
+        }
+    } else if is_target_zh {
         // 目标是中文：优先英文与系统语言，后验中文语言包兜底
         for cand in ["en-US", "system", "zh-Hans-CN", "zh-CN"] {
             if !list.contains(&cand) {
@@ -243,6 +255,24 @@ mod tests {
     fn test_build_candidate_languages_non_zh() {
         let candidates = build_candidate_languages("en");
         assert_eq!(candidates, vec!["zh-Hans-CN", "zh-CN", "system", "en-US"]);
+    }
+
+    #[test]
+    fn test_build_candidate_languages_ja() {
+        let candidates = build_candidate_languages("ja");
+        assert_eq!(
+            candidates,
+            vec!["ja-JP", "zh-Hans-CN", "zh-CN", "system", "en-US"]
+        );
+    }
+
+    #[test]
+    fn test_build_candidate_languages_ko() {
+        let candidates = build_candidate_languages("ko");
+        assert_eq!(
+            candidates,
+            vec!["ko-KR", "zh-Hans-CN", "zh-CN", "system", "en-US"]
+        );
     }
 
     #[test]

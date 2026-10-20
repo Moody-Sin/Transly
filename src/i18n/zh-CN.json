@@ -94,7 +94,10 @@
     "unsupportedFormat": "不支持的文件格式，仅支持 .txt、.md、.srt、.json、.html",
     "fileTooLarge": "文件超过 10 MB 上限，请选用更轻量的文档",
     "btnStart": "开始翻译",
+    "btnCancel": "取消翻译",
     "translating": "正在翻译文档...",
+    "cancelled": "文档翻译已取消",
+    "progressPercent": "翻译进度：{percent}% ({done}/{total} 块)",
     "progressChunks": "已翻译 {done} / {total} 块 (缓存命中: {hits})",
     "exportFile": "导出译文文件",
     "copyTranslated": "复制译文",
@@ -141,7 +144,9 @@
     "cancel": "取消（Esc）",
     "translating": "翻译中…",
     "translateFailed": "翻译失败",
-    "sendToMain": "发送到主窗口"
+    "sendToMain": "发送到主窗口",
+    "reselect": "重新框选",
+    "spaceTip": "空格键切换原译文"
   },
   "task": {
     "btnCancel": "取消",

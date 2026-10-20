@@ -203,7 +203,17 @@ const TAURI_MOCK_INIT_SCRIPT = `
         }
 
         case 'translate_document': {
-          const { content, format, targetLang, engineName } = args;
+          const { content, format, targetLang, engineName, taskId } = args;
+          if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.emit) {
+            setTimeout(() => {
+              window.__TAURI__.event.emit('document-translate-progress', {
+                task_id: taskId,
+                completed_chunks: 1,
+                total_chunks: 2,
+                cache_hits: 1
+              });
+            }, 50);
+          }
           return {
             translated_content: '[E2E文档译文:' + format + '->' + targetLang + ']\\n' + content,
             total_chunks: 2,
@@ -212,6 +222,9 @@ const TAURI_MOCK_INIT_SCRIPT = `
             engine: engineName || 'google'
           };
         }
+
+        case 'cancel_document_task':
+          return null;
 
         case 'translate_stream': {
           const { text, targetLang, engineName } = args;
@@ -845,6 +858,29 @@ async function runDesktopUiE2E() {
     assert.strictEqual(await shotBlocks.first().evaluate((el) => el.style.top), '20%')
     assert.strictEqual(await shotBlocks.nth(1).evaluate((el) => el.style.top), '30%')
 
+    // 断言 5.1: 点击或选中译文块阻止冒泡，不得销毁清空已有翻译块
+    await shotBlocks.first().click()
+    await shotPage.waitForTimeout(100)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      2,
+      '点击译文块不得触发画布重新框选',
+    )
+
+    // 断言 5.2: 悬停译文块自适应展开且高度不得恶性溢满屏幕（防回归：曾因 hover:min-h-full 撑大至 800px 覆盖全屏）
+    const bboxBefore = await shotBlocks.first().boundingBox()
+    await shotBlocks.first().hover()
+    await shotPage.waitForTimeout(100)
+    const bboxHover = await shotBlocks.first().boundingBox()
+    assert(bboxHover && bboxBefore, '悬停译文块必须能够读取布局尺寸')
+    assert(bboxHover.height >= bboxBefore.height, '悬停展开高度不得小于初始框高')
+    assert(
+      bboxHover.height < 300,
+      `悬停展开高度应自适应文本，不得恶性撑满全屏，实际: ${bboxHover.height}`,
+    )
+    await shotPage.mouse.move(0, 0)
+    await shotPage.waitForTimeout(100)
+
     // 断言 6: 「还原原文」只隐藏译文层，不得卸载背景冻结帧
     await shotPage.getByRole('button', { name: '还原原文' }).click()
     await shotPage.waitForTimeout(150)
@@ -854,6 +890,42 @@ async function runDesktopUiE2E() {
       '还原原文后译文层必须不可见',
     )
     assert(await shotFrame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    // 断言 6.1: 按空格键 Space 快速切换原译文
+    await shotPage.keyboard.press('Space')
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      2,
+      '按空格键应恢复显示译文',
+    )
+    await shotPage.keyboard.press('Space')
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      0,
+      '再次按空格键应切换还原原文',
+    )
+    await shotPage.keyboard.press('Space')
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      2,
+      '第三次按空格键恢复显示译文',
+    )
+
+    // 断言 6.2: 点击「重新框选」按钮清空已有文字块并恢复待选状态
+    await shotPage.locator('[data-testid="shot-reselect"]').click()
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      0,
+      '重新框选必须清空已有文字块',
+    )
+    assert(
+      await shotPage.locator('[data-testid="shot-initial-bar"]').isVisible(),
+      '重新框选后必须展现初始待选提示栏',
+    )
 
     // 断言 7: Esc 取消并关闭覆盖层
     await shotPage.keyboard.press('Escape')
@@ -869,6 +941,42 @@ async function runDesktopUiE2E() {
     )
 
     await shotPage.close()
+
+    // 断言 8: 鼠标右键一键快速退出截图覆盖窗
+    const rightClickPage = await browser.newPage()
+    await rightClickPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await rightClickPage.setViewportSize({ width: 1200, height: 800 })
+    await rightClickPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+    await rightClickPage
+      .locator('[data-testid="shot-frame"]')
+      .waitFor({ state: 'visible', timeout: 5000 })
+    await rightClickPage.mouse.click(100, 100, { button: 'right' })
+    await rightClickPage.waitForTimeout(200)
+    const logs = await rightClickPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const rightCancelCalled = logs.some((l) => l.cmd === 'cancel_screenshot_translation')
+    assert(rightCancelCalled, '鼠标右键单击必须调用 cancel_screenshot_translation')
+    await rightClickPage.close()
+
+    // 断言 8.1: 在文字块上直接右键单击同样能够快速退出截图覆盖窗
+    const rightClickBlockPage = await browser.newPage()
+    await rightClickBlockPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await rightClickBlockPage.setViewportSize({ width: 1200, height: 800 })
+    await rightClickBlockPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+    await rightClickBlockPage
+      .locator('[data-testid="shot-frame"]')
+      .waitFor({ state: 'visible', timeout: 5000 })
+    await rightClickBlockPage.mouse.move(240, 160)
+    await rightClickBlockPage.mouse.down()
+    await rightClickBlockPage.mouse.move(720, 480)
+    await rightClickBlockPage.mouse.up()
+    const blockToRightClick = rightClickBlockPage.locator('[data-testid="shot-block"]').first()
+    await blockToRightClick.waitFor({ state: 'visible', timeout: 5000 })
+    await blockToRightClick.click({ button: 'right' })
+    await rightClickBlockPage.waitForTimeout(200)
+    const blockLogs = await rightClickBlockPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const rightCancelBlockCalled = blockLogs.some((l) => l.cmd === 'cancel_screenshot_translation')
+    assert(rightCancelBlockCalled, '在文字块上右键单击必须调用 cancel_screenshot_translation')
+    await rightClickBlockPage.close()
     console.log('✔ [用例 8] 截图覆盖窗框选、坐标归一化、译文层与取消闭环正常')
 
     // ==========================================
@@ -1079,6 +1187,15 @@ async function runDesktopUiE2E() {
       // 验证复制按钮
       await docPage.click('[data-testid="copy-document-translation"]')
       await docPage.waitForTimeout(100)
+
+      // 断言取消命令机制接通
+      const logs = await docPage.evaluate(() => window.__INVOKE_LOGS || [])
+      const docTranslateCalls = logs.filter((l) => l.cmd === 'translate_document')
+      assert(docTranslateCalls.length > 0, '必须通过 translate_document 触发翻译')
+      assert(
+        typeof docTranslateCalls[0].args.taskId === 'number',
+        '文档翻译必须携带数字类型 taskId',
+      )
     } finally {
       if (fs.existsSync(testFilePath)) {
         fs.unlinkSync(testFilePath)

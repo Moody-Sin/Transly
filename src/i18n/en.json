@@ -94,7 +94,10 @@
     "unsupportedFormat": "Unsupported file format. Only .txt, .md, .srt, .json, .html are supported",
     "fileTooLarge": "File exceeds 10 MB limit; please select a smaller document",
     "btnStart": "Start Translation",
+    "btnCancel": "Cancel",
     "translating": "Translating document...",
+    "cancelled": "Document translation cancelled",
+    "progressPercent": "Progress: {percent}% ({done}/{total} blocks)",
     "progressChunks": "Translated {done} / {total} blocks (Cache hits: {hits})",
     "exportFile": "Export Translated File",
     "copyTranslated": "Copy Translation",
@@ -141,7 +144,9 @@
     "cancel": "Cancel (Esc)",
     "translating": "Translating…",
     "translateFailed": "Translation failed",
-    "sendToMain": "Send to main window"
+    "sendToMain": "Send to main window",
+    "reselect": "Reselect",
+    "spaceTip": "Press Space to toggle"
   },
   "task": {
     "btnCancel": "Cancel",

@@ -101,7 +101,9 @@ export const commands = {
 	 *  这是「OCR 结果可编辑」被砍掉后的替代路径（全局设计 §十二）。
 	 */
 	pushScreenshotTextToMain: (text: string) => typedError<null, string>(__TAURI_INVOKE("push_screenshot_text_to_main", { text })),
-	translateDocument: (content: string, format: DocumentFormat, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<DocumentTranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_document", { content, format, sourceLang, targetLang, engineName })),
+	translateDocument: (taskId: number, content: string, format: DocumentFormat, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<DocumentTranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_document", { taskId, content, format, sourceLang, targetLang, engineName })),
+	/**  主动取消在途文档翻译任务 */
+	cancelDocumentTask: (taskId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_document_task", { taskId })),
 	getOfflineEngineStatus: () => typedError<OfflineEngineStatusDto, string>(__TAURI_INVOKE("get_offline_engine_status")),
 };
 

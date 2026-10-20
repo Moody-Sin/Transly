@@ -161,6 +161,12 @@ pub fn recognize_words(
             }
         }
 
+        // 若当前候选引擎未识别出任何有效文字（例如英文引擎扫描纯中文画面），
+        // 绝不可直接 return 空结果，必须继续尝试后续候选语言包（如 system / zh-Hans-CN）
+        if words.is_empty() {
+            continue;
+        }
+
         // 若进行了尺寸下采样（规避 Windows OCR 的 MaxImageDimension 上限），
         // 词框像素坐标必须按比例还原回原始输入图的 (width, height) 像素空间，
         // 保证上层以原始图尺寸归一化时坐标不偏移、不变小。
@@ -181,7 +187,6 @@ pub fn recognize_words(
             }
         }
 
-        // 引擎可用但图里确实没字 → 交给调用方判 empty_text；此处返回空表即可。
         return Ok(words);
     }
 

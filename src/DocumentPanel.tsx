@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import {
   FileText,
   UploadCloud,
@@ -8,12 +9,20 @@ import {
   AlertCircle,
   Loader2,
   RefreshCw,
+  X,
 } from 'lucide-react'
 import { commands } from './bindings'
 import type { DocumentFormat, DocumentTranslateOutcomeDto } from './bindings'
 import type { I18nSchema } from './i18n'
 import { downloadBlob } from './utils/download'
 import { detectDocumentFormat, generateExportFilename, formatFileSize } from './utils/document'
+
+interface DocumentProgressEvent {
+  task_id: number
+  completed_chunks: number
+  total_chunks: number
+  cache_hits: number
+}
 
 interface DocumentPanelProps {
   t: I18nSchema
@@ -37,8 +46,12 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
   const [previewTab, setPreviewTab] = useState<'translated' | 'original'>('translated')
   const [viewMode, setViewMode] = useState<'single' | 'split'>('single')
   const [copied, setCopied] = useState(false)
+  const [progress, setProgress] = useState<{ done: number; total: number; hits: number } | null>(
+    null,
+  )
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const taskIdRef = useRef(0)
 
   const handleFile = useCallback(
     (selectedFile: File) => {
@@ -101,21 +114,60 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
     setIsDragging(false)
   }, [])
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    listen<DocumentProgressEvent>('document-translate-progress', (event) => {
+      const p = event.payload
+      if (!p || p.task_id !== taskIdRef.current) return
+      setProgress({
+        done: p.completed_chunks,
+        total: p.total_chunks,
+        hits: p.cache_hits,
+      })
+    })
+      .then((fn) => {
+        if (disposed) fn()
+        else unlisten = fn
+      })
+      .catch((err) => {
+        console.warn('[Transly] document-translate-progress 订阅失败:', err)
+      })
+
+    return () => {
+      disposed = true
+      if (unlisten) unlisten()
+    }
+  }, [])
+
+  const cancelTranslation = useCallback(() => {
+    const activeTaskId = taskIdRef.current
+    taskIdRef.current += 1
+    void commands.cancelDocumentTask(activeTaskId)
+    setIsTranslating(false)
+    setErrorMsg(t.document.cancelled)
+  }, [t.document.cancelled])
+
   const startTranslation = useCallback(async () => {
     if (!file || isTranslating) return
 
+    const taskId = ++taskIdRef.current
     setIsTranslating(true)
     setErrorMsg(null)
+    setProgress(null)
     const startTime = performance.now()
 
     try {
       const res = await commands.translateDocument(
+        taskId,
         file.content,
         file.format,
         null,
         targetLang,
         engine,
       )
+
+      if (taskId !== taskIdRef.current) return
 
       if (res.status === 'ok') {
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
@@ -126,15 +178,18 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
         setErrorMsg(`${t.document.translateFailed}${res.error.message}`)
       }
     } catch (err) {
+      if (taskId !== taskIdRef.current) return
       setErrorMsg(
         `${t.document.translateFailed}${err instanceof Error ? err.message : String(err)}`,
       )
     } finally {
-      setIsTranslating(false)
+      if (taskId === taskIdRef.current) {
+        setIsTranslating(false)
+      }
     }
   }, [file, isTranslating, targetLang, engine, t])
 
-  // 支持 Ctrl+Enter / Cmd+Enter 快捷键触发翻译
+  // 支持 Ctrl+Enter / Cmd+Enter 快捷键触发翻译，Esc 快捷键取消
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -142,11 +197,14 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
           e.preventDefault()
           void startTranslation()
         }
+      } else if (e.key === 'Escape' && isTranslating) {
+        e.preventDefault()
+        cancelTranslation()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [file, isTranslating, startTranslation])
+  }, [file, isTranslating, startTranslation, cancelTranslation])
 
   const exportTranslated = () => {
     if (!file || !outcome) return
@@ -169,10 +227,15 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
   }
 
   const resetAll = () => {
+    const activeTaskId = taskIdRef.current
+    taskIdRef.current += 1
+    void commands.cancelDocumentTask(activeTaskId)
     setFile(null)
     setOutcome(null)
     setErrorMsg(null)
     setDurationSec(null)
+    setProgress(null)
+    setIsTranslating(false)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -248,25 +311,65 @@ export default function DocumentPanel({ t, targetLang, engine }: DocumentPanelPr
                 <RefreshCw className="h-3.5 w-3.5 inline mr-1" />
                 {t.document.btnReselect}
               </button>
-              <button
-                data-testid="start-document-translate"
-                onClick={startTranslation}
-                disabled={isTranslating}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded shadow-sm disabled:opacity-60 transition-colors"
-              >
-                {isTranslating ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>{t.document.translating}</span>
-                  </>
-                ) : (
+              {isTranslating ? (
+                <button
+                  data-testid="cancel-document-translate"
+                  onClick={cancelTranslation}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 rounded border border-rose-200 dark:border-rose-800 shadow-sm transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>{t.document.btnCancel}</span>
+                </button>
+              ) : (
+                <button
+                  data-testid="start-document-translate"
+                  onClick={startTranslation}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded shadow-sm disabled:opacity-60 transition-colors"
+                >
                   <span>{t.document.btnStart}</span>
-                )}
-              </button>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* 进度与统计 */}
+          {/* 实时翻译进度条 */}
+          {isTranslating && (
+            <div
+              data-testid="document-translating-progress"
+              className="flex flex-col gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-700/60"
+            >
+              <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+                <span className="flex items-center gap-1.5 font-medium text-indigo-600 dark:text-indigo-400">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {progress && progress.total > 0
+                    ? t.document.progressPercent
+                        .replace(
+                          '{percent}',
+                          String(Math.round((progress.done / progress.total) * 100)),
+                        )
+                        .replace('{done}', String(progress.done))
+                        .replace('{total}', String(progress.total))
+                    : t.document.translating}
+                </span>
+                {progress && progress.hits > 0 && (
+                  <span className="text-[11px] text-slate-400">(缓存命中: {progress.hits})</span>
+                )}
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+                <div
+                  className="h-full bg-indigo-600 transition-all duration-200 ease-out"
+                  style={{
+                    width:
+                      progress && progress.total > 0
+                        ? `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%`
+                        : '25%',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 完成后的统计 */}
           {outcome && (
             <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300">
               <div className="flex items-center gap-2">

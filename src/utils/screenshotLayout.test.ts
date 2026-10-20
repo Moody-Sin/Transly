@@ -1,6 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { toPercentStyle, fitFontSize, clampRenderedBox } from './screenshotLayout.ts'
+import {
+  toPercentStyle,
+  fitFontSize,
+  clampRenderedBox,
+  computeFloatingToolbarPosition,
+} from './screenshotLayout.ts'
 
 test('toPercentStyle: 归一化分量转百分比，且不产生浮点噪声', () => {
   const s = toPercentStyle({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 })
@@ -116,4 +121,59 @@ test('clampRenderedBox: 框大于容器时钳到容器尺寸', () => {
 test('clampRenderedBox: 容器尺寸为零时返回零矩形', () => {
   const r = clampRenderedBox({ x: 0.5, y: 0.5, w: 0.2, h: 0.2 }, { w: 0, h: 0 })
   assert.deepEqual(r, { x: 0, y: 0, w: 0, h: 0 })
+})
+
+test('computeFloatingToolbarPosition: 选区下方空间充足时，停靠在选区右下角正下方', () => {
+  const pos = computeFloatingToolbarPosition(
+    { x: 100, y: 100, w: 500, h: 200 },
+    { width: 1200, height: 800 },
+    { width: 400, height: 40 },
+    8,
+    8,
+  )
+  assert.equal(pos.placement, 'bottom')
+  // 右对齐选区右侧: 100 + 500 - 400 = 200
+  assert.equal(pos.left, 200)
+  // 下方停靠: 100 + 200 + 8 = 308
+  assert.equal(pos.top, 308)
+})
+
+test('computeFloatingToolbarPosition: 选区贴底时自动翻转到选区正上方', () => {
+  const pos = computeFloatingToolbarPosition(
+    { x: 100, y: 600, w: 500, h: 180 },
+    { width: 1200, height: 800 },
+    { width: 400, height: 40 },
+    8,
+    8,
+  )
+  assert.equal(pos.placement, 'top')
+  assert.equal(pos.left, 200)
+  // 选区上方: 600 - 40 - 8 = 552
+  assert.equal(pos.top, 552)
+})
+
+test('computeFloatingToolbarPosition: 选区靠右边缘时向左安全钳制防溢出', () => {
+  const pos = computeFloatingToolbarPosition(
+    { x: 800, y: 100, w: 400, h: 200 },
+    { width: 1200, height: 800 },
+    { width: 450, height: 40 },
+    8,
+    8,
+  )
+  // 视口宽 1200, padding 8, 最大右侧 1192
+  // left + 450 <= 1192 => left = 742
+  assert.equal(pos.left, 742)
+  assert.ok(pos.left + 450 <= 1200 - 8)
+})
+
+test('computeFloatingToolbarPosition: 全屏/超大选区时内部贴底浮动', () => {
+  const pos = computeFloatingToolbarPosition(
+    { x: 0, y: 0, w: 1200, h: 800 },
+    { width: 1200, height: 800 },
+    { width: 400, height: 40 },
+    8,
+    8,
+  )
+  assert.equal(pos.placement, 'inside-bottom')
+  assert.equal(pos.top, 800 - 8 - 40)
 })

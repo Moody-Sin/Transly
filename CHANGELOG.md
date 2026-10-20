@@ -8,6 +8,31 @@
 ## [未发布]
 
 ### 优化与增强
+- **文档翻译全链路流式进度广播与主动打断取消机制 (`document/mod.rs`, `commands/document.rs`, `DocumentPanel.tsx`, `bindings.ts`)**：
+  - **实时分片进度百分比通知**：在 `transly-core` 底层引入 `DocumentProgressCallback`，切批翻译中每完成一个 Batch 即刻向前端广播 `document-translate-progress` 事件，前端 `DocumentPanel` 实时呈现平滑进度条、百分比与已完成/总块数，彻底告别大文档翻译“漫长盲等”的假死体验；
+  - **任务取消与快速打断**：底层接入取消信号监听通道，单批循环前置检查取消标志；前端提供“取消翻译”按钮并支持 `Esc` 快捷键极速取消，瞬时中断在途网络请求并停止后续大模型 Token 消耗；
+  - **状态聚合与 specta 签名瘦身**：将 `commands/document.rs` 内部庞大的系统依赖聚合为 `TranslationDependencies` 注入，规避 `specta` 最多 10 个参数的硬限制，大幅提高后端架构内聚度。
+- **架构重构与单测解耦瘦身 (`commands/mod.rs`, `commands/tests.rs`)**：
+  - 将 `src-tauri/src/commands/mod.rs` 中逾 400 行庞大的单元测试与语义测试整洁抽离至 `commands/tests.rs`，消除主入口文件过度膨胀，大幅改善代码可读性与团队协作维护效率。
+- **SQLite 历史缓存降序索引优化 (`cache.rs`)**：
+  - 将 `translation_cache` 的索引优化为显式降序 `idx_cache_created_at ON translation_cache(created_at DESC)`，使 `list_recent`、`search` 以及后台定时修剪 `trim_to_max_items` 直接利用 B-tree 覆盖扫描，消除海量记录下的临时排序表开销。
+- **macOS 平台划词替换辅助功能权限预检与诊断 (`selection.rs`)**：
+  - 在 macOS 键盘模拟流程中前置探测 `AXIsProcessTrusted()` 辅助功能权限，未授权时向前端抛出友好告警与系统设置引导，杜绝用户因权限缺失导致模拟按键静默失败、误以为功能损坏。
+- **浏览器扩展网络重试随机抖动 (Jitter) 防惊群 (`background/index.ts`)**：
+  - 将扩展后台单次固定 400ms 重试升级为 250ms ~ 600ms 动态随机抖动退避，有效消除整页多批次并发在桌面端重启或休眠唤醒时同时重试引发的惊群效应。
+- **截图覆盖工具栏响应式与极小选区安全适配 (`ScreenshotOverlay.tsx`)**：
+  - 为跟随悬浮工具栏增加 `max-w-[calc(100vw-16px)]` 与单行防溢出适配，防止在低分辨率显示器或极窄选区下产生横向截断。
+- **截图翻译全链路缺陷修复与真机体验优化 (`windows.rs`, `ScreenshotOverlay.tsx`, `screenshot.rs`, `ocr/mod.rs`, `screenshotLayout.ts`)**：
+  - **选区智能跟随悬浮工具栏 (对标有道翻译体验，`ScreenshotOverlay.tsx`, `screenshotLayout.ts`)**：工具栏由死板固定在屏幕正上方，升级为智能跟随框选区域。默认紧贴选区右下方，靠近屏幕底部时自适应翻转至上方，全屏或贴边时智能安全内贴，彻底根治 2K/4K 大屏上框选后视线与鼠标需大幅跨屏位移的严重操作痛点；
+  - **空格键 (`Space`) 极速切换原译文 (`ScreenshotOverlay.tsx`)**：按 `Space` 单键即刻在“原文”与“译文”之间切换对比，配合按键徽标直观指引，实现单手键盘流对比；
+  - **新增一键「重新框选」入口 (`ScreenshotOverlay.tsx`)**：跟随工具栏集成一键重新框选按钮，点击后清空选区与文字块并恢复待选状态，无需手动退出重开；
+  - **修复 Windows OCR 候选语言短路丢失中文缺陷 (`windows.rs`)**：WinRT OCR 候选语言遍历时，当首个引擎（`en-US`）在中文图像上识别返回空结果时，不再提前 `return Ok(words)`，而是自适应向后尝试 `system` 与 `zh-Hans-CN` 语言包，彻底根治截中文报“未能从图片中识别到有效文字”的高危缺陷；
+  - **扩展多语言 OCR 候选矩阵 (`ocr/mod.rs`)**：在 `build_candidate_languages` 中扩充日文 (`ja-JP`) 与韩文 (`ko-KR`) 候选配置，大幅提升异种语言画面的文字召回率；
+  - **修复译文块点击冒泡销毁画板缺陷 (`ScreenshotOverlay.tsx`)**：为译文块容器添加 `onPointerDown={(e) => e.stopPropagation()}`，彻底杜绝用户点击或选中译文时误触底层拖拽画布导致已有翻译瞬间清空的问题；
+  - **新增鼠标右键一键取消退出截图 (`ScreenshotOverlay.tsx`)**：全屏画布与文字块任意位置单击鼠标右键立即取消并安全收起覆盖窗，对齐主流桌面截图工具交互习惯；
+  - **单块快速复制与双击即拷交互 (`ScreenshotOverlay.tsx`)**：文字块支持双击快速复制、悬停便捷复制按钮以及绿色反馈标记，支持文字划选 (`select-text`)，免去只允许全局拼接复制的痛点；
+  - **自适应悬停展开与排版优化 (`ScreenshotOverlay.tsx`)**：为译文块增加 `break-words` 断词保护，小框长文本悬停时提权使用 `hover:!h-auto` 配合行内 `minHeight` 自适应垂直展开完整文本，同时彻底杜绝了因 `hover:min-h-full` 误将视口当作 100% 导致悬停瞬间拉伸撑满整屏的样式缺陷；
+  - **截图会话联动持久化首选目标语言偏好 (`commands/screenshot.rs`)**：`load_prefs` 优先读取用户在主窗口保存的 `preferred_target_lang` 偏好并严格排除非法 `auto` 值，告别每次截图强制回退中文的体验断层。
 - **全方位使用体验与交互质量提升 (`App.tsx`, `HistoryPanel.tsx`, `DocumentPanel.tsx`, `FloatWindow.tsx`, `speech.ts`)**：
   - **TTS 语音朗读交互与抗 GC 假死加固 (`speech.ts`, `App.tsx`, `FloatWindow.tsx`)**：
     - 朗读期间发音按钮展示动态高亮波形与“停止朗读”状态指示，再次点击立即打断当前发音；

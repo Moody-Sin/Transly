@@ -64,18 +64,45 @@ pub struct DocumentTranslateOutcome {
     pub engine: String,
 }
 
-/// 执行文档全量翻译与重构流水线。
-///
-/// 遵循原则：
-/// 1. 分片上限守卫：严格通过 `plan_batch_ranges` 将待翻译块切分为受控批次，绝不超 `MAX_BATCH_ITEMS` 与 `MAX_BATCH_TOTAL_CHARS`；
-/// 2. 逐项容错隔离：若个别块翻译失败，安全回退到该块原文（fail-closed），绝不因个别报错中断或损坏整篇文档；
-/// 3. 格式保真重构：重构阶段将译文填回原始定界槽位，保留空行、代码块、时间轴等非翻译结构。
+/// 文档翻译进度回调参数：(当前已处理待翻块数, 待翻总块数, 缓存命中块数)
+pub type DocumentProgressCallback<'a> = Box<dyn FnMut(u32, u32, u32) + Send + 'a>;
+
+/// 执行文档全量翻译与重构流水线（无进度回调简易入口）。
 pub async fn translate_document_content(
     deps: BatchPipelineDeps<'_>,
     content: &str,
     format: DocumentFormat,
     source_lang: &str,
     target_lang: &str,
+) -> Result<DocumentTranslateOutcome> {
+    translate_document_content_with_progress(
+        deps,
+        content,
+        format,
+        source_lang,
+        target_lang,
+        None,
+        None,
+    )
+    .await
+}
+
+/// 执行文档全量翻译与重构流水线，支持流式进度回调与主动取消信号。
+///
+/// 遵循原则：
+/// 1. 分片上限守卫：严格通过 `plan_batch_ranges` 将待翻译块切分为受控批次，绝不超 `MAX_BATCH_ITEMS` 与 `MAX_BATCH_TOTAL_CHARS`；
+/// 2. 逐项容错隔离：若个别块翻译失败，安全回退到该块原文（fail-closed），绝不因个别报错中断或损坏整篇文档；
+/// 3. 格式保真重构：重构阶段将译文填回原始定界槽位，保留空行、代码块、时间轴等非翻译结构；
+/// 4. 批次级响应取消：在批次循环前检测取消信号，立即中断后续请求与 Token 消耗；
+/// 5. 实时进度广播：单批完成立即触发回调，上层可即刻向 UI 汇报百分比。
+pub async fn translate_document_content_with_progress<'a>(
+    deps: BatchPipelineDeps<'_>,
+    content: &str,
+    format: DocumentFormat,
+    source_lang: &str,
+    target_lang: &str,
+    mut on_progress: Option<DocumentProgressCallback<'a>>,
+    mut cancel_rx: Option<&mut tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<DocumentTranslateOutcome> {
     if content.is_empty() {
         return Ok(DocumentTranslateOutcome {
@@ -138,8 +165,22 @@ pub async fn translate_document_content(
     let mut translated_results = Vec::with_capacity(reqs.len());
     let mut total_cache_hits = 0u32;
     let mut successful_chunks = 0u32;
+    let total_translatable = reqs.len() as u32;
 
     for (start, end) in ranges {
+        // 批次前置取消检查：若收到主动取消信号，立即中断，避免浪费网络配额与模型调用
+        if let Some(ref mut rx) = cancel_rx {
+            match rx.try_recv() {
+                Ok(()) => {
+                    return Err(crate::Error::Internal(
+                        "文档翻译任务已被主动取消".to_string(),
+                    ));
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {}
+            }
+        }
+
         let batch_reqs = &reqs[start..end];
         let sub_deps = BatchPipelineDeps {
             engine: deps.engine,
@@ -162,6 +203,11 @@ pub async fn translate_document_content(
                     translated_results.push(batch_reqs[i].text.clone());
                 }
             }
+        }
+
+        // 单批完成，通知外部进度（已翻译块数, 待翻总块数, 缓存命中数）
+        if let Some(ref mut cb) = on_progress {
+            cb(successful_chunks, total_translatable, total_cache_hits);
         }
     }
 
@@ -273,5 +319,76 @@ Second subtitle line.
         assert!(outcome
             .translated_content
             .contains("00:00:05,000 --> 00:00:08,000\n[translated: Second subtitle line.]"));
+    }
+
+    #[tokio::test]
+    async fn test_translate_document_with_progress_callback() {
+        let cache = TranslationCache::in_memory().unwrap();
+        let glossary = Glossary::new();
+        let engine = MockEchoEngine;
+
+        let deps = BatchPipelineDeps {
+            engine: &engine,
+            cache: &cache,
+            glossary: &glossary,
+            cache_enabled: true,
+        };
+
+        let mut progress_snapshots = Vec::new();
+        let on_progress: DocumentProgressCallback = Box::new(|done, total, hits| {
+            progress_snapshots.push((done, total, hits));
+        });
+
+        let content = "Line 1\n\nLine 2";
+        let outcome = translate_document_content_with_progress(
+            deps,
+            content,
+            DocumentFormat::Txt,
+            "en",
+            "zh-CN",
+            Some(on_progress),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.translated_chunks, 2);
+        assert!(!progress_snapshots.is_empty());
+        let (last_done, last_total, _) = *progress_snapshots.last().unwrap();
+        assert_eq!(last_done, 2);
+        assert_eq!(last_total, 2);
+    }
+
+    #[tokio::test]
+    async fn test_translate_document_with_cancel_signal() {
+        let cache = TranslationCache::in_memory().unwrap();
+        let glossary = Glossary::new();
+        let engine = MockEchoEngine;
+
+        let deps = BatchPipelineDeps {
+            engine: &engine,
+            cache: &cache,
+            glossary: &glossary,
+            cache_enabled: true,
+        };
+
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        // 触发取消信号
+        let _ = cancel_tx.send(());
+
+        let content = "Line 1\n\nLine 2";
+        let err = translate_document_content_with_progress(
+            deps,
+            content,
+            DocumentFormat::Txt,
+            "en",
+            "zh-CN",
+            None,
+            Some(&mut cancel_rx),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("主动取消"));
     }
 }

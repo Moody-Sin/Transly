@@ -535,10 +535,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const data = await doFetch()
         sendResponse({ ok: true, data })
       } catch (firstErr) {
-        // 睡眠唤醒/冷启动瞬态容错：若非 4xx 业务错误（如连接被拒或网络闪断），快速重试一次
+        // 睡眠唤醒/冷启动瞬态容错：若非 4xx 业务错误（如连接被拒或网络闪断），带随机抖动（Jitter）快速重试一次，
+        // 避免整页数十个并发切批请求在同一毫秒内同时打满本地 Axum 端口造成惊群（Thundering Herd）。
         const status = (firstErr as Error & { status?: number }).status
         if (!status || status >= 500) {
-          await new Promise((r) => setTimeout(r, 400))
+          const jitterMs = 250 + Math.floor(Math.random() * 350)
+          await new Promise((r) => setTimeout(r, jitterMs))
           try {
             const retryData = await doFetch()
             sendResponse({ ok: true, data: retryData })

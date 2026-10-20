@@ -114,7 +114,7 @@ impl TranslationCache {
                 engine TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_cache_created_at ON translation_cache(created_at);
+            CREATE INDEX IF NOT EXISTS idx_cache_created_at ON translation_cache(created_at DESC);
 
             CREATE TABLE IF NOT EXISTS glossary (
                 source_term TEXT PRIMARY KEY,
@@ -172,6 +172,7 @@ impl TranslationCache {
                 engine TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_cache_created_at ON translation_cache(created_at DESC);
 
             CREATE TABLE IF NOT EXISTS glossary (
                 source_term TEXT PRIMARY KEY,

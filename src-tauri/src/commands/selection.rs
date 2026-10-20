@@ -11,6 +11,18 @@ use transly_core::TranslationRequest;
 pub const DEFAULT_SHORTCUT: &str = "Alt+Shift+D";
 pub const DEFAULT_REPLACE_SHORTCUT: &str = "Alt+Shift+R";
 
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+/// 检查 macOS 辅助功能（Accessibility）权限，用于判断合成按键是否被系统安全机制拦截
+#[cfg(target_os = "macos")]
+pub fn is_accessibility_trusted() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
 /// 全局剪贴板自动化互斥锁，确保划词悬浮呼出与原地替换模拟流程不发生并发抢占
 static CLIPBOARD_SIMULATION_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -99,6 +111,18 @@ pub fn trigger_selection_replacement(
         };
 
         let Some(text) = detected_text else {
+            #[cfg(target_os = "macos")]
+            if !is_accessibility_trusted() {
+                let msg = "macOS 系统尚未授予 Transly「辅助功能」权限，无法模拟按键读取选区。请前往「系统设置 -> 隐私与安全性 -> 辅助功能」允许 Transly。";
+                eprintln!("[Selection Warning] {msg}");
+                let _ = handle.emit(
+                    "transly://replacement-failed",
+                    ReplacementFailedPayload {
+                        engine: "system".to_string(),
+                        message: msg.to_string(),
+                    },
+                );
+            }
             return;
         };
         let clean = text.trim();
@@ -398,6 +422,11 @@ pub fn trigger_selection_translation(
                     let _ = float_win.set_focus();
                     let _ = float_win.emit_to("float", "float-translate", req);
                 }
+            }
+        } else {
+            #[cfg(target_os = "macos")]
+            if !is_accessibility_trusted() {
+                eprintln!("[Selection Warning] macOS 系统尚未授予 Transly「辅助功能」权限，无法模拟按键读取选区");
             }
         }
 

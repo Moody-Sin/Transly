@@ -223,3 +223,30 @@
   - 测试前必须自动同步保存输入框中的最新密钥与端点配置；
   - 测试完成后必须立即从历史中检索并删除该测试条目，实现零副作用的即测即清。
 
+### 33. 多候选 OCR 引擎遍历必须以「识别出有效文字」为跳出判据，严禁在首个引擎空结果时短路返回
+- **现象**：Windows WinRT OCR 在按候选语言优先级遍历（如 `["en-US", "system", "zh-Hans-CN"]`）时，首个引擎（`en-US`）创建成功且执行正常，但面对纯中文画面解析出 0 个词（`words.is_empty()`）。代码直接在循环首轮末尾无条件执行 `return Ok(words)`，导致后续真正具备中文识别能力的 `system` 或 `zh-Hans-CN` 引擎被彻底短路，截取中文画面直接报错“未能从图片中识别到有效文字”。
+- **教训**：
+  - 兜底候选机制的核心是“前置引擎未产出有效业务结果时继续回退下一个”，**不能将「系统 API 调用未报错」等同于「业务识别成功」**；
+  - 只有当解析出的有效文字块非空（`!words.is_empty()`）时才可提前返回，空结果必须 `continue` 尝试后续候选语言包，全部遍历耗尽后方可返回空或报错。
+
+### 34. 绝对定位元素的百分比 min-height 参照包含块，严禁误用 `hover:min-h-full` 实现自适应展开
+- **现象**：全屏覆盖层中文字块采用 `position: absolute` 定位。为实现悬停时不被 `overflow-hidden` 截断且不小于原框，使用了 `hover:h-auto hover:min-h-full`。但绝对定位元素的百分比高度基准是最近定位祖先（全屏视口 800px），导致悬停时文字块恶性垂直撑满全屏；且普通 `hover:h-auto` 无法覆盖行内 `style.height`。
+- **教训**：
+  - 覆盖 JSX 行内 `style.height` 必须使用 Tailwind 的重要性修饰符 `hover:!h-auto`；
+  - 保持原框高度下限应在行内直接绑定 `minHeight: pct(h)`，绝不可对绝对定位元素声明 `min-h-full`。
+
+### 35. SQLite 普通表（Rowid 表）的隐式 rowid 列不可显式写入索引定义
+- **现象**：为优化 `ORDER BY created_at DESC, rowid DESC`，在 `cache.rs` 建表时尝试执行 `CREATE INDEX idx_cache_created_at_rowid ON translation_cache(created_at DESC, rowid DESC);`，SQLite 直接报错 `Database(SqlInputError { msg: "no such column: rowid" })`，导致全仓所有涉及缓存的测试批量崩溃。
+- **教训**：
+  - 在 SQLite 默认的普通表（非 WITHOUT ROWID 表）中，`rowid` 是内置隐藏主键，**每个 B-tree 二级索引的叶子节点内部天然包含该行的 `rowid`**；
+  - 严禁在 `CREATE INDEX` 列名单中显式指定 `rowid`，只需创建单列索引 `CREATE INDEX idx_cache_created_at ON translation_cache(created_at DESC)` 即可被查询优化器同时用来覆盖 `ORDER BY created_at DESC, rowid DESC`；
+  - 再次印证：数据库索引不是“按 ORDER BY 照抄列名”，必须尊重数据库底层存储引擎的模型。
+
+### 36. specta 对 Rust 函数入参存在硬上限（<= 10 个参数）
+- **现象**：为 `translate_document` 命令平铺传入 12 个参数（含各种状态 State 依赖），执行 `cargo run -p src-tauri --bin export_bindings` 时报错 `the trait bound fn(...) -> ... SpectaFn<_> is not satisfied`，编译直接中断。
+- **教训**：
+  - `tauri-specta` / `specta` 的 `SpectaFn` 宏仅对 0 到 10 个参数的函数类型实现了 Trait，超过 10 个参数无法参与导出；
+  - 架构设计上，应当将多个分散的状态依赖（如 `cache`, `pool`, `glossary`, `cache_controller`, `stream_registry`）统一封装进组合依赖结构体（如 `deps: tauri::State<'_, Arc<TranslationDependencies>>`），既绕开参数个数上限，又大幅降低函数的参数混乱度。
+
+
+

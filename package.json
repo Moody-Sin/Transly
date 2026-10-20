@@ -2,7 +2,7 @@
   "name": "transly",
   "private": true,
   "license": "UNLICENSED",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "engines": {
     "node": ">=22.6"

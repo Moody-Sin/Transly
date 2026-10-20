@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.6.0] - 2026-10-20
 
 ### 新增
 - **应用内自动更新 (`commands/updater.rs`, `UpdateSection.tsx`, `tauri.conf.json`, `release.yml`)**：
@@ -600,7 +600,8 @@
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
 [0.5.0]: https://github.com/Moody-Sin/Transly/compare/v0.4.1...v0.5.0
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.5.0...HEAD
+[0.6.0]: https://github.com/Moody-Sin/Transly/compare/v0.5.0...v0.6.0
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.6.0...HEAD
 [0.4.1]: https://github.com/Moody-Sin/Transly/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...v0.3.1

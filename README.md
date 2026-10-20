@@ -92,6 +92,9 @@ cd transly
 pnpm install
 ```
 
+> [!IMPORTANT]
+> 发布构建（`pnpm tauri build` / `pnpm run build:portable`）已启用更新包签名，构建前需设置环境变量 `TAURI_SIGNING_PRIVATE_KEY`（minisign 私钥文本或其文件路径）；仅本地开发调试用 `pnpm tauri dev` 不受影响。
+
 ## 用法
 
 ### 1. 桌面端使用

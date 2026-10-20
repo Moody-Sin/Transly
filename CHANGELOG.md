@@ -13,6 +13,15 @@
   - 设置中心新增「软件更新」区块：手动检查、展示新版本号与发布说明、一键下载安装并重启；
   - 发布流水线注入 `TAURI_SIGNING_PRIVATE_KEY`，自动产出 `.sig` 与 `latest.json` 更新清单；
   - 桌面端 UI E2E 增加「检查更新」链路断言（mock 无更新场景）。
+- **本地模型接入预设扩展 (`App.tsx`, `zh-CN.json`, `en.json`)**：
+  - 在 OpenAI 自定义端点处新增 Ollama（`:11434`）、LM Studio（`:1234`）、llama.cpp（`:8080`）三个一键预设，自动填充本地端点与模型名，断网环境下可直接接入真实本地模型；
+  - 本地端点沿用既有免密钥判定（`localhost` / `127.0.0.1` / `::1`），无需占位凭据即可连通。
+
+### 优化与增强
+- **工程结构与可维护性重构**：
+  - `crates/transly-core/src/cache.rs`（1552 行）拆分为 `cache/mod.rs`、`cache/export.rs`、`cache/tests.rs`；
+  - `src-tauri/src/commands/mod.rs`（1779 行）按领域拆分为 `translation` / `history` / `shortcuts` / `runtime` / `settings` 五个子模块，命令注册路径同步迁移；
+  - `src/App.tsx` 的设置中心术语库区块拆为独立 `GlossarySection.tsx`，入口文件由 2713 行降至 2521 行。
 
 ## [0.5.0] - 2026-10-20
 

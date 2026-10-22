@@ -202,7 +202,12 @@ pub const MAX_ITEM_CHARS: usize = 10_000;
 /// 返回 `Vec<(start, end)>`（左闭右开），保证：
 /// - 每个区间内字符总量不超过 `MAX_BATCH_TOTAL_CHARS`；
 /// - 每个区间内项数不超过 `MAX_BATCH_ITEMS`；
-/// - 单条文本自身超限时不静默丢弃，独占一个区间，交由服务端逐项报错。
+/// - 单条自身超过 `MAX_ITEM_CHARS` 的文本**严格独占一个区间**，不与前后项混批。
+///
+/// 为什么超长项必须独占：服务端对超限项返回 413 拒掉**整批**（不是逐项报错）。
+/// 若让一条 20000 字的项和 29 条正常段落同批，那 29 条也会因这一条被整批拒绝，
+/// 而且扩展端对半拆分后总能把它们救回来——但会多飞 log₂(30) ≈ 5 轮请求。
+/// 拆批时就把它隔开，代价只有它自己失败。
 pub fn plan_batch_ranges<I, S>(texts: I) -> Vec<(usize, usize)>
 where
     I: IntoIterator<Item = S>,
@@ -218,6 +223,17 @@ where
     let mut acc = 0usize;
 
     for (idx, len) in lens.iter().enumerate() {
+        // 自身超单条上限：无论如何独占一格，且不与前后任何项合并
+        if *len > MAX_ITEM_CHARS {
+            if start < idx {
+                ranges.push((start, idx));
+            }
+            ranges.push((idx, idx + 1));
+            start = idx + 1;
+            acc = 0;
+            continue;
+        }
+
         let count = idx - start;
         let over_chars = acc + len > MAX_BATCH_TOTAL_CHARS;
         let over_items = count >= MAX_BATCH_ITEMS;
@@ -397,20 +413,56 @@ mod tests {
 
     #[test]
     fn test_plan_batch_ranges_single_oversized_item_isolated() {
-        // 单条自身超限：不静默丢弃，独占一批交由服务端逐项报错
+        // 单条自身超限：不静默丢弃，独占一批交由服务端报错
         let texts = vec!["a".repeat(60_000), "b".to_string(), "c".to_string()];
         let ranges = ranges_of(&texts);
         assert_eq!(ranges[0], (0, 1), "超长项必须独占一批");
         assert_eq!(ranges[1], (1, 3), "其余项正常成批");
     }
 
+    /// 回归：超 `MAX_ITEM_CHARS` 但**未**超 `MAX_BATCH_TOTAL_CHARS` 的项，
+    /// 旧实现会把它与后面的正常项塞进同一批。服务端对超限项返回 413 拒整批，
+    /// 于是 29 条合法段落被一条超长段落连累整批失败。
+    #[test]
+    fn test_plan_batch_ranges_isolates_item_over_item_limit() {
+        // 20000 字：> MAX_ITEM_CHARS(10000) 但 < MAX_BATCH_TOTAL_CHARS(50000)，
+        // 旧的字符总量判据完全看不出它有问题。
+        let mut texts = vec!["a".repeat(20_000)];
+        texts.extend(std::iter::repeat_n("hi".to_string(), 5));
+
+        let ranges = ranges_of(&texts);
+        assert_eq!(
+            ranges[0],
+            (0, 1),
+            "超单条上限的项必须独占，不得与正常项混批"
+        );
+        assert_eq!(ranges[1], (1, 6), "其余项正常成批");
+
+        // 区间必须连续且完整覆盖
+        assert_eq!(ranges.first().map(|r| r.0), Some(0));
+        assert_eq!(ranges.last().map(|r| r.1), Some(texts.len()));
+        for pair in ranges.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "区间必须连续");
+        }
+    }
+
+    /// 回归：两个超单条上限的项相邻时，必须各自独占，不能合并成一批。
+    #[test]
+    fn test_plan_batch_ranges_adjacent_oversized_items_stay_separate() {
+        let texts = vec!["a".repeat(20_000), "b".repeat(20_000), "c".to_string()];
+        let ranges = ranges_of(&texts);
+        assert_eq!(ranges, vec![(0, 1), (1, 2), (2, 3)]);
+    }
+
     #[test]
     fn test_plan_batch_ranges_edge_cases() {
         assert!(ranges_of(&[]).is_empty(), "空输入不得产出区间");
         assert_eq!(ranges_of(&["x".to_string()]), vec![(0, 1)]);
-        // 恰好等于上限时不分批
-        let exact = vec!["a".repeat(MAX_BATCH_TOTAL_CHARS / 2); 2];
-        assert_eq!(ranges_of(&exact), vec![(0, 2)]);
+        // 恰好等于上限时不分批。
+        // 注意字符总量上限 50000 必须拆成多項才能兼顾单条上限 10000：
+        // 5 × 10000 —— 每项都不超 MAX_ITEM_CHARS，总量恰好等于 MAX_BATCH_TOTAL_CHARS。
+        let exact = vec!["a".repeat(MAX_ITEM_CHARS); 5];
+        assert_eq!(ranges_of(&exact), vec![(0, 5)]);
     }
 
     #[test]

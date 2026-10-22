@@ -55,7 +55,11 @@ export function countChars(text: string): number {
  * 返回左闭右开区间列表，保证：
  * - 每个区间内字符总量不超过 `maxBatchTotalChars`；
  * - 每个区间内项数不超过 `maxBatchItems`；
- * - 单条文本自身超限时独占一个区间，交由服务端逐项报错，绝不静默丢弃。
+ * - 单条自身超过 `maxItemChars` 的文本**严格独占一个区间**，不与前后项混批。
+ *
+ * 为什么超长项必须独占：服务端对超限项返回 413 拒掉**整批**（不是逐项报错）。
+ * 若让一条 20000 字的段落和 29 条正常段落同批，那 29 条也会因这一条被整批拒绝，
+ * 而 20000 < 50000，旧的字符总量判据完全看不出它有问题。
  *
  * @param texts 待切批文本（仅使用其字符数，不读取内容）
  * @param limits 服务端上限
@@ -64,12 +68,23 @@ export function planBatchRanges(texts: string[], limits: BatchLimits): Array<[nu
   const ranges: Array<[number, number]> = []
   const maxItems = Math.max(1, limits.maxBatchItems)
   const maxChars = Math.max(1, limits.maxBatchTotalChars)
+  const maxItemChars = Math.max(1, limits.maxItemChars)
 
   let start = 0
   let acc = 0
 
   for (let idx = 0; idx < texts.length; idx += 1) {
     const len = countChars(texts[idx])
+
+    // 自身超单条上限：无论如何独占一格，且不与前后任何项合并
+    if (len > maxItemChars) {
+      if (start < idx) ranges.push([start, idx])
+      ranges.push([idx, idx + 1])
+      start = idx + 1
+      acc = 0
+      continue
+    }
+
     const count = idx - start
 
     if (count > 0 && (acc + len > maxChars || count >= maxItems)) {

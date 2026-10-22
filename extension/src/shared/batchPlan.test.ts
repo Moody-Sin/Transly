@@ -68,6 +68,24 @@ test('单条自身超限时独占一批，不静默丢弃', () => {
   assert.deepEqual(ranges[1], [1, 3], '其余项正常成批')
 })
 
+test('单条超 maxItemChars 但未超字符总量的项也必须独占（回归：拖累整批 413）', () => {
+  // 20000 字：> maxItemChars(10000) 但 < maxBatchTotalChars(50000)
+  const texts = ['a'.repeat(20_000), ...Array.from({ length: 5 }, () => 'hi')]
+  const ranges = planBatchRanges(texts, LIMITS)
+
+  assert.deepEqual(ranges[0], [0, 1], '超单条上限的项必须独占，不得与正常项混批')
+  assert.deepEqual(ranges[1], [1, 6], '其余项正常成批')
+})
+
+test('相邻的超单条上限项必须各自独占，不能合并', () => {
+  const texts = ['a'.repeat(20_000), 'b'.repeat(20_000), 'c']
+  assert.deepEqual(planBatchRanges(texts, LIMITS), [
+    [0, 1],
+    [1, 2],
+    [2, 3],
+  ])
+})
+
 test('区间连续且完整覆盖，不丢项不重复', () => {
   const texts = Array.from({ length: 77 }, (_, i) => 'x'.repeat(100 + i))
   const ranges = planBatchRanges(texts, LIMITS)
@@ -82,8 +100,11 @@ test('区间连续且完整覆盖，不丢项不重复', () => {
 test('边界：空输入、单项、恰好等于上限', () => {
   assert.deepEqual(planBatchRanges([], LIMITS), [])
   assert.deepEqual(planBatchRanges(['x'], LIMITS), [[0, 1]])
-  // 恰好等于字符上限时不分批
-  assert.deepEqual(planBatchRanges(['a'.repeat(25_000), 'a'.repeat(25_000)], LIMITS), [[0, 2]])
+  // 恰好等于字符上限时不分批。
+  // 字符总量上限 50000 必须拆成多项才能兼顾单条上限 10000：
+  // 5 × 10000 —— 每项都不超 maxItemChars，总量恰好等于 maxBatchTotalChars。
+  const exact = Array.from({ length: 5 }, () => 'a'.repeat(LIMITS.maxItemChars))
+  assert.deepEqual(planBatchRanges(exact, LIMITS), [[0, 5]])
 })
 
 test('上限为 0 或负数时退化为每项一批，不产出空区间', () => {

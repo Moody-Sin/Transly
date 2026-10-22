@@ -579,10 +579,16 @@ mod tests {
             assert_eq!(w[0].1, w[1].0, "区间不连续");
         }
 
-        // 字符量上限：3 个 25000 字的块 → 每批最多装 2 个（2×25000=50000 恰好不超限）
-        let long: Vec<OcrBlockDto> = (0..3).map(|_| mk("字".repeat(25_000))).collect();
+        // 字符量上限：6 个 10000 字的块 → 总量 60000 超 50000，必须切批。
+        // 每块必须 ≤ MAX_ITEM_CHARS：否则会先被「单项超限独占」规则隔开，
+        // 测到的就不再是字符总量上限（原本用 25000 字块的版本正因此失效）。
+        let long: Vec<OcrBlockDto> = (0..6).map(|_| mk("字".repeat(10_000))).collect();
         let ranges2 = plan_block_batches(&long);
-        assert_eq!(ranges2.len(), 2, "字符量越界却未切批：{ranges2:?}");
+        assert_eq!(
+            ranges2,
+            vec![(0, 5), (5, 6)],
+            "字符量越界却未切批：{ranges2:?}"
+        );
         for (s, e) in &ranges2 {
             let total: usize = long[*s..*e].iter().map(|b| b.text.chars().count()).sum();
             assert!(

@@ -262,9 +262,8 @@ function renderProgressState(state: {
 
 async function restoreProgressState() {
   // 进度快照按 tabId 索引，Popup 始终关心当前活动标签页。
-  // 仅声明了 activeTab / storage 权限（未申请 tabs），`chrome.tabs.query`
-  // 不会返回 url 字段，因此不做 url 过滤，也不做全量标签页回退
-  // （那种回退在无 tabs 权限下永远拿不到 url，是死代码）。
+  // `tabs` 权限已在 manifest.json 申请（`chrome.tabs.onUpdated` 需读 tab.url 做站点规则匹配），
+  // 但本函数只需要 tabId，不读 url，因此不做 url 过滤，也不做全量标签页回退。
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
   const tabId = activeTab?.id
   if (!tabId) return

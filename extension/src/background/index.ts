@@ -465,57 +465,65 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'TRANSLATE_BATCH') {
-    Promise.all([getServerToken(), getServerUrl()]).then(async ([token, serverUrl]) => {
-      const doFetch = async () => {
-        const res = await fetch(`${serverUrl}/translate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            items: message.items,
-            source_lang: message.source_lang,
-            target_lang: message.target_lang,
-            engine: message.engine,
-          }),
-        })
-        if (!res.ok) {
-          const err = new Error(`HTTP ${res.status}: ${res.statusText}`)
-          ;(err as Error & { status?: number }).status = res.status
-          throw err
-        }
-        return res.json()
-      }
-
-      try {
-        const data = await doFetch()
-        sendResponse({ ok: true, data })
-      } catch (firstErr) {
-        // 睡眠唤醒/冷启动瞬态容错：若非 4xx 业务错误（如连接被拒或网络闪断），快速重试一次
-        const status = (firstErr as Error & { status?: number }).status
-        if (!status || status >= 500) {
-          await new Promise((r) => setTimeout(r, 400))
-          try {
-            const retryData = await doFetch()
-            sendResponse({ ok: true, data: retryData })
-            return
-          } catch (retryErr) {
-            sendResponse({
-              ok: false,
-              error: (retryErr as Error).message,
-              status: (retryErr as Error & { status?: number }).status,
-            })
-            return
+    // `.catch` 不能省：`getServerToken` / `getServerUrl` 底层是 `chrome.storage.local.get`，
+    // 它会 reject（存储损坏、配额满）。没有 catch 时 `.then` 不会执行，`sendResponse`
+    // 永远不会被调用——而 `return true` 已保住了消息通道，content script 只能等到
+    // 「message port closed」超时，整批默默失败并误触熔断。
+    Promise.all([getServerToken(), getServerUrl()])
+      .then(async ([token, serverUrl]) => {
+        const doFetch = async () => {
+          const res = await fetch(`${serverUrl}/translate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({
+              items: message.items,
+              source_lang: message.source_lang,
+              target_lang: message.target_lang,
+              engine: message.engine,
+            }),
+          })
+          if (!res.ok) {
+            const err = new Error(`HTTP ${res.status}: ${res.statusText}`)
+            ;(err as Error & { status?: number }).status = res.status
+            throw err
           }
+          return res.json()
         }
-        sendResponse({
-          ok: false,
-          error: (firstErr as Error).message,
-          status,
-        })
-      }
-    })
+
+        try {
+          const data = await doFetch()
+          sendResponse({ ok: true, data })
+        } catch (firstErr) {
+          // 睡眠唤醒/冷启动瞬态容错：若非 4xx 业务错误（如连接被拒或网络闪断），快速重试一次
+          const status = (firstErr as Error & { status?: number }).status
+          if (!status || status >= 500) {
+            await new Promise((r) => setTimeout(r, 400))
+            try {
+              const retryData = await doFetch()
+              sendResponse({ ok: true, data: retryData })
+              return
+            } catch (retryErr) {
+              sendResponse({
+                ok: false,
+                error: (retryErr as Error).message,
+                status: (retryErr as Error & { status?: number }).status,
+              })
+              return
+            }
+          }
+          sendResponse({
+            ok: false,
+            error: (firstErr as Error).message,
+            status,
+          })
+        }
+      })
+      .catch((err: unknown) => {
+        sendResponse({ ok: false, error: (err as Error)?.message ?? String(err) })
+      })
     return true
   }
 })

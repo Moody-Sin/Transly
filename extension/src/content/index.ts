@@ -7,7 +7,12 @@
  * （如 `TRANSLATE_BATCH`）一律走 `sendBatch` 并处理失败。
  */
 
-console.log('[Transly Content Script] 沉浸式翻译引擎已就绪')
+/** 本地排查开关。生产默认为 false：content script 跑在用户页面的控制台上，
+ * 常态打日志等于把扩展内部状态广播给每一个站点。 */
+const DEBUG = false
+const debugLog: (...args: unknown[]) => void = DEBUG ? console.log.bind(console) : () => {}
+
+debugLog('[Transly Content Script] 沉浸式翻译引擎已就绪')
 
 import {
   iterateElementsDeep,
@@ -1216,12 +1221,16 @@ function cancelTranslation() {
       rememberFailed({ ...entry, errorKind: 'cancelled' })
     }
   }
+  // 广播的 generation 必须是**被取消的那个任务**的代际（递增前的值）：
+  // 其余消息（STARTED/PROGRESS/终态）均以任务自身的 generation 为标识，
+  // 这里若发递增后的新值，取消事件就与它描述的任务脱钩。
+  const cancelledGeneration = currentGeneration
   currentGeneration += 1
   stopDynamicObserver()
   chrome.runtime
     .sendMessage({
       type: 'TRANSLATION_CANCELLED',
-      generation: currentGeneration,
+      generation: cancelledGeneration,
       completed: currentTaskCompleted,
       total: currentTaskTotal,
       failedCount: failedItemsMap.size,
@@ -1258,7 +1267,7 @@ export async function translateFullPage(
   currentTaskCompleted = 0
 
   if (entries.length === 0) {
-    console.log('[Transly] 未检测到可翻译的文本节点')
+    debugLog('[Transly] 未检测到可翻译的文本节点')
     broadcastTerminalState(taskGeneration, 0)
     startDynamicObserver(targetLang, engine)
     return
@@ -1272,7 +1281,7 @@ export async function translateFullPage(
     })
     .catch(() => {})
 
-  console.log(
+  debugLog(
     `[Transly] 收集到 ${entries.length} 个文本节点，任务版本=${taskGeneration}，开始批量翻译...`,
   )
   const failedBatches = await translateEntries(entries, targetLang, engine, taskGeneration)
@@ -1280,7 +1289,7 @@ export async function translateFullPage(
   // 翻译结束时再次校验代际版本，避免中途已被还原后误开启动态监听
   if (taskGeneration === currentGeneration) {
     broadcastTerminalState(taskGeneration, failedBatches)
-    console.log('[Transly] 首屏整页翻译完成，已开启动态增量监听')
+    debugLog('[Transly] 首屏整页翻译完成，已开启动态增量监听')
     startDynamicObserver(targetLang, engine)
   }
 }

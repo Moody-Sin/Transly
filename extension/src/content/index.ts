@@ -20,6 +20,7 @@ import {
   ELEMENT_NODE,
   DOCUMENT_FRAGMENT_NODE,
 } from '../shared/domTraversal'
+import { isElementExcludedBySelector, normalizeSiteRule } from '../shared/siteRules'
 
 // 使用 WeakMap 严格基于 Text 节点维护原始内容，杜绝父节点多 Text 节点互相覆盖
 const originalTextMap = new WeakMap<Text, string>()
@@ -45,7 +46,21 @@ const IGNORED_TAGS = new Set([
  */
 const LEAF_RICH_TEXT_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th'
 
+let activeSiteExcludeSelectors: string | undefined
+
+export function setActiveSiteExcludeSelectors(selectors?: string) {
+  activeSiteExcludeSelectors = selectors
+}
+
 export function shouldTranslateElement(element: Element): boolean {
+  // 检查站点自定义排除选择器
+  if (
+    activeSiteExcludeSelectors &&
+    isElementExcludedBySelector(element, activeSiteExcludeSelectors)
+  ) {
+    return false
+  }
+
   // tagName 大小写取决于命名空间：HTML 元素返回大写，SVG 等返回小写，
   // 归一化后比较，否则 IGNORED_TAGS 中的 'SVG' 永远不会命中。
   if (IGNORED_TAGS.has(element.tagName.toUpperCase())) return false
@@ -1251,6 +1266,17 @@ export async function translateFullPage(
   currentGeneration += 1
   const taskGeneration = currentGeneration
   failedItemsMap.clear()
+
+  // 读取当前站点定制规则（如自定义排除选择器）
+  try {
+    const res = await chrome.storage.local.get(['transly_site_rules'])
+    const rules = res.transly_site_rules || {}
+    const siteRule = normalizeSiteRule(rules[window.location.hostname])
+    setActiveSiteExcludeSelectors(siteRule.excludeSelectors)
+  } catch {
+    // 忽略异常，降级使用默认规则
+  }
+
   currentTaskEntries = collectTextNodes(document.body)
   stopDynamicObserver()
 

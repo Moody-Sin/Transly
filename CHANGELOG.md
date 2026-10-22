@@ -5,7 +5,118 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.6.0] - 2026-10-20
+
+### 新增
+- **应用内自动更新 (`commands/updater.rs`, `UpdateSection.tsx`, `tauri.conf.json`, `release.yml`)**：
+  - 接入 `tauri-plugin-updater`，从 GitHub Releases 的 `latest.json` 检查新版本；更新包由流水线使用 minisign 私钥签名，客户端以内置公钥验签，拒绝被篡改的安装包；
+  - 设置中心新增「软件更新」区块：手动检查、展示新版本号与发布说明、一键下载安装并重启；
+  - 发布流水线注入 `TAURI_SIGNING_PRIVATE_KEY`，自动产出 `.sig` 与 `latest.json` 更新清单；
+  - 桌面端 UI E2E 增加「检查更新」链路断言（mock 无更新场景）。
+- **本地模型接入预设扩展 (`App.tsx`, `zh-CN.json`, `en.json`)**：
+  - 在 OpenAI 自定义端点处新增 Ollama（`:11434`）、LM Studio（`:1234`）、llama.cpp（`:8080`）三个一键预设，自动填充本地端点与模型名，断网环境下可直接接入真实本地模型；
+  - 本地端点沿用既有免密钥判定（`localhost` / `127.0.0.1` / `::1`），无需占位凭据即可连通。
+
+### 优化与增强
+- **工程结构与可维护性重构**：
+  - `crates/transly-core/src/cache.rs`（1552 行）拆分为 `cache/mod.rs`、`cache/export.rs`、`cache/tests.rs`；
+  - `src-tauri/src/commands/mod.rs`（1779 行）按领域拆分为 `translation` / `history` / `shortcuts` / `runtime` / `settings` 五个子模块，命令注册路径同步迁移；
+  - `src/App.tsx` 的设置中心术语库与 API 凭据区块拆为 `GlossarySection.tsx`、`CredentialsSection.tsx`，入口文件由 2713 行降至 2252 行。
+
+## [0.5.0] - 2026-10-20
+
+### 优化与增强
+- **文档翻译全链路流式进度广播与主动打断取消机制 (`document/mod.rs`, `commands/document.rs`, `DocumentPanel.tsx`, `bindings.ts`)**：
+  - **实时分片进度百分比通知**：在 `transly-core` 底层引入 `DocumentProgressCallback`，切批翻译中每完成一个 Batch 即刻向前端广播 `document-translate-progress` 事件，前端 `DocumentPanel` 实时呈现平滑进度条、百分比与已完成/总块数，彻底告别大文档翻译“漫长盲等”的假死体验；
+  - **任务取消与快速打断**：底层接入取消信号监听通道，单批循环前置检查取消标志；前端提供“取消翻译”按钮并支持 `Esc` 快捷键极速取消，瞬时中断在途网络请求并停止后续大模型 Token 消耗；
+  - **状态聚合与 specta 签名瘦身**：将 `commands/document.rs` 内部庞大的系统依赖聚合为 `TranslationDependencies` 注入，规避 `specta` 最多 10 个参数的硬限制，大幅提高后端架构内聚度。
+- **架构重构与单测解耦瘦身 (`commands/mod.rs`, `commands/tests.rs`)**：
+  - 将 `src-tauri/src/commands/mod.rs` 中逾 400 行庞大的单元测试与语义测试整洁抽离至 `commands/tests.rs`，消除主入口文件过度膨胀，大幅改善代码可读性与团队协作维护效率。
+- **SQLite 历史缓存降序索引优化 (`cache.rs`)**：
+  - 将 `translation_cache` 的索引优化为显式降序 `idx_cache_created_at ON translation_cache(created_at DESC)`，使 `list_recent`、`search` 以及后台定时修剪 `trim_to_max_items` 直接利用 B-tree 覆盖扫描，消除海量记录下的临时排序表开销。
+- **macOS 平台划词替换辅助功能权限预检与诊断 (`selection.rs`)**：
+  - 在 macOS 键盘模拟流程中前置探测 `AXIsProcessTrusted()` 辅助功能权限，未授权时向前端抛出友好告警与系统设置引导，杜绝用户因权限缺失导致模拟按键静默失败、误以为功能损坏。
+- **浏览器扩展网络重试随机抖动 (Jitter) 防惊群 (`background/index.ts`)**：
+  - 将扩展后台单次固定 400ms 重试升级为 250ms ~ 600ms 动态随机抖动退避，有效消除整页多批次并发在桌面端重启或休眠唤醒时同时重试引发的惊群效应。
+- **截图覆盖工具栏响应式与极小选区安全适配 (`ScreenshotOverlay.tsx`)**：
+  - 为跟随悬浮工具栏增加 `max-w-[calc(100vw-16px)]` 与单行防溢出适配，防止在低分辨率显示器或极窄选区下产生横向截断。
+- **截图翻译全链路缺陷修复与真机体验优化 (`windows.rs`, `ScreenshotOverlay.tsx`, `screenshot.rs`, `ocr/mod.rs`, `screenshotLayout.ts`)**：
+  - **选区智能跟随悬浮工具栏 (对标有道翻译体验，`ScreenshotOverlay.tsx`, `screenshotLayout.ts`)**：工具栏由死板固定在屏幕正上方，升级为智能跟随框选区域。默认紧贴选区右下方，靠近屏幕底部时自适应翻转至上方，全屏或贴边时智能安全内贴，彻底根治 2K/4K 大屏上框选后视线与鼠标需大幅跨屏位移的严重操作痛点；
+  - **空格键 (`Space`) 极速切换原译文 (`ScreenshotOverlay.tsx`)**：按 `Space` 单键即刻在“原文”与“译文”之间切换对比，配合按键徽标直观指引，实现单手键盘流对比；
+  - **新增一键「重新框选」入口 (`ScreenshotOverlay.tsx`)**：跟随工具栏集成一键重新框选按钮，点击后清空选区与文字块并恢复待选状态，无需手动退出重开；
+  - **修复 Windows OCR 候选语言短路丢失中文缺陷 (`windows.rs`)**：WinRT OCR 候选语言遍历时，当首个引擎（`en-US`）在中文图像上识别返回空结果时，不再提前 `return Ok(words)`，而是自适应向后尝试 `system` 与 `zh-Hans-CN` 语言包，彻底根治截中文报“未能从图片中识别到有效文字”的高危缺陷；
+  - **扩展多语言 OCR 候选矩阵 (`ocr/mod.rs`)**：在 `build_candidate_languages` 中扩充日文 (`ja-JP`) 与韩文 (`ko-KR`) 候选配置，大幅提升异种语言画面的文字召回率；
+  - **修复译文块点击冒泡销毁画板缺陷 (`ScreenshotOverlay.tsx`)**：为译文块容器添加 `onPointerDown={(e) => e.stopPropagation()}`，彻底杜绝用户点击或选中译文时误触底层拖拽画布导致已有翻译瞬间清空的问题；
+  - **新增鼠标右键一键取消退出截图 (`ScreenshotOverlay.tsx`)**：全屏画布与文字块任意位置单击鼠标右键立即取消并安全收起覆盖窗，对齐主流桌面截图工具交互习惯；
+  - **单块快速复制与双击即拷交互 (`ScreenshotOverlay.tsx`)**：文字块支持双击快速复制、悬停便捷复制按钮以及绿色反馈标记，支持文字划选 (`select-text`)，免去只允许全局拼接复制的痛点；
+  - **自适应悬停展开与排版优化 (`ScreenshotOverlay.tsx`)**：为译文块增加 `break-words` 断词保护，小框长文本悬停时提权使用 `hover:!h-auto` 配合行内 `minHeight` 自适应垂直展开完整文本，同时彻底杜绝了因 `hover:min-h-full` 误将视口当作 100% 导致悬停瞬间拉伸撑满整屏的样式缺陷；
+  - **截图会话联动持久化首选目标语言偏好 (`commands/screenshot.rs`)**：`load_prefs` 优先读取用户在主窗口保存的 `preferred_target_lang` 偏好并严格排除非法 `auto` 值，告别每次截图强制回退中文的体验断层。
+- **全方位使用体验与交互质量提升 (`App.tsx`, `HistoryPanel.tsx`, `DocumentPanel.tsx`, `FloatWindow.tsx`, `speech.ts`)**：
+  - **TTS 语音朗读交互与抗 GC 假死加固 (`speech.ts`, `App.tsx`, `FloatWindow.tsx`)**：
+    - 朗读期间发音按钮展示动态高亮波形与“停止朗读”状态指示，再次点击立即打断当前发音；
+    - 在模块作用域持有 `activeUtterance` 全局强引用并在终态释放，彻底消除 Chromium / WebKit 垃圾回收提前销毁 Utterance 导致 `onend` 静默丢失、界面假死停在“播放中”的缺陷；
+    - 每次触发新发音前显式先调用 `stopSpeaking()`，杜绝音频队列堆叠与串音。
+  - **翻译历史防误删与检索体验重塑 (`HistoryPanel.tsx`)**：
+    - **删除二次确认机制**：点击删除后原地展开高辨识度确认与取消按钮，待确认状态下保持长显，解决鼠标滑离被容器隐藏的问题；配套 `cancelDelete` 闭环重置与 3.5s 超时自动恢复，彻底根治手抖误删记录灾难；
+    - **搜索关键词安全高亮**：实现正则表达式安全转义的 `HighlightMatch` 组件，在原文与译文中精准标出检索匹配词，规范化使用 `rounded-sm`；
+    - **一键清空搜索词**：搜索输入框动态呈现清除图标，点击瞬时复原完整历史列表。
+  - **设置中心可观察性与录入提效 (`App.tsx`)**：
+    - **API Key 明密文显示切换**：DeepL、DeepSeek、OpenAI 密码框右侧集成眼睛（`Eye` / `EyeOff`）图标，补充 `autoComplete="off" spellCheck={false}`，方便直观核对长密钥并兼顾表单安全；
+    - **实时连通性「测试连接」**：在各外部翻译引擎和网络代理配置旁增设测试按钮；测试前自动同步持久化输入框最新配置，测试成功后即时检索并删除测试条目（`Hello`），实现**零脏数据落盘**并就地反馈真实延迟与状态；增加 `isMountedRef` 避免弹窗关闭后的异步状态告警；
+    - **术语库回车快捷添加与 IME 保护**：输入源词与译词后支持直接按 `Enter` 录入并聚焦，增加 `e.nativeEvent.isComposing` 状态判断，彻底防止中文/日文拼音选词回车误添加；过滤无匹配时呈现居中空状态。
+  - **文档翻译双栏并排对照模式 (`DocumentPanel.tsx`)**：
+    - 预览区域新增“单栏查看 / 双栏对照”模式切换，原文与译文可分栏独立滚动与字数对照，显著提升长篇文档校对审阅效率。
+  - **主翻译工作区细节打磨 (`App.tsx`)**：
+    - 输入框聚焦时支持按 `Esc` 键极速清空；字符数超过 4000 时以琥珀色高亮提示，辅助感知大文本拆批风险。
+  - **多语言国际化 100% 对称 (`zh-CN.json`, `en.json`)**：
+    - 补齐所有新增功能的中英文文案与插值占位符，保持双语字典结构严格对齐。
+- **交互与使用体验全面深度优化 (`App.tsx`, `HistoryPanel.tsx`, `DocumentPanel.tsx`, `FloatWindow.tsx`)**：
+  - **双向语言快速对调与一键反向对译 (`App.tsx`)**：输入栏箭头升级为交互式对调语言按钮，译文卡片新增「作为原文反向对译」按钮，一键将当前译文转为原文并反转目标语言立即发起翻译，极大提升润色与双语核对效率；
+  - **全界面快捷键流体验 (`App.tsx`)**：主输入框支持 `Ctrl+Enter` / `Cmd+Enter` 立即触发翻译，与文档翻译面板操作逻辑保持统一；
+  - **历史记录一键导入翻译框 (`HistoryPanel.tsx`)**：历史记录卡片悬浮新增一键导入按钮，点击后自动填入主输入框、同步目标语言并切换至翻译 Tab 立即运行，免去手动复制粘贴的繁琐步骤；
+  - **全界面暗黑模式 (Dark Mode) 对比度与质感细节统一**：
+    - 主窗口顶层非活动 Tab 补齐 `dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700`，根除深色模式下 Tab 呈现刺眼浅灰块的割裂感；
+    - 历史记录卡片补齐 `dark:border-slate-800 dark:bg-slate-800/40` 与 `dark:text-slate-400`；
+    - 迷你悬浮窗底部朗读与复制按钮补齐深色主题背景与文字颜色，杜绝暗黑模式下的反白眩光；
+    - 译文卡片边框、重试按钮、错误警告条与设置中心凭据标签全量完成暗黑模式颜色规范化；
+    - 截图覆盖窗单块重试按钮补充暗黑模式高对比度样式。
+  - **文档面板与设置中心国际化纯净化 (`DocumentPanel.tsx`, `zh-CN.json`, `en.json`)**：
+    - 清除文档面板中「重新选择」、「未翻译」、「点击上方“开始翻译”按钮生成译文」以及字符单位等硬编码中文；
+    - 清除设置中心离线引擎状态「● 就绪」、「● 模型已装载」等硬编码，中英文多语言环境均 100% 优雅呈现。
+
+### 新增
+- **文档与字幕文件翻译 (`transly-core/src/document/`, `commands/document.rs`, `DocumentPanel.tsx`)**：
+  - 核心解析与保真重构：纯 Rust 实现 `.txt`（段落切分与空行定界保真）、`.md`（YAML Frontmatter 免翻保护、代码块/公式占位保护）、`.srt`（序号行与时间轴 100% 锁定保真，仅回填字幕译文）、`.json`（递归提取叶子值翻译，严格保护 Key 键名与嵌套结构）、`.html`（仅提取正文节点，100% 保留 HTML 标签、属性与代码）；
+  - 批量流水线切批调度：复用 `plan_batch_ranges` 与 `translate_batch_with_cache`，严格满足 `MAX_BATCH_ITEMS`（30）与 `MAX_BATCH_TOTAL_CHARS`（50,000）上限；单项错误局部降级回退至原文，绝不损坏文档结构；
+  - 桌面端全新「文档翻译」工作台：支持拖拽上传与文件选择、格式与尺寸自动识别、翻译进度与耗时感知、双栏/Tab 原文与译文对照预览，支持一键复制与一键流式导出对应格式译文文件。
+- **浏览器扩展体验深化：网页输入框原地替换助手与精细化站点规则 (`extension/`)**：
+  - **输入框原地翻译替换 (`selection/index.ts`, `background/index.ts`)**：支持通过快捷键 `Alt+Shift+R` 或右键「Transly 原地翻译替换」，将网页内 `input` 与 `textarea` 中选中的文本或完整内容原地翻译为目标语言；采用原型属性 setter 绕过 React/Vue 受控属性劫持并派发原生 `input`/`change` 事件，确保表单与框架状态机 100% 同步；
+  - **站点级规则精细化配置 (`popup/index.ts`, `siteRules.ts`, `content/index.ts`)**：Popup 扩展折叠式站点规则卡片，支持为特定域名单独配置排除 CSS 选择器（如 `.code, pre, .comments`，防爆语法校验）、站点专属目标语言绑定（如特定外文站点固定直译），以及站点级输入助手禁用开关；
+  - **构建产物 IIFE 隔离与防重声明 (`build.mjs`)**：将非 background 脚本（`content`、`selection`、`popup`）构建格式收口为独立 `iife` 并命名空间隔离，消除多次执行脚本时的顶层作用域标识符冲突。
+- **嵌入式离线混合翻译引擎与本地模型扩展 (`transly-core/src/engine/offline/`, `src-tauri/`)**：
+  - **内置高频与开发词库矩阵 (`lexicon.rs`)**：重构 `OfflineEngine` 为混合离线架构，内置百余项覆盖计算机、软件工程、界面交互、礼貌用语与高频词汇的 Aho-Corasick 双向自动机；支持 CJK 与西文词边界严格校验（防止词内误伤）及中英文标点智能双向对转；
+  - **本地模型自动探测与扩展契约 (`model.rs`, `storage.rs`)**：自动扫描 `<app_data_dir>/models/` 目录，探测并自适应支持 `.onnx` / `.bin` / `.gguf` 外部离线模型文件，在未放置外部模型时安全降级为内置词库模式，绝不崩溃报错；
+  - **设置中心离线引擎状态面板 (`App.tsx`)**：设置对话框新增「纯本地离线引擎与模型」卡片，实时展示内置词库就绪状态、外部模型装载状态以及本地模型扫描目录路径。
+- **跨平台系统能力加固：Linux 桌面环境上下文感知与退化屏幕几何守护 (`geom.rs`, `screenshot.rs`, `screencap/linux.rs`)**：
+  - **Linux Wayland 桌面环境上下文提示**：在检测到 Wayland 时提取 `XDG_CURRENT_DESKTOP`（如 GNOME / KDE Plasma / Sway / Hyprland），向用户呈现带有桌面环境标识的精准降级指引；
+  - **Linux OCR 缺失前置报错与指引**：在未安装系统级 `tesseract` 工具时，能力探测接口前置置 `supported: false` 并展示确切的 apt 安装命令，禁用截图按钮并悬浮提示，杜绝用户点击后才抛出截屏失败；
+  - **显示器几何退化尺寸守护 (`find_monitor_for_point`)**：增加对无效/休眠退化显示器尺寸（宽或高为 0）的拦截，防止多屏断开瞬间的伪矩形导致光标映射异常。
+
+### 修复
+- **截图翻译端到端真机交互与识别聚合全链路缺陷修复**：
+  - **Windows OCR 4K/大图尺寸下采样后坐标严重缩小偏移 (`windows.rs`)**：WinRT OCR 在图片超过 2600 像素执行下采样后，词框像素坐标未按比例还原回原图空间，导致 4K 屏幕上 OCR 框整体缩至 67.7% 并向左上角严重偏移。现返回前统一按缩放比例还原，保证与原图像素契约严格对齐；
+  - **CJK 语义单字（如“门”、“开”）被误杀过滤 (`blocks.rs`)**：`filter_blocks` 调整单字符过滤条件，明确区分西文字母与 CJK 表意字符，保留合法的单个汉字/假名/谚文 OCR 块，彻底解决单字截图报“未能识别到有效文字”的问题；
+  - **高分屏/DPI缩放屏幕上译文字号算大导致截断 (`ScreenshotOverlay.tsx`)**：`fitFontSize` 尺寸计算由物理像素改用视口 CSS 逻辑像素，解决 Retina 与 Windows 150% 缩放下译文因过大而被 `overflow-hidden` 裁切丢失的问题；
+  - **单块重试按钮冒泡导致所有文字块被清空销毁 (`ScreenshotOverlay.tsx`)**：重试按钮增加 `pointerdown` 阻止冒泡，并优化画板非拖拽点击时不误清空已有 blocks；
+  - **还原原文模式下复制与发送到主窗口失效 (`ScreenshotOverlay.tsx`)**：`getSelectedText` 响应 `showTranslation` 状态，并在翻译失败或原文查看模式下正确提取 OCR 原文，避免发送空字符串；
+  - **Linux 与 macOS OCR 语言映射缺失中英双向支持 (`tsv.rs`, `macos.rs`)**：修正 Tesseract 与 Vision 语言映射参数，中英双向场景统一加载双语模型，解决目标语言为英文时截图中文完全无法识别（乱码输出为 "PICA"）的严重缺陷；
+  - **水平多栏排版同行横向串联 (`blocks.rs`)**：引入 `LINE_MERGE_MAX_X_GAP_RATIO`（2.5），在词聚合成行时按水平间距自动断开独立分栏片段，保留分栏排版语序；
+  - **主窗口截图与剪贴板识别按钮暗黑模式样式补齐 (`App.tsx`)**：补充 `dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300` 样式。
+- **文档与文案诚实性校正 (`README.md`, `zh-CN.json`, `en.json`, `docs/superpowers/plans/`)**：
+  - 移除 macOS 归档包「应用内自动更新用」的错误描述（项目尚未接入 `tauri-plugin-updater`）；
+  - 离线模型相关文案由「已加载 / 已装载」校正为「检测到模型文件」，如实反映当前版本仅扫描模型文件、不执行推理的能力边界；
+  - 为 4 份已交付的计划文档补充状态说明，避免复选框全部未勾选造成进度误判。
+
 
 ### 修复
 - **浏览器扩展 `TRANSLATE_BATCH` 链缺 `.catch()`，整批必然挂死（功能完全失效）**：`background/index.ts` 的 `Promise.all([getServerToken(), getServerUrl()]).then(...)` 没有 catch。这两者底层是 `chrome.storage.local.get`，会 reject（扩展存储损坏、配额满）。一旦 reject，`.then` 不执行、`sendResponse` 永不调用，而 `return true` 已保住消息通道，content script 只能等到 `message port closed` 超时 → 整批静默失败 → 连续 2 批后误触熔断。现补 catch 并回传错误。
@@ -508,7 +619,9 @@
 - **CI 契约同步校验**：在 GitHub Actions CI 中增加 Specta 自动绑定代码比对检查（`git diff --exit-code src/bindings.ts`）。
 - **全平台自动化打包与 Release 流水线**：新增 `.github/workflows/release.yml`，在推送 `v*` 语义化标签时，利用 `tauri-apps/tauri-action` 矩阵自动化构建 Windows (`.exe` / `.msi`)、macOS (`.dmg`)、Linux (`.deb` / `.AppImage`) 安装包，并自动编译打包浏览器扩展 `.zip` 挂载至 GitHub Release 页面。
 
-[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.4.1...HEAD
+[0.5.0]: https://github.com/Moody-Sin/Transly/compare/v0.4.1...v0.5.0
+[0.6.0]: https://github.com/Moody-Sin/Transly/compare/v0.5.0...v0.6.0
+[未发布]: https://github.com/Moody-Sin/Transly/compare/v0.6.0...HEAD
 [0.4.1]: https://github.com/Moody-Sin/Transly/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Moody-Sin/Transly/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Moody-Sin/Transly/compare/v0.3.0...v0.3.1

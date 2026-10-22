@@ -179,6 +179,36 @@
   "siteRuleAuto": {
     "message": "为此站点记住自动翻译"
   },
+  "siteRuleTitle": {
+    "message": "站点规则设置"
+  },
+  "siteRuleExcludeSelectors": {
+    "message": "排除选择器 (CSS)"
+  },
+  "siteRuleExcludePlaceholder": {
+    "message": "例如: .code, pre, .comments"
+  },
+  "siteRuleDisableInputAssistant": {
+    "message": "在此站点禁用输入框替换助手"
+  },
+  "siteRuleTargetLang": {
+    "message": "站点专属目标语言"
+  },
+  "siteRuleLangFollowGlobal": {
+    "message": "跟随全局设置"
+  },
+  "cmdReplaceInput": {
+    "message": "原地翻译替换输入框文本"
+  },
+  "ctxMenuReplaceInput": {
+    "message": "Transly 原地翻译替换"
+  },
+  "inputReplaceSuccess": {
+    "message": "已替换译文"
+  },
+  "inputReplaceEmpty": {
+    "message": "未检测到可翻译的输入文本"
+  },
   "selectionHoverIcon": {
     "message": "译",
     "description": "划词后悬浮微型图标上的字符（建议单字符）"

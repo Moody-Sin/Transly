@@ -1,12 +1,140 @@
-//! 翻译历史与缓存命令
-//!
-//! 由 `commands/mod.rs` 拆分而来：命令函数保持在 crate 内的原路径不变
-//! （`mod.rs` 统一 `pub use` 重导出），因此 `app_command_builder!` 与
-//! `src/bindings.ts` 的生成结果不受影响。
+//! 术语库、翻译历史、缓存开关、剪贴板识别与离线引擎状态命令。
 
-use std::sync::Arc;
+use super::*;
 
-use transly_core::{CacheEntry, TranslationCache};
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct GlossaryTermDto {
+    pub source: String,
+    pub target: String,
+    pub match_case: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn add_glossary_term(
+    source: String,
+    target: String,
+    match_case: Option<bool>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<(), String> {
+    // SQLite 写入为同步阻塞 I/O，禁止占用 async 运行时工作线程
+    let is_match_case = match_case.unwrap_or(true);
+    let cache_ref = cache.inner().clone();
+    let (write_source, write_target) = (source.clone(), target.clone());
+    tokio::task::spawn_blocking(move || {
+        cache_ref.set_glossary_term(&write_source, &write_target, is_match_case)
+    })
+    .await
+    .map_err(|e| format!("术语写入任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+    let mut g = glossary.write().await;
+    g.insert_with_options(source, target, is_match_case);
+    Ok(())
+}
+
+/// 在单个 SQLite 事务与单次内存写锁内批量导入术语库词条，避免 CSV 批量导入逐条 IPC 与 fsync。
+#[tauri::command]
+#[specta::specta]
+pub async fn import_glossary_terms(
+    terms: Vec<GlossaryTermDto>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<u32, String> {
+    let valid_terms: Vec<GlossaryTermDto> = terms
+        .into_iter()
+        .filter_map(|t| {
+            let src = t.source.trim().to_string();
+            let tgt = t.target.trim().to_string();
+            if src.is_empty() || tgt.is_empty() {
+                None
+            } else {
+                Some(GlossaryTermDto {
+                    source: src,
+                    target: tgt,
+                    match_case: t.match_case,
+                })
+            }
+        })
+        .collect();
+
+    if valid_terms.is_empty() {
+        return Ok(0);
+    }
+
+    let cache_ref = cache.inner().clone();
+    let db_terms = valid_terms
+        .iter()
+        .map(|t| (t.source.clone(), t.target.clone(), t.match_case))
+        .collect::<Vec<_>>();
+
+    let count = tokio::task::spawn_blocking(move || {
+        let refs = db_terms
+            .iter()
+            .map(|(s, t, m)| (s.as_str(), t.as_str(), *m));
+        cache_ref.set_glossary_terms_batch(refs)
+    })
+    .await
+    .map_err(|e| format!("术语批量写入调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    let mut g = glossary.write().await;
+    for item in valid_terms {
+        g.insert_with_options(item.source, item.target, item.match_case);
+    }
+
+    Ok(count as u32)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_glossary_terms(
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<Vec<GlossaryTermDto>, String> {
+    // SQLite 同步 I/O 必须移出主线程：全表查询在缓存膨胀时可达数十毫秒
+    let cache_ref = cache.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_all_glossary_terms()
+            .map(|terms| {
+                terms
+                    .into_iter()
+                    .map(|(source, target, match_case)| GlossaryTermDto {
+                        source,
+                        target,
+                        match_case,
+                    })
+                    .collect()
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("术语库读取任务调度异常: {e}")))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_glossary_term(
+    source: String,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+    glossary: tauri::State<'_, Arc<RwLock<Glossary>>>,
+) -> Result<(), String> {
+    let cache_ref = cache.inner().clone();
+    let deleted_key = source.clone();
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .delete_glossary_term(&deleted_key)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("术语删除任务调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // 增量从内存术语库中移除该词条（自动标记 dirty 并使已编译缓存失效，杜绝全量查库与全量重建）
+    let mut g = glossary.write().await;
+    g.remove(&source);
+    Ok(())
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -192,4 +320,76 @@ pub fn get_cache_enabled(
     controller: tauri::State<'_, Arc<crate::cache_controller::CacheController>>,
 ) -> bool {
     controller.is_enabled()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_clipboard_monitor(
+    enabled: bool,
+    flag: tauri::State<'_, Arc<std::sync::atomic::AtomicBool>>,
+    cache: tauri::State<'_, Arc<TranslationCache>>,
+) -> Result<(), String> {
+    let cache_ref = cache.inner().clone();
+    let val = if enabled { "true" } else { "false" };
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        cache_ref
+            .set_setting("clipboard_monitor_enabled", val)
+            .map_err(|e| anyhow::anyhow!("配置保存失败: {e}"))?;
+        let _ = crate::secrets::delete_secret("clipboard_monitor_enabled");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("配置保存调度异常: {e}"))?
+    .map_err(|e| e.to_string())?;
+    flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_clipboard_monitor(app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let cache_ref = match app.try_state::<Arc<TranslationCache>>() {
+        Some(c) => c.inner().clone(),
+        None => return false,
+    };
+    tokio::task::spawn_blocking(move || {
+        cache_ref
+            .get_setting("clipboard_monitor_enabled")
+            .ok()
+            .flatten()
+            .or_else(|| crate::secrets::get_secret("clipboard_monitor_enabled").ok())
+    })
+    .await
+    .map(|res| res.map(|v| v == "true").unwrap_or(false))
+    .unwrap_or(false)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ocr_clipboard_image(
+    target_lang: String,
+    app: tauri::AppHandle,
+) -> Result<String, transly_core::OcrErrorDto> {
+    crate::ocr::recognize_clipboard_image(&app, &target_lang).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_offline_engine_status(
+    app: tauri::AppHandle,
+) -> Result<transly_core::OfflineEngineStatusDto, String> {
+    let (data_dir, _) = crate::storage::resolve_data_dir(&app.config().identifier);
+    let models_dir = data_dir.join("models");
+    let _ = std::fs::create_dir_all(&models_dir);
+
+    let (has_local_model, local_model_name) =
+        transly_core::engine::offline::inspect_local_models(&models_dir);
+
+    Ok(transly_core::OfflineEngineStatusDto {
+        lexicon_entries_count: transly_core::engine::offline::get_lexicon_entries_count(),
+        has_local_model,
+        local_model_name,
+        model_dir: models_dir.to_string_lossy().to_string(),
+    })
 }

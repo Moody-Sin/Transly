@@ -1,6 +1,6 @@
 [package]
 name = "src-tauri"
-version = "0.4.1"
+version = "0.6.0"
 edition = "2021"
 authors = ["Transly Authors"]
 description = "Tauri backend and platform integration for Transly."
@@ -37,6 +37,7 @@ specta = "=2.0.0-rc.25"
 specta-typescript = "0.0.12"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-updater = "2"
 enigo = "0.3"
 rand = "0.8"
 # 恒定时间比较：Bearer Token 鉴权防止计时侧信道

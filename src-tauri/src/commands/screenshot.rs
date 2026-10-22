@@ -55,18 +55,34 @@ fn detect_capability() -> ScreenshotCapabilityDto {
     #[cfg(target_os = "linux")]
     {
         let ocr_available = tesseract_available();
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+
         // 复用既有错误文案，不在 UI 侧另写一份（避免两处漂移）。
         if wayland {
             ScreenshotCapabilityDto {
                 supported: false,
-                reason: Some(OcrErrorDto::wayland_unsupported().message),
+                reason: Some(
+                    OcrErrorDto::wayland_unsupported_with_desktop(desktop.as_deref()).message,
+                ),
                 ocr_available,
+            }
+        } else if !ocr_available {
+            ScreenshotCapabilityDto {
+                supported: false,
+                reason: Some(
+                    OcrErrorDto::tool_missing(
+                        "tesseract",
+                        "请执行 `sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim` 进行安装后重试",
+                    )
+                    .message,
+                ),
+                ocr_available: false,
             }
         } else {
             ScreenshotCapabilityDto {
                 supported: true,
                 reason: None,
-                ocr_available,
+                ocr_available: true,
             }
         }
     }
@@ -143,9 +159,18 @@ async fn load_prefs(deps: Arc<TranslationDependencies>) -> (String, String) {
             .flatten()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "google".to_string());
-        // 主窗口的目标语言只存在前端本地状态、未持久化，故截图覆盖窗默认中文；
-        // 阶段 4 引入的覆盖窗语言下拉框可在会话内覆盖它。
-        ("zh-CN".to_string(), engine)
+        let target_lang = deps
+            .cache
+            .get_setting("preferred_target_lang")
+            .ok()
+            .flatten()
+            .filter(|s| {
+                !s.trim().is_empty()
+                    && transly_core::validate_language_code(s)
+                    && !s.eq_ignore_ascii_case("auto")
+            })
+            .unwrap_or_else(|| "zh-CN".to_string());
+        (target_lang, engine)
     })
     .await
     .unwrap_or_else(|_| ("zh-CN".to_string(), "google".to_string()))
@@ -430,4 +455,47 @@ pub async fn push_screenshot_text_to_main(app: AppHandle, text: String) -> Resul
     }
     crate::overlay::cancel(&app);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache_controller::CacheController;
+    use crate::commands::StreamTaskRegistry;
+    use crate::engine_pool::EnginePool;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use transly_core::{Glossary, TranslationCache};
+
+    #[tokio::test]
+    async fn test_load_prefs_respects_preferred_target_lang_and_rejects_auto() {
+        let dir =
+            std::env::temp_dir().join(format!("transly-shot-prefs-{}", rand::random::<u64>()));
+        let cache = TranslationCache::open_default(&dir);
+        let pool = Arc::new(EnginePool::with_cache(cache.clone()));
+        let deps = Arc::new(TranslationDependencies {
+            cache: cache.clone(),
+            pool,
+            glossary: Arc::new(RwLock::new(Glossary::new())),
+            cache_controller: Arc::new(CacheController::new(true)),
+            stream_registry: Arc::new(StreamTaskRegistry::default()),
+        });
+
+        // 默认缺省值回退到 zh-CN, google
+        let (lang, eng) = load_prefs(deps.clone()).await;
+        assert_eq!(lang, "zh-CN");
+        assert_eq!(eng, "google");
+
+        // 设置合法语言 ja
+        cache.set_setting("preferred_target_lang", "ja").unwrap();
+        let (lang, _) = load_prefs(deps.clone()).await;
+        assert_eq!(lang, "ja");
+
+        // 设置非法 auto 必须安全回退 zh-CN
+        cache.set_setting("preferred_target_lang", "auto").unwrap();
+        let (lang, _) = load_prefs(deps.clone()).await;
+        assert_eq!(lang, "zh-CN");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

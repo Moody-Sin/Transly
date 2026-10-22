@@ -101,6 +101,18 @@ export const commands = {
 	 *  这是「OCR 结果可编辑」被砍掉后的替代路径（全局设计 §十二）。
 	 */
 	pushScreenshotTextToMain: (text: string) => typedError<null, string>(__TAURI_INVOKE("push_screenshot_text_to_main", { text })),
+	translateDocument: (taskId: number, content: string, format: DocumentFormat, sourceLang: string | null, targetLang: string, engineName: string | null) => typedError<DocumentTranslateOutcomeDto, TranslateErrorDto>(__TAURI_INVOKE("translate_document", { taskId, content, format, sourceLang, targetLang, engineName })),
+	/**  主动取消在途文档翻译任务 */
+	cancelDocumentTask: (taskId: number) => typedError<null, string>(__TAURI_INVOKE("cancel_document_task", { taskId })),
+	getOfflineEngineStatus: () => typedError<OfflineEngineStatusDto, string>(__TAURI_INVOKE("get_offline_engine_status")),
+	/**  查询是否有新版本；无更新时返回 `None`。 */
+	checkForUpdate: () => typedError<{
+	version: string,
+	/**  发布说明（来自 latest.json 的 notes 字段） */
+	notes: string | null,
+} | null, string>(__TAURI_INVOKE("check_for_update")),
+	/**  下载并安装当前可用更新，安装完成后重启应用。 */
+	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
 };
 
 /* Types */
@@ -113,6 +125,18 @@ export type CacheEntry = {
 	target_lang: string,
 	engine: string,
 	created_at: number,
+};
+
+/**  支持的文档格式 */
+export type DocumentFormat = "txt" | "md" | "srt" | "json" | "html";
+
+/**  文档翻译执行结果 DTO */
+export type DocumentTranslateOutcomeDto = {
+	translated_content: string,
+	total_chunks: number,
+	translated_chunks: number,
+	cache_hits: number,
+	engine: string,
 };
 
 export type EngineCapabilitiesDto = {
@@ -189,6 +213,18 @@ export type OcrErrorKind = "no_image" | "no_language_pack" | "empty_text" | "uns
 "permission_denied" | 
 /**  图像或选区超出处理预算 */
 "too_large" | "internal";
+
+/**  离线引擎运行状态与模型配置 DTO */
+export type OfflineEngineStatusDto = {
+	/**  内置词库词条总数 */
+	lexicon_entries_count: number,
+	/**  是否加载/检测到了外部本地模型 */
+	has_local_model: boolean,
+	/**  外部模型文件名（若检测到） */
+	local_model_name: string | null,
+	/**  本地模型扫描目录路径 */
+	model_dir: string,
+};
 
 export type PendingFloatResponse = {
 	has_request: boolean,
@@ -317,6 +353,13 @@ export type TranslateErrorDto = {
 export type TranslateOutcomeDto = {
 	text: string,
 	engine: string,
+};
+
+/**  可更新版本信息（仅暴露 UI 需要的字段） */
+export type UpdateInfoDto = {
+	version: string,
+	/**  发布说明（来自 latest.json 的 notes 字段） */
+	notes: string | null,
 };
 
 /* Tauri Specta runtime */

@@ -88,6 +88,10 @@ fn main() {
         Ok(t) => Some(Arc::new(RwLock::new(t))),
         Err(e) => {
             eprintln!("系统安全凭据管理器不可用，已禁用本地扩展服务: {e}");
+            #[cfg(target_os = "linux")]
+            eprintln!(
+                "💡 [Linux 提示] 若当前为 WSL 或无桌面会话，桌面端核心翻译仍可使用；若需启用扩展服务与凭据持久化，请安装并启动 Secret Service（如 gnome-keyring / kwallet）。"
+            );
             None
         }
     };
@@ -157,6 +161,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(cache.clone())
         .manage(pool)
         .manage(glossary)
@@ -456,7 +461,7 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", quit_text, true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &shot_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = match TrayIconBuilder::new()
                 .tooltip(tooltip_text)
                 .icon(
                     app.default_window_icon()
@@ -506,7 +511,18 @@ fn main() {
                         }
                     }
                 })
-                .build(app)?;
+                .build(app)
+            {
+                Ok(tray) => Some(tray),
+                Err(err) => {
+                    eprintln!("[Tray Warning] 系统托盘图标初始化失败: {err}");
+                    #[cfg(target_os = "linux")]
+                    eprintln!(
+                        "💡 [Linux 提示] 若在 Linux 环境下缺少系统托盘库，主程序仍可使用主窗口；若需启用托盘图标，请安装 libayatana-appindicator3-1：sudo apt-get install -y libayatana-appindicator3-1"
+                    );
+                    None
+                }
+            };
 
             Ok(())
         })

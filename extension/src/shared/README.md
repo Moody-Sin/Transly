@@ -18,6 +18,8 @@
 - **batchPlan.ts**：批量切批规划器 `planBatchRanges`。严格遵守项数上限（`maxItems`）与字符总量上限（`maxTotalChars`）双重契约切批，语义与 Rust 后端 `plan_batch_ranges` 严格对称；支持视口（Viewport）优先拆批。
 - **domTraversal.ts**：DOM 深度遍历器 `iterateElementsDeep` 与 `iterateTextNodesDeep`。支持流式递归下探开放模式（`open`）Shadow DOM，并放行 `DOCUMENT_FRAGMENT_NODE`（11）容器。
 - **richText.ts**：富文本段落行内标签保真拆装。提取段落内嵌入的行内标签（`<a>`、`<code>`、`<strong>`）并生成 Unicode 括线占位符（`⟦T_N⟧`），基于显式的 `isInline` 属性安全拓扑还原，防止跨语种倒装破版。
+- **siteRules.ts**：站点规则配置模型与规范化（`normalizeSiteRule`），包含 CSS 排除选择器防爆语法检测（`isElementExcludedBySelector`）。
+- **inputReplace.ts**：网页输入框（input / textarea）选区检测、智能对转目标语言判定与 React/Vue 受控属性原型绕过替换算法。
 
 ## 核心算法规程
 

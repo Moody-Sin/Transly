@@ -202,6 +202,30 @@ const TAURI_MOCK_INIT_SCRIPT = `
           };
         }
 
+        case 'translate_document': {
+          const { content, format, targetLang, engineName, taskId } = args;
+          if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.emit) {
+            setTimeout(() => {
+              window.__TAURI__.event.emit('document-translate-progress', {
+                task_id: taskId,
+                completed_chunks: 1,
+                total_chunks: 2,
+                cache_hits: 1
+              });
+            }, 50);
+          }
+          return {
+            translated_content: '[E2E文档译文:' + format + '->' + targetLang + ']\\n' + content,
+            total_chunks: 2,
+            translated_chunks: 2,
+            cache_hits: 1,
+            engine: engineName || 'google'
+          };
+        }
+
+        case 'cancel_document_task':
+          return null;
+
         case 'translate_stream': {
           const { text, targetLang, engineName } = args;
           return {
@@ -223,6 +247,18 @@ const TAURI_MOCK_INIT_SCRIPT = `
             requires_credential: args.engine !== 'google',
             fallback_engine: null
           };
+
+        case 'get_offline_engine_status':
+          return {
+            lexicon_entries_count: 120,
+            has_local_model: false,
+            local_model_name: null,
+            model_dir: '/mock/app/data/models'
+          };
+
+        case 'check_for_update':
+          // 无可用更新：前端应展示「已是最新版本」，不触发下载
+          return null;
 
         case 'get_server_token':
           return state.serverToken;
@@ -575,7 +611,26 @@ async function runDesktopUiE2E() {
     await copyButton.waitFor({ state: 'visible', timeout: 5000 })
     await copyButton.click()
     await page.waitForTimeout(200)
-    console.log('✔ [用例 3] 文本输入、防抖调度、IPC 调用与译文回填全链路正常')
+
+    // 验证语言对调与反向对译
+    const reverseBtn = page.locator('[data-testid="btn-reverse-translate"]')
+    await reverseBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await reverseBtn.click()
+    await page.waitForTimeout(600)
+    const reversedInput = await inputArea.inputValue()
+    assert(
+      reversedInput.includes('[E2E译文:'),
+      `点击反向对译后，输入框应填入上一次译文，实际: ${reversedInput}`,
+    )
+
+    // 验证 Ctrl+Enter 快捷键触发翻译
+    await inputArea.fill('Test shortcut key trigger')
+    await inputArea.press('Control+Enter')
+    await page.waitForTimeout(600)
+    const afterShortcutResult = await page.textContent('body')
+    assert(afterShortcutResult.includes('[E2E译文:'), 'Ctrl+Enter 快捷键必须成功触发翻译')
+
+    console.log('✔ [用例 3] 文本输入、防抖调度、快捷键、反向对译与译文回填全链路正常')
 
     // ==========================================
     // 用例 4: 历史记录面板（列表渲染、搜索过滤、删除条目、导出 CSV）
@@ -607,10 +662,18 @@ async function runDesktopUiE2E() {
     const filteredContent = await page.textContent('body')
     assert(filteredContent.includes('Continuous Integration'), '搜索结果必须包含匹配条目')
 
-    // 切换回主翻译 Tab
-    const translateTab = page.getByRole('button', { name: '翻译' })
-    await translateTab.click()
-    await page.waitForTimeout(300)
+    // 验证从历史记录条目直接一键导入到主翻译框
+    const useHistoryBtn = page.locator('[data-testid="history-use-entry"]').first()
+    await useHistoryBtn.waitFor({ state: 'attached', timeout: 5000 })
+    await useHistoryBtn.click({ force: true })
+    await page.waitForTimeout(500)
+    // 应自动切回翻译 Tab 且输入框填入该条目的原文
+    const currentInputVal = await page.locator('textarea').first().inputValue()
+    assert(
+      currentInputVal.includes('Continuous Integration'),
+      `点击历史记录导入按钮应自动填入主输入框，实际: ${currentInputVal}`,
+    )
+
     console.log('✔ [用例 4] 历史记录检索、过滤与交互闭环正常')
 
     // ==========================================
@@ -640,6 +703,12 @@ async function runDesktopUiE2E() {
     assert(await addGlossaryBtn.isEnabled(), '添加规则按钮在填入术语后必须可用')
     await addGlossaryBtn.click()
     await page.waitForTimeout(300)
+
+    // 应用内自动更新：点击「检查更新」后应展示无更新状态（mock 返回 null）
+    const checkUpdateBtn = page.getByRole('button', { name: '检查更新' })
+    await checkUpdateBtn.waitFor({ state: 'visible', timeout: 5000 })
+    await checkUpdateBtn.click()
+    await page.getByText('已是最新版本').waitFor({ state: 'visible', timeout: 5000 })
 
     // 关闭设置弹窗
     const closeBtn2 = page.locator('button[aria-label="关闭"]').first()
@@ -799,6 +868,29 @@ async function runDesktopUiE2E() {
     assert.strictEqual(await shotBlocks.first().evaluate((el) => el.style.top), '20%')
     assert.strictEqual(await shotBlocks.nth(1).evaluate((el) => el.style.top), '30%')
 
+    // 断言 5.1: 点击或选中译文块阻止冒泡，不得销毁清空已有翻译块
+    await shotBlocks.first().click()
+    await shotPage.waitForTimeout(100)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      2,
+      '点击译文块不得触发画布重新框选',
+    )
+
+    // 断言 5.2: 悬停译文块自适应展开且高度不得恶性溢满屏幕（防回归：曾因 hover:min-h-full 撑大至 800px 覆盖全屏）
+    const bboxBefore = await shotBlocks.first().boundingBox()
+    await shotBlocks.first().hover()
+    await shotPage.waitForTimeout(100)
+    const bboxHover = await shotBlocks.first().boundingBox()
+    assert(bboxHover && bboxBefore, '悬停译文块必须能够读取布局尺寸')
+    assert(bboxHover.height >= bboxBefore.height, '悬停展开高度不得小于初始框高')
+    assert(
+      bboxHover.height < 300,
+      `悬停展开高度应自适应文本，不得恶性撑满全屏，实际: ${bboxHover.height}`,
+    )
+    await shotPage.mouse.move(0, 0)
+    await shotPage.waitForTimeout(100)
+
     // 断言 6: 「还原原文」只隐藏译文层，不得卸载背景冻结帧
     await shotPage.getByRole('button', { name: '还原原文' }).click()
     await shotPage.waitForTimeout(150)
@@ -808,6 +900,42 @@ async function runDesktopUiE2E() {
       '还原原文后译文层必须不可见',
     )
     assert(await shotFrame.isVisible(), '还原原文不得卸载背景冻结帧')
+
+    // 断言 6.1: 按空格键 Space 快速切换原译文
+    await shotPage.keyboard.press('Space')
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      2,
+      '按空格键应恢复显示译文',
+    )
+    await shotPage.keyboard.press('Space')
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      0,
+      '再次按空格键应切换还原原文',
+    )
+    await shotPage.keyboard.press('Space')
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      2,
+      '第三次按空格键恢复显示译文',
+    )
+
+    // 断言 6.2: 点击「重新框选」按钮清空已有文字块并恢复待选状态
+    await shotPage.locator('[data-testid="shot-reselect"]').click()
+    await shotPage.waitForTimeout(150)
+    assert.strictEqual(
+      await shotPage.locator('[data-testid="shot-block"]').count(),
+      0,
+      '重新框选必须清空已有文字块',
+    )
+    assert(
+      await shotPage.locator('[data-testid="shot-initial-bar"]').isVisible(),
+      '重新框选后必须展现初始待选提示栏',
+    )
 
     // 断言 7: Esc 取消并关闭覆盖层
     await shotPage.keyboard.press('Escape')
@@ -823,6 +951,42 @@ async function runDesktopUiE2E() {
     )
 
     await shotPage.close()
+
+    // 断言 8: 鼠标右键一键快速退出截图覆盖窗
+    const rightClickPage = await browser.newPage()
+    await rightClickPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await rightClickPage.setViewportSize({ width: 1200, height: 800 })
+    await rightClickPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+    await rightClickPage
+      .locator('[data-testid="shot-frame"]')
+      .waitFor({ state: 'visible', timeout: 5000 })
+    await rightClickPage.mouse.click(100, 100, { button: 'right' })
+    await rightClickPage.waitForTimeout(200)
+    const logs = await rightClickPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const rightCancelCalled = logs.some((l) => l.cmd === 'cancel_screenshot_translation')
+    assert(rightCancelCalled, '鼠标右键单击必须调用 cancel_screenshot_translation')
+    await rightClickPage.close()
+
+    // 断言 8.1: 在文字块上直接右键单击同样能够快速退出截图覆盖窗
+    const rightClickBlockPage = await browser.newPage()
+    await rightClickBlockPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await rightClickBlockPage.setViewportSize({ width: 1200, height: 800 })
+    await rightClickBlockPage.goto(`${baseUrl}/#shot`, { waitUntil: 'networkidle' })
+    await rightClickBlockPage
+      .locator('[data-testid="shot-frame"]')
+      .waitFor({ state: 'visible', timeout: 5000 })
+    await rightClickBlockPage.mouse.move(240, 160)
+    await rightClickBlockPage.mouse.down()
+    await rightClickBlockPage.mouse.move(720, 480)
+    await rightClickBlockPage.mouse.up()
+    const blockToRightClick = rightClickBlockPage.locator('[data-testid="shot-block"]').first()
+    await blockToRightClick.waitFor({ state: 'visible', timeout: 5000 })
+    await blockToRightClick.click({ button: 'right' })
+    await rightClickBlockPage.waitForTimeout(200)
+    const blockLogs = await rightClickBlockPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const rightCancelBlockCalled = blockLogs.some((l) => l.cmd === 'cancel_screenshot_translation')
+    assert(rightCancelBlockCalled, '在文字块上右键单击必须调用 cancel_screenshot_translation')
+    await rightClickBlockPage.close()
     console.log('✔ [用例 8] 截图覆盖窗框选、坐标归一化、译文层与取消闭环正常')
 
     // ==========================================
@@ -939,11 +1103,18 @@ async function runDesktopUiE2E() {
     assert(blockTexts[0].includes('[E2E译:'), `块0 应显示译文而非原文，实际: ${blockTexts[0]}`)
     assert(blockTexts[1].includes('Block one'), `失败块应回落到显示原文，实际: ${blockTexts[1]}`)
     // 失败块必须有重试入口
-    assert.strictEqual(
-      await trPage.locator('[data-testid="shot-block-retry"]').count(),
-      1,
-      '失败块必须提供单块重试入口',
-    )
+    const retryBtn = trPage.locator('[data-testid="shot-block-retry"]')
+    assert.strictEqual(await retryBtn.count(), 1, '失败块必须提供单块重试入口')
+
+    // 断言 2.1: 点击单块重试按钮，必须触发针对该单块的重新翻译，且不会因冒泡销毁已有文字块
+    await retryBtn.click()
+    await trPage.waitForTimeout(500)
+    const blocksAfterRetry = await trPage.locator('[data-testid="shot-block"]').count()
+    assert.strictEqual(blocksAfterRetry, 2, '点击重试后不得销毁已有文字块')
+    const failedAfterRetry = await trPage
+      .locator('[data-testid="shot-block"][data-failed="true"]')
+      .count()
+    assert.strictEqual(failedAfterRetry, 0, '重试成功后失败标记必须消除')
 
     // 断言 3: 切语言只重发翻译，绝不重跑 OCR
     const logsBefore = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
@@ -974,8 +1145,75 @@ async function runDesktopUiE2E() {
     assert.strictEqual(await blocks.count(), 0, '还原原文后译文层必须不可见')
     assert(await frame.isVisible(), '还原原文不得卸载背景冻结帧')
 
+    // 断言 5: 还原原文状态下点击发送到主窗口，应发送 OCR 原文而非空串或旧译文
+    await trPage.locator('[data-testid="shot-to-main"]').click()
+    await trPage.waitForTimeout(200)
+    const logsFinal = await trPage.evaluate(() => window.__INVOKE_LOGS || [])
+    const pushCalls = logsFinal.filter((l) => l.cmd === 'push_screenshot_text_to_main')
+    assert(pushCalls.length > 0, '必须调用 push_screenshot_text_to_main')
+    const pushedText = pushCalls[pushCalls.length - 1].args.text
+    assert(
+      pushedText.includes('Block zero') && pushedText.includes('Block one'),
+      `还原原文状态下必须发送 OCR 原文，实际: ${pushedText}`,
+    )
+
     await trPage.close()
     console.log('✔ [用例 10] 译文按 index 回填、单块容错、切语言只重译且还原原文正常')
+
+    // -------------------------------------------------------------
+    // 用例 11: 文档与字幕翻译面板交互与导出闭环
+    // -------------------------------------------------------------
+    console.log('[UI-E2E] 正在测试 [用例 11: 文档与字幕翻译面板交互与导出]...')
+    const docPage = await browser.newPage()
+    await docPage.addInitScript(TAURI_MOCK_INIT_SCRIPT)
+    await docPage.goto(`http://127.0.0.1:${port}`)
+    await docPage.waitForSelector('[data-testid="tab-document"]')
+
+    // 切换到文档翻译 Tab
+    await docPage.click('[data-testid="tab-document"]')
+    await docPage.waitForSelector('[data-testid="document-dropzone"]')
+
+    // 模拟上传 .md 文件
+    const testFilePath = path.resolve('test-sample.md')
+    fs.writeFileSync(testFilePath, '# Title\\n\\nThis is a test paragraph.', 'utf-8')
+
+    try {
+      await docPage.setInputFiles('input[type="file"]', testFilePath)
+      await docPage.waitForSelector('[data-testid="start-document-translate"]')
+
+      // 验证文件名与格式显示
+      const filenameText = await docPage.textContent('h4')
+      assert(filenameText && filenameText.includes('test-sample.md'), '应展示已选择的文件名')
+
+      // 点击开始翻译
+      await docPage.click('[data-testid="start-document-translate"]')
+      await docPage.waitForSelector('[data-testid="export-document-file"]')
+      await docPage.waitForSelector('[data-testid="copy-document-translation"]')
+
+      // 验证统计与预览
+      const bodyText = await docPage.textContent('body')
+      assert(bodyText && bodyText.includes('E2E文档译文'), '译文预览应正确展示翻译结果')
+
+      // 验证复制按钮
+      await docPage.click('[data-testid="copy-document-translation"]')
+      await docPage.waitForTimeout(100)
+
+      // 断言取消命令机制接通
+      const logs = await docPage.evaluate(() => window.__INVOKE_LOGS || [])
+      const docTranslateCalls = logs.filter((l) => l.cmd === 'translate_document')
+      assert(docTranslateCalls.length > 0, '必须通过 translate_document 触发翻译')
+      assert(
+        typeof docTranslateCalls[0].args.taskId === 'number',
+        '文档翻译必须携带数字类型 taskId',
+      )
+    } finally {
+      if (fs.existsSync(testFilePath)) {
+        fs.unlinkSync(testFilePath)
+      }
+    }
+
+    await docPage.close()
+    console.log('✔ [用例 11] 文档翻译面板挂载、格式识别、翻译流水线与导出闭环正常')
 
     // 检查控制台异常
     assert.equal(
@@ -985,7 +1223,7 @@ async function runDesktopUiE2E() {
     )
 
     console.log('\n========================================')
-    console.log('🎉 全部 10 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
+    console.log('🎉 全部 11 项桌面端 UI 前端真实渲染与交互 E2E 测试 100% 通过！')
     console.log(
       '⚠️ 覆盖范围声明：用例 8/9/10 走 Mock IPC（浏览器里前端无法拉起 Tauri 运行时），' +
         '只验证前端交互与状态流转，不代表真实屏幕捕获、自定义协议 translyshot、' +

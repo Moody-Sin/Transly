@@ -206,7 +206,14 @@ impl EnginePool {
                     };
                     llm
                 }
-                "offline" => Arc::new(transly_core::engine::OfflineEngine::new()),
+                "offline" => {
+                    let (data_dir, _) = crate::storage::resolve_data_dir("com.moodysin.transly");
+                    let models_dir = data_dir.join("models");
+                    let _ = std::fs::create_dir_all(&models_dir);
+                    Arc::new(transly_core::engine::OfflineEngine::with_models_dir(
+                        models_dir,
+                    ))
+                }
                 _ => fallback,
             }
         })

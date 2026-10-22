@@ -148,15 +148,25 @@ pub fn merge_words_into_lines(words: &[PixelBox], y_tolerance: u32) -> Vec<Pixel
         }
     }
 
-    let mut lines: Vec<PixelBox> = groups
-        .into_iter()
-        .filter_map(|mut group| {
-            group.sort_by_key(|w| w.x);
-            let mut iter = group.into_iter();
-            let first = iter.next()?.clone();
-            Some(iter.fold(first, |acc, w| acc.merge_with(w)))
-        })
-        .collect();
+    let mut lines: Vec<PixelBox> = Vec::new();
+    for mut group in groups {
+        group.sort_by_key(|w| w.x);
+        let mut iter = group.into_iter();
+        let Some(first) = iter.next() else { continue };
+        let mut current_line = first.clone();
+        for w in iter {
+            let max_gap =
+                ((current_line.h.max(w.h) as f32) * LINE_MERGE_MAX_X_GAP_RATIO).round() as u32;
+            let gap = w.x.saturating_sub(current_line.right());
+            if gap <= max_gap {
+                current_line = current_line.merge_with(w);
+            } else {
+                lines.push(current_line);
+                current_line = w.clone();
+            }
+        }
+        lines.push(current_line);
+    }
 
     lines.sort_by_key(|l| (l.y, l.x));
     lines
@@ -263,6 +273,13 @@ pub const MIN_BLOCK_CONFIDENCE: f32 = 0.5;
 /// 不会把相邻两行并成一行。
 pub const LINE_MERGE_Y_TOLERANCE_RATIO: f32 = 0.6;
 
+/// 行聚合的最大水平词间距：词高的这一倍。
+///
+/// 正常排版下西文词距约 0.3–0.6 倍字高，制表符或宽松排版不超过 2 倍；
+/// 超过该阈值（如两栏文本、左右对齐控件、表格单元格）不得并入同一行，
+/// 必须拆分为独立行片段，避免将左右两栏横向串联成一行。
+pub const LINE_MERGE_MAX_X_GAP_RATIO: f32 = 2.5;
+
 /// 段聚合的最大垂直间距：平均词高的这一倍。
 ///
 /// 段落内的行距通常小于 1 倍词高；超过则视为另起一段（如标题与正文之间）。
@@ -337,8 +354,8 @@ pub fn filter_blocks(blocks: Vec<OcrBlockDto>) -> Vec<OcrBlockDto> {
         .into_iter()
         .filter(|b| {
             let trimmed = b.text.trim();
-            // 单字符块通常是噪点或标点碎片，合并阶段已应吸收
-            if trimmed.chars().count() < 2 {
+            // 单字符块通常是噪点或标点碎片，但 CJK 单字是完整的语义独立词（如「门」「开」「停」），不得误杀
+            if trimmed.chars().count() < 2 && !trimmed.chars().any(is_cjk) {
                 return false;
             }
             // 纯符号/数字块无翻译价值（如页码、分隔线）
@@ -530,7 +547,8 @@ mod tests {
         let blocks = vec![
             mk("valid text", Some(0.9), 0.2), // 保留
             mk("   ", Some(0.9), 0.2),        // 空白 → 丢
-            mk("a", Some(0.9), 0.2),          // 单字符 → 丢
+            mk("a", Some(0.9), 0.2),          // 西文单字符噪点 → 丢
+            mk("中", Some(0.9), 0.2),         // CJK 单字为完整语义词 → 保留
             mk("12345", Some(0.9), 0.2),      // 纯数字 → 丢
             mk("--- ===", Some(0.9), 0.2),    // 纯符号 → 丢
             mk("low conf", Some(0.3), 0.2),   // 低置信度 → 丢
@@ -540,15 +558,17 @@ mod tests {
         let out = filter_blocks(blocks);
         assert_eq!(
             out.len(),
-            2,
+            3,
             "实际保留：{:?}",
             out.iter().map(|b| &b.text).collect::<Vec<_>>()
         );
         assert_eq!(out[0].text, "valid text");
-        assert_eq!(out[1].text, "无置信度");
+        assert_eq!(out[1].text, "中");
+        assert_eq!(out[2].text, "无置信度");
         // 重新编号
         assert_eq!(out[0].index, 0);
         assert_eq!(out[1].index, 1);
+        assert_eq!(out[2].index, 2);
     }
 
     /// 关键回归：切批必须同时满足项数与字符量两个上限。
@@ -721,6 +741,70 @@ mod tests {
         let blocks = words_to_blocks(&[low, high], 1000, 500);
         assert_eq!(blocks.len(), 1, "低置信度块应被过滤: {blocks:?}");
         assert_eq!(blocks[0].text, "valid");
+    }
+
+    /// 关键回归：多栏排版在同一水平高度时不应横向合并成一行，而应保留分栏段落。
+    #[test]
+    fn test_words_to_blocks_splits_multiple_columns() {
+        let words = vec![
+            // 左栏第 1 行与右栏第 1 行（都在 y=10）
+            PixelBox::new(10, 10, 40, 20, "left_a"),
+            PixelBox::new(55, 10, 40, 20, "left_b"),
+            PixelBox::new(300, 10, 40, 20, "right_a"),
+            PixelBox::new(345, 10, 40, 20, "right_b"),
+            // 左栏第 2 行与右栏第 2 行（都在 y=35）
+            PixelBox::new(10, 35, 40, 20, "left_c"),
+            PixelBox::new(55, 35, 40, 20, "left_d"),
+            PixelBox::new(300, 35, 40, 20, "right_c"),
+            PixelBox::new(345, 35, 40, 20, "right_d"),
+        ];
+        let blocks = words_to_blocks(&words, 1000, 500);
+        assert_eq!(
+            blocks.len(),
+            2,
+            "左右两栏应聚合成 2 个独立段落块: {blocks:?}"
+        );
+        let left = blocks
+            .iter()
+            .find(|b| b.text.contains("left_a"))
+            .expect("左栏块");
+        let right = blocks
+            .iter()
+            .find(|b| b.text.contains("right_a"))
+            .expect("右栏块");
+        assert!(
+            !left.text.contains("right"),
+            "左栏不应包含右栏文本: {}",
+            left.text
+        );
+        assert!(
+            !right.text.contains("left"),
+            "右栏不应包含左栏文本: {}",
+            right.text
+        );
+        assert!(
+            left.text.contains("left_c"),
+            "左栏两行应合并: {}",
+            left.text
+        );
+        assert!(
+            right.text.contains("right_c"),
+            "右栏两行应合并: {}",
+            right.text
+        );
+    }
+
+    /// 关键回归：单个 CJK 汉字是完整的语义独立词，不可被 filter_blocks 丢弃。
+    #[test]
+    fn test_words_to_blocks_preserves_single_cjk_characters() {
+        let words = vec![
+            PixelBox::new(10, 10, 30, 30, "门"),
+            PixelBox::new(10, 100, 30, 30, "开"),
+        ];
+        let blocks = words_to_blocks(&words, 1000, 500);
+        assert_eq!(blocks.len(), 2, "单字汉字均应保留成块: {blocks:?}");
+        assert_eq!(blocks[0].text, "门");
+        assert_eq!(blocks[1].text, "开");
     }
 
     /// 过滤后 index 必须与数组下标严格一致（前端按 index 回填译文）。

@@ -145,3 +145,81 @@ export function clampRenderedBox(box: NormRectLike, container: Box): NormRectLik
 
   return { x, y, w, h }
 }
+
+export interface ViewportBox {
+  width: number
+  height: number
+}
+
+export interface SelectionRectPx {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface ToolbarPositionResult {
+  left: number
+  top: number
+  placement: 'bottom' | 'top' | 'inside-bottom'
+}
+
+/**
+ * 计算悬浮操作工具栏在视口中的像素位置，智能跟随选区。
+ *
+ * 规则（对标有道翻译/主流截图工具交互）：
+ * 1. 默认停靠在选区的【右下角正下方】（右对齐选区右侧，间距 margin 约 8px）；
+ * 2. 若选区底部距离视口底部空间不足（< toolbarHeight + margin），则自适应翻转至【选区上方】；
+ * 3. 严格做水平安全钳制：避免溢出屏幕左右两侧；
+ * 4. 若选区占满全屏或上下空间均不足以放置工具栏，则内部贴底浮动；
+ * 5. 最终坐标严格钳制在 [padding, viewport - padding] 视口安全区内。
+ */
+export function computeFloatingToolbarPosition(
+  selection: SelectionRectPx,
+  viewport: ViewportBox,
+  toolbar: { width: number; height: number },
+  margin = 8,
+  padding = 8,
+): ToolbarPositionResult {
+  const { width: vw, height: vh } = viewport
+  const tw = toolbar.width
+  const th = toolbar.height
+
+  // 水平位置：默认右对齐选区右边界
+  let left = selection.x + selection.w - tw
+
+  // 水平边界安全钳制
+  if (left + tw > vw - padding) {
+    left = vw - padding - tw
+  }
+  if (left < padding) {
+    left = padding
+  }
+
+  // 垂直位置：优先放选区下方
+  const spaceBelow = vh - (selection.y + selection.h)
+  const spaceAbove = selection.y
+
+  let top: number
+  let placement: 'bottom' | 'top' | 'inside-bottom'
+
+  if (spaceBelow >= th + margin + padding) {
+    top = selection.y + selection.h + margin
+    placement = 'bottom'
+  } else if (spaceAbove >= th + margin + padding) {
+    top = selection.y - th - margin
+    placement = 'top'
+  } else {
+    top = vh - padding - th
+    placement = 'inside-bottom'
+  }
+
+  // 最终垂直边界钳制
+  top = Math.max(padding, Math.min(top, Math.max(padding, vh - padding - th)))
+
+  return {
+    left: Math.round(left),
+    top: Math.round(top),
+    placement,
+  }
+}

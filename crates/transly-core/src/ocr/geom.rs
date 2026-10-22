@@ -215,6 +215,9 @@ pub fn find_monitor_for_point(cursor: (i32, i32), monitors: &[MonitorRect]) -> O
 
     let (cx, cy) = cursor;
     monitors.iter().position(|m| {
+        if m.width == 0 || m.height == 0 {
+            return false;
+        }
         let (x0, y0) = (m.x as i64, m.y as i64);
         let x1 = x0 + m.width as i64;
         let y1 = y0 + m.height as i64;
@@ -630,6 +633,18 @@ mod tests {
     #[test]
     fn test_find_monitor_for_point_empty() {
         assert_eq!(find_monitor_for_point((0, 0), &[]), None);
+    }
+
+    #[test]
+    fn test_find_monitor_for_point_zero_dimension_ignored() {
+        let m = MonitorRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 1080,
+            scale_factor: 1.0,
+        };
+        assert_eq!(find_monitor_for_point((0, 500), &[m]), None);
     }
 
     #[test]

@@ -5,7 +5,7 @@ import { commands } from './bindings'
 import { getTranslation, Locale } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
 import { canRetry } from './task/taskState'
-import { speakText } from './utils/speech'
+import { speakText, stopSpeaking } from './utils/speech'
 import { parseLocalePreference, parseThemePreference, LOCALE_STORAGE_KEY } from './utils/prefs'
 
 export default function FloatWindow() {
@@ -16,6 +16,7 @@ export default function FloatWindow() {
   const [targetLang, setTargetLang] = useState('zh-CN')
   const [engine, setEngine] = useState('google')
   const [copied, setCopied] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
   const [isFloatPinned, setIsFloatPinned] = useState(false)
 
@@ -52,6 +53,9 @@ export default function FloatWindow() {
       window.removeEventListener('storage', syncTheme)
     }
   }, [])
+
+  // 浮窗卸载时停止可能的语音播放
+  useEffect(() => () => stopSpeaking(), [])
 
   // 迷你悬浮窗启动时尝试读取用户首选翻译引擎
   useEffect(() => {
@@ -119,7 +123,17 @@ export default function FloatWindow() {
   }
 
   const handleSpeak = (text: string, lang: string) => {
-    speakText(text, lang, runner.snapshot.detectedLang)
+    if (isSpeaking) {
+      stopSpeaking()
+      setIsSpeaking(false)
+      return
+    }
+    setIsSpeaking(true)
+    speakText(text, lang, runner.snapshot.detectedLang, {
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+      onError: () => setIsSpeaking(false),
+    })
   }
 
   return (
@@ -217,7 +231,7 @@ export default function FloatWindow() {
             {canRetry(state, error) && (
               <button
                 onClick={runner.retry}
-                className="self-start rounded bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-600 hover:bg-rose-100"
+                className="self-start rounded bg-rose-50 dark:bg-rose-950/50 px-2 py-0.5 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-900/60"
               >
                 {t.task.btnRetry}
               </button>
@@ -249,15 +263,21 @@ export default function FloatWindow() {
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => handleSpeak(translatedText, targetLang)}
-              className="flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200"
-              title={t.translation.speak}
+              className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                isSpeaking
+                  ? 'border border-indigo-500 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+              title={isSpeaking ? t.translation.stopSpeak : t.translation.speak}
             >
-              <Volume2 className="h-3 w-3" />
-              <span>{t.translation.speak}</span>
+              <Volume2
+                className={`h-3 w-3 ${isSpeaking ? 'animate-pulse text-indigo-600 dark:text-indigo-400' : ''}`}
+              />
+              <span>{isSpeaking ? t.translation.speaking : t.translation.speak}</span>
             </button>
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100"
+              className="flex items-center gap-1 rounded bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
             >
               {copied ? (
                 <Check className="h-3 w-3 text-emerald-600" />

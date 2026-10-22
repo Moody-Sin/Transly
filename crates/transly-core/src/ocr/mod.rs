@@ -7,8 +7,9 @@ pub mod tsv;
 
 pub use blocks::{
     filter_blocks, merge_lines_into_paragraphs, merge_words_into_lines, plan_block_batches,
-    words_to_blocks, OcrBlockDto, PixelBox, LINE_MERGE_Y_TOLERANCE_RATIO, MIN_BLOCK_CONFIDENCE,
-    PARAGRAPH_MAX_GAP_RATIO, PARAGRAPH_MIN_X_OVERLAP,
+    words_to_blocks, OcrBlockDto, PixelBox, LINE_MERGE_MAX_X_GAP_RATIO,
+    LINE_MERGE_Y_TOLERANCE_RATIO, MIN_BLOCK_CONFIDENCE, PARAGRAPH_MAX_GAP_RATIO,
+    PARAGRAPH_MIN_X_OVERLAP,
 };
 pub use geom::{find_monitor_for_point, MonitorRect, NormRect};
 pub use screencap::{
@@ -80,10 +81,20 @@ impl OcrErrorDto {
     ///
     /// 刻意不写「暂未支持」：那会误导用户以为永远不行。必须给出可执行的替代路径。
     pub fn wayland_unsupported() -> Self {
-        Self::new(
-            OcrErrorKind::UnsupportedPlatform,
-            "Wayland 会话下不支持框选截图（无法保证覆盖窗置顶）。请登录 X11 会话，或改用「识别剪贴板图片」",
-        )
+        Self::wayland_unsupported_with_desktop(None)
+    }
+
+    /// Wayland 会话下的截图能力降级提示（支持附带当前桌面环境说明）。
+    pub fn wayland_unsupported_with_desktop(desktop: Option<&str>) -> Self {
+        let msg = match desktop.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            Some(d) => format!(
+                "当前运行于 Wayland 会话 ({d})，系统限制应用直接捕获屏幕画面与覆盖窗强制置顶。请登录 X11/Xorg 会话，或改用「识别剪贴板图片」"
+            ),
+            None => {
+                "Wayland 会话下不支持框选截图（无法保证覆盖窗置顶）。请登录 X11 会话，或改用「识别剪贴板图片」".to_string()
+            }
+        };
+        Self::new(OcrErrorKind::UnsupportedPlatform, msg)
     }
 
     /// 缺少外部 OCR 工具（如 Linux 未安装 tesseract），必须给出可执行的安装指引。
@@ -127,8 +138,20 @@ pub fn build_candidate_languages(target_lang: &str) -> Vec<&'static str> {
         || clean == "zh-tw"
         || clean == "zh-hant";
 
-    let mut list = Vec::with_capacity(4);
-    if is_target_zh {
+    let mut list = Vec::with_capacity(6);
+    if clean.starts_with("ja") {
+        for cand in ["ja-JP", "zh-Hans-CN", "zh-CN", "system", "en-US"] {
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
+        }
+    } else if clean.starts_with("ko") {
+        for cand in ["ko-KR", "zh-Hans-CN", "zh-CN", "system", "en-US"] {
+            if !list.contains(&cand) {
+                list.push(cand);
+            }
+        }
+    } else if is_target_zh {
         // 目标是中文：优先英文与系统语言，后验中文语言包兜底
         for cand in ["en-US", "system", "zh-Hans-CN", "zh-CN"] {
             if !list.contains(&cand) {
@@ -232,6 +255,24 @@ mod tests {
     fn test_build_candidate_languages_non_zh() {
         let candidates = build_candidate_languages("en");
         assert_eq!(candidates, vec!["zh-Hans-CN", "zh-CN", "system", "en-US"]);
+    }
+
+    #[test]
+    fn test_build_candidate_languages_ja() {
+        let candidates = build_candidate_languages("ja");
+        assert_eq!(
+            candidates,
+            vec!["ja-JP", "zh-Hans-CN", "zh-CN", "system", "en-US"]
+        );
+    }
+
+    #[test]
+    fn test_build_candidate_languages_ko() {
+        let candidates = build_candidate_languages("ko");
+        assert_eq!(
+            candidates,
+            vec!["ko-KR", "zh-Hans-CN", "zh-CN", "system", "en-US"]
+        );
     }
 
     #[test]

@@ -117,6 +117,8 @@ jobs:
         run: cargo build --package src-tauri --bin transly_test_server
       - name: 运行浏览器插件真实端到端 E2E 测试
         run: pnpm run test:e2e:extension
+      - name: 运行真实公网网络与真实引擎端到端 (Live E2E) 测试
+        run: pnpm run test:e2e:live
 
   repo-hygiene:
     name: 仓库卫生检查（构建产物 / 大文件）

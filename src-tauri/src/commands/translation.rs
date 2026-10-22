@@ -1,15 +1,6 @@
-//! 翻译与流式翻译命令
-//!
-//! 由 `commands/mod.rs` 拆分而来：命令函数保持在 crate 内的原路径不变
-//! （`mod.rs` 统一 `pub use` 重导出），因此 `app_command_builder!` 与
-//! `src/bindings.ts` 的生成结果不受影响。
+//! 翻译主链路命令：同步/流式翻译、流式取消与引擎能力探测相关 DTO。
 
-use std::sync::Arc;
-
-use crate::engine_pool::EnginePool;
-use tokio::sync::RwLock;
-use transly_core::task::classify_error;
-use transly_core::{Error, ErrorKind, Glossary, TranslationCache, TranslationRequest};
+use super::*;
 
 /// 翻译成功结果：携带实际执行引擎，供 UI 展示与降级识别
 #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
@@ -377,4 +368,35 @@ pub async fn cancel_stream_task(
         }
     }
     Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct EngineCapabilitiesDto {
+    pub id: String,
+    pub name: String,
+    pub max_batch_size: u32,
+    pub supports_batch: bool,
+    pub requires_api_key: bool,
+    pub supports_streaming: bool,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_engine_capabilities(
+    engine: String,
+    pool: tauri::State<'_, Arc<EnginePool>>,
+) -> Result<EngineCapabilitiesDto, String> {
+    if !transly_core::validate_engine_id(&engine) {
+        return Err(format!("不支持或未知的翻译引擎: {engine}"));
+    }
+    let eng = pool.get_engine(&engine).await;
+    let caps = eng.capabilities();
+    Ok(EngineCapabilitiesDto {
+        id: caps.id,
+        name: caps.name,
+        max_batch_size: caps.max_batch_size as u32,
+        supports_batch: caps.supports_batch,
+        requires_api_key: caps.requires_api_key,
+        supports_streaming: caps.supports_streaming,
+    })
 }

@@ -37,15 +37,14 @@ use transly_core::{is_within_ocr_pixel_budget, OcrErrorDto, PixelBox};
 /// **绝不能返回 `"system"`**（那是 Windows 的语义，Vision 不认）。
 fn vision_languages(target_lang: &str) -> Vec<&'static str> {
     let clean = target_lang.trim().to_lowercase();
-    if clean.starts_with("zh") {
-        // 简繁都带上：Vision 会自行挑选，多给一个候选不影响结果。
-        vec!["zh-Hans", "zh-Hant"]
-    } else if clean.starts_with("ja") {
-        vec!["ja"]
+    if clean.starts_with("ja") {
+        vec!["ja", "en-US"]
     } else if clean.starts_with("ko") {
-        vec!["ko"]
+        vec!["ko", "en-US"]
     } else {
-        vec!["en-US"]
+        // 中英双向支持：无论目标语言是中文还是英文，均同时加载中英语言模型，
+        // 确保中译英（截中文）与英译中（截英文）均能自适应识别
+        vec!["zh-Hans", "zh-Hant", "en-US"]
     }
 }
 

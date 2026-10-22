@@ -4,8 +4,8 @@
 //!
 //! `OcrWord::BoundingRect()` 的单位是**喂给 `RecognizeAsync` 那张
 //! `SoftwareBitmap` 的像素**。本模块在大图时先 `clamp_dimensions` 下采样，
-//! 故调用方必须用**下采样后**的 `(nw, nh)` 作为归一化分母——
-//! 用原图尺寸会让所有块整体偏移。
+//! 识别完成后按比例缩放回原始输入图的 `(width, height)` 像素尺寸，
+//! 保证 `recognize_words` 对外契约始终与入参 `image` 的像素空间对齐。
 //!
 //! # 置信度
 //!
@@ -161,7 +161,32 @@ pub fn recognize_words(
             }
         }
 
-        // 引擎可用但图里确实没字 → 交给调用方判 empty_text；此处返回空表即可。
+        // 若当前候选引擎未识别出任何有效文字（例如英文引擎扫描纯中文画面），
+        // 绝不可直接 return 空结果，必须继续尝试后续候选语言包（如 system / zh-Hans-CN）
+        if words.is_empty() {
+            continue;
+        }
+
+        // 若进行了尺寸下采样（规避 Windows OCR 的 MaxImageDimension 上限），
+        // 词框像素坐标必须按比例还原回原始输入图的 (width, height) 像素空间，
+        // 保证上层以原始图尺寸归一化时坐标不偏移、不变小。
+        if nw != width || nh != height {
+            let scale_x = width as f64 / nw as f64;
+            let scale_y = height as f64 / nh as f64;
+            for w in &mut words {
+                let orig_x = ((w.x as f64 * scale_x).round() as u32).min(width);
+                let orig_y = ((w.y as f64 * scale_y).round() as u32).min(height);
+                let orig_w =
+                    ((w.w as f64 * scale_x).round() as u32).min(width.saturating_sub(orig_x));
+                let orig_h =
+                    ((w.h as f64 * scale_y).round() as u32).min(height.saturating_sub(orig_y));
+                w.x = orig_x;
+                w.y = orig_y;
+                w.w = orig_w;
+                w.h = orig_h;
+            }
+        }
+
         return Ok(words);
     }
 

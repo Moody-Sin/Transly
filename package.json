@@ -2,7 +2,7 @@
   "name": "transly",
   "private": true,
   "license": "UNLICENSED",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "type": "module",
   "engines": {
     "node": ">=22.6"
@@ -21,6 +21,7 @@
     "test:e2e:ui": "node scripts/test-desktop-ui-e2e.mjs",
     "test:e2e:extension": "pnpm --filter transly-extension run build && node scripts/test-extension-e2e.mjs",
     "test:extension:firefox": "pnpm run build:extension:firefox && node scripts/test-firefox-package.mjs",
+    "test:e2e:live": "pnpm --filter transly-extension run build && node scripts/test-live-e2e.mjs",
     "test:e2e": "pnpm run test:e2e:ui && pnpm run test:e2e:extension && pnpm run test:extension:firefox",
     "build:portable": "tauri build --no-bundle",
     "build:extension": "pnpm --filter transly-extension run build",

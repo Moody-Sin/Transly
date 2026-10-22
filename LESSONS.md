@@ -198,3 +198,81 @@
 - **现象**：评审建议拆分 2130 行的 `App.tsx`。实测统计：设置面板那段 JSX（686 行）引用了 App 顶层 **74 个** state / handler。
 - **结论**：机械抽取会产出一个 74 props 的组件——比 2000 行单文件更难维护，且每个 props 都是一次新的漏传机会。拆分的正确前置条件是把状态先收敛（`useSettingsState` 这类 hook），那是另一件事，不能混在「拆文件」里做。
 - **教训**：**拆文件的收益取决于边界是否天然。** 纯展示、参数少的（`ScreenshotOverlay` 的模态、`HistoryPanel`）值得拆；逻辑与状态深度缠绕的，机械拆会制造更多问题。测量一次（数 props）比争论一小时便宜。同理 `commands/mod.rs` 值得拆：44 个命令函数各自独立，`pub use` 重导出即可保住原有路径，`generate:bindings` 后 diff 为零——这是天然边界。
+
+### 30. 真实端到端集成测试服务需兼备零依赖 Stub 与公网真实双模态
+- **现象**：原测试服务 `transly_test_server` 过去硬编码为 `StubEngine`，导致浏览器扩展全链路测试只能断言包含 `[E2E译文]` 的固定桩字符串，无法对真实 Google/DeepL 公网 API 连通性、真实网络返回解析、动态术语库干预及真实 DOM 渲染开展真机验收。
+- **教训**：
+  - 测试后端入口应设计为**双模驱动**：缺省状态保持零网络、零凭据的确定性 Stub，保障无网 CI 稳定运行；通过环境变量（如 `TRANSLY_TEST_REAL_ENGINE=1`）无缝切换至真实引擎连接池，实现公网实机端到端真实测试。
+
+### 31. Axum 强类型 JSON 反序列化对松散字段类型的严格拒绝 (422)
+- **现象**：`transly-core` 的 `BatchItemRequest` 为了支持 DOM 节点的 uuid / xpath 等任意稳定标识，将 `id` 定义为 `String`。跨端构造 JSON 时若误传为数字（如 `{ id: 1 }`），Axum 的 `Json<T>` 提取器会在进入业务 handler 前直接以 `422 Unprocessable Entity` 拒绝，且无自定义业务错误体。
+- **教训**：
+  - 跨进程/语言调用时，对标有 string 的 DTO 标识字段必须显式序列化为字符串；同时排查 Axum 422 错误时，首要关注请求 JSON 字段与 Rust struct 的类型定义差异。
+
+### 32. 截图翻译端到端关键边界：高分屏 DPI 折算、多栏横向间距与 CJK 语义单字
+- **现象**：
+  1. 在高分屏（Retina / Windows 150% 缩放）上，截图覆盖窗译文字号算得过大并被 `overflow-hidden` 截断；
+  2. Windows OCR 在超过 2600 像素下采样后未按比例还原词坐标，导致 4K 屏幕上全部译文框严重缩小并向左上角偏移；
+  3. 截图单字汉字（如“门”、“开”）被 `filter_blocks` 误当做单字母噪点丢弃；
+  4. 多栏排版在同一水平高度时，`merge_words_into_lines` 仅按垂直高度判定同行，将左右两栏文本强制水平串联为单行；
+  5. 覆盖层重试按钮由于缺失 `pointerdown` 阻止冒泡，点击时直接触发底层框选并瞬间销毁所有译文块。
+- **教训**：
+  - CSS 字号（`style.fontSize`）必须与 DOM 容器的 **CSS 逻辑像素**（`window.innerWidth / innerHeight`）匹配，严禁直接使用后端物理像素计算；
+  - 平台 OCR 在内部做尺寸规整/下采样后，必须将像素包围盒**按比例缩放回原始输入图坐标系**再交付通用聚合层；
+  - 噪点过滤必须尊重 CJK 语言特性，单个 CJK 汉字/假名本身即是独立表意词，绝不可按西文字符数 `< 2` 粗暴拦截；
+  - 行聚合不仅要检查垂直中心间距，还必须校验相邻词的水平间距（`LINE_MERGE_MAX_X_GAP_RATIO`），超出阈值时必须分段；
+  - 覆盖层上的交互控件（按钮/下拉框）必须拦截 `pointerdown` 事件冒泡，防止画板拖拽状态机抢占事件。
+
+### 33. 多语言硬编码与非激活态暗黑模式对比度泄漏
+- **现象**：
+  1. 在深色模式下，主窗口非活动 Tab、悬浮窗操作按钮及历史记录卡片仅设置了浅色背景（如 `bg-slate-100` / `bg-indigo-50`），未配对 `dark:bg-slate-800` 等变体，导致深色背景中出现亮灰与反白反光块；
+  2. 文档翻译面板与状态卡片中局部存在硬编码中文（如“重新选择”、“未翻译”），切换英文后无法国际化。
+- **教训**：
+  - Tailwind 暗黑适配不仅要检查主容器背景，更要重点排查未激活 Tab、Badge、轻量辅助按钮及 Hover 态；
+  - 所有面向用户的状态提示与按钮文案必须统一纳入 `i18n` 字典架构，严禁在 JSX/TSX 中裸写字符串。
+
+### 34. Web Speech API Utterance 必须维持全局引用防止 GC 状态假死
+- **现象**：在 Chromium 和 WebKit（Tauri WebView）内核中，`SpeechSynthesisUtterance` 实例若仅作为函数局部变量，长文本发音时极易被 JavaScript 引擎垃圾回收，导致底层的 `onend` 与 `onerror` 回调静默丢失，前端按钮状态永久卡在“播放中”。
+- **教训**：
+  - 必须在模块作用域持有 `activeUtterance` 强引用，并在 `stopSpeaking`、`onend`、`onerror` 中主动释放；
+  - 每次触发新发音前应显式调用 `window.speechSynthesis.cancel()` 避免堆叠和串音。
+
+### 35. 连通性测试复用业务接口时必须保证即测即清与前置自动保存
+- **现象**：设置面板若复用业务翻译接口 `commands.translate` 进行连通性探测，会将测试用例（如 `'Hello' -> '你好'`）落盘到 SQLite 缓存并在历史面板中造成脏条目；且未保存新输入的 Key 时直接测试会产生旧配置的假通过。
+- **教训**：
+  - 测试前必须自动同步保存输入框中的最新密钥与端点配置；
+  - 测试完成后必须立即从历史中检索并删除该测试条目，实现零副作用的即测即清。
+
+### 36. 多候选 OCR 引擎遍历必须以「识别出有效文字」为跳出判据，严禁在首个引擎空结果时短路返回
+- **现象**：Windows WinRT OCR 在按候选语言优先级遍历（如 `["en-US", "system", "zh-Hans-CN"]`）时，首个引擎（`en-US`）创建成功且执行正常，但面对纯中文画面解析出 0 个词（`words.is_empty()`）。代码直接在循环首轮末尾无条件执行 `return Ok(words)`，导致后续真正具备中文识别能力的 `system` 或 `zh-Hans-CN` 引擎被彻底短路，截取中文画面直接报错“未能从图片中识别到有效文字”。
+- **教训**：
+  - 兜底候选机制的核心是“前置引擎未产出有效业务结果时继续回退下一个”，**不能将「系统 API 调用未报错」等同于「业务识别成功」**；
+  - 只有当解析出的有效文字块非空（`!words.is_empty()`）时才可提前返回，空结果必须 `continue` 尝试后续候选语言包，全部遍历耗尽后方可返回空或报错。
+
+### 37. 绝对定位元素的百分比 min-height 参照包含块，严禁误用 `hover:min-h-full` 实现自适应展开
+- **现象**：全屏覆盖层中文字块采用 `position: absolute` 定位。为实现悬停时不被 `overflow-hidden` 截断且不小于原框，使用了 `hover:h-auto hover:min-h-full`。但绝对定位元素的百分比高度基准是最近定位祖先（全屏视口 800px），导致悬停时文字块恶性垂直撑满全屏；且普通 `hover:h-auto` 无法覆盖行内 `style.height`。
+- **教训**：
+  - 覆盖 JSX 行内 `style.height` 必须使用 Tailwind 的重要性修饰符 `hover:!h-auto`；
+  - 保持原框高度下限应在行内直接绑定 `minHeight: pct(h)`，绝不可对绝对定位元素声明 `min-h-full`。
+
+### 38. SQLite 普通表（Rowid 表）的隐式 rowid 列不可显式写入索引定义
+- **现象**：为优化 `ORDER BY created_at DESC, rowid DESC`，在 `cache.rs` 建表时尝试执行 `CREATE INDEX idx_cache_created_at_rowid ON translation_cache(created_at DESC, rowid DESC);`，SQLite 直接报错 `Database(SqlInputError { msg: "no such column: rowid" })`，导致全仓所有涉及缓存的测试批量崩溃。
+- **教训**：
+  - 在 SQLite 默认的普通表（非 WITHOUT ROWID 表）中，`rowid` 是内置隐藏主键，**每个 B-tree 二级索引的叶子节点内部天然包含该行的 `rowid`**；
+  - 严禁在 `CREATE INDEX` 列名单中显式指定 `rowid`，只需创建单列索引 `CREATE INDEX idx_cache_created_at ON translation_cache(created_at DESC)` 即可被查询优化器同时用来覆盖 `ORDER BY created_at DESC, rowid DESC`；
+  - 再次印证：数据库索引不是“按 ORDER BY 照抄列名”，必须尊重数据库底层存储引擎的模型。
+
+### 39. specta 对 Rust 函数入参存在硬上限（<= 10 个参数）
+- **现象**：为 `translate_document` 命令平铺传入 12 个参数（含各种状态 State 依赖），执行 `cargo run -p src-tauri --bin export_bindings` 时报错 `the trait bound fn(...) -> ... SpectaFn<_> is not satisfied`，编译直接中断。
+- **教训**：
+  - `tauri-specta` / `specta` 的 `SpectaFn` 宏仅对 0 到 10 个参数的函数类型实现了 Trait，超过 10 个参数无法参与导出；
+  - 架构设计上，应当将多个分散的状态依赖（如 `cache`, `pool`, `glossary`, `cache_controller`, `stream_registry`）统一封装进组合依赖结构体（如 `deps: tauri::State<'_, Arc<TranslationDependencies>>`），既绕开参数个数上限，又大幅降低函数的参数混乱度。
+
+
+
+
+### 40. tauri-specta 跨模块命令必须使用定义模块的完整路径
+- **现象**：把 `commands/mod.rs` 按领域拆成 `translation`、`history` 等子模块后，仅在 `mod.rs` 用 `pub use` 重导出命令函数，`collect_commands!` 仍报 `cannot find __cmd__translate` / `__tauri_command_name_translate`。
+- **教训**：
+  - `#[tauri::command]` 在**函数定义所在模块**生成 `__cmd__*`、`__tauri_command_name_*` 与 specta 的 `__specta__fn__*` 宏；`pub use` 只导出函数，不导出这些宏；
+  - `app_command_builder!` 中每条命令必须写成 `$crate::commands::<子模块>::<函数>`，与函数定义位置严格一致。

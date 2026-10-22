@@ -62,6 +62,7 @@
     "copy": "Copy",
     "copyFailed": "Copy failed; check clipboard permission",
     "delete": "Delete",
+    "confirmDelete": "Confirm",
     "loadFailed": "Failed to load translation history",
     "deleteFailed": "Failed to delete",
     "searchPlaceholder": "Search history (source or translated)...",

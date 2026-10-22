@@ -293,6 +293,8 @@ export default function ScreenshotOverlay() {
   return (
     <div
       data-testid="shot-surface"
+      role="application"
+      aria-label={t.screenshot.title}
       className="fixed inset-0 cursor-crosshair touch-none select-none overflow-hidden bg-slate-950"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -409,7 +411,7 @@ export default function ScreenshotOverlay() {
       >
         <span className="font-medium">{t.screenshot.title}</span>
         {(busy || translating) && (
-          <span className="text-indigo-600 dark:text-indigo-400">
+          <span role="status" aria-live="polite" className="text-indigo-600 dark:text-indigo-400">
             {busy ? t.screenshot.recognizing : t.screenshot.translating}
           </span>
         )}
@@ -417,6 +419,7 @@ export default function ScreenshotOverlay() {
           <>
             <select
               data-testid="shot-engine"
+              aria-label={t.translation.engineSelect}
               value={engine}
               onChange={(e) => {
                 const next = e.target.value
@@ -434,6 +437,7 @@ export default function ScreenshotOverlay() {
             </select>
             <select
               data-testid="shot-lang"
+              aria-label={t.app.switchLanguage}
               value={targetLang}
               onChange={(e) => {
                 const next = e.target.value
@@ -511,6 +515,7 @@ export default function ScreenshotOverlay() {
       {error && (
         <div
           data-testid="shot-error"
+          role="alert"
           className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded bg-rose-600/95 px-3 py-1.5 text-xs text-white shadow-lg"
         >
           {renderError(error)}

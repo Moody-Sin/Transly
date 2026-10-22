@@ -27,6 +27,10 @@ export default function HistoryPanel({ t, locale }: Props) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [exportNotice, setExportNotice] = useState<string | null>(null)
+  // 行内删除确认：第一次点垃圾桶进入待确认态，第二次才真删。
+  // 历史记录删了就回不来，而垃圾桶图标就贴在不同目标语的下拉框旁边，误点成本很高。
+  const [pendingDeleteKey, setPendingDeleteKey] = useState<string | null>(null)
+  const pendingDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const genRef = useRef(0)
 
   const load = useCallback(
@@ -77,6 +81,7 @@ export default function HistoryPanel({ t, locale }: Props) {
       genRef.current += 1
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
       if (exportTimerRef.current) clearTimeout(exportTimerRef.current)
+      if (pendingDeleteTimerRef.current) clearTimeout(pendingDeleteTimerRef.current)
     },
     [],
   )
@@ -99,6 +104,23 @@ export default function HistoryPanel({ t, locale }: Props) {
   }
 
   const handleDelete = async (entry: CacheEntry) => {
+    // 进入待确认态：3 秒内不确认则自动回退，避免一直挂在「确认删除」上
+    if (pendingDeleteKey !== entry.cache_key) {
+      setPendingDeleteKey(entry.cache_key)
+      if (pendingDeleteTimerRef.current) clearTimeout(pendingDeleteTimerRef.current)
+      pendingDeleteTimerRef.current = setTimeout(() => {
+        pendingDeleteTimerRef.current = null
+        setPendingDeleteKey(null)
+      }, 3000)
+      return
+    }
+
+    if (pendingDeleteTimerRef.current) {
+      clearTimeout(pendingDeleteTimerRef.current)
+      pendingDeleteTimerRef.current = null
+    }
+    setPendingDeleteKey(null)
+
     try {
       const res = await commands.deleteHistoryEntry(entry.cache_key)
       if (res.status === 'ok') {
@@ -282,11 +304,28 @@ export default function HistoryPanel({ t, locale }: Props) {
                       )}
                     </button>
                     <button
-                      onClick={() => handleDelete(entry)}
-                      className="rounded p-1 text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-rose-600"
-                      title={t.history.delete}
+                      onClick={() => void handleDelete(entry)}
+                      className={`rounded p-1 ${
+                        pendingDeleteKey === entry.cache_key
+                          ? 'bg-rose-600 text-white hover:bg-rose-700'
+                          : 'text-slate-400 hover:bg-white dark:hover:bg-slate-700 hover:text-rose-600'
+                      }`}
+                      title={
+                        pendingDeleteKey === entry.cache_key
+                          ? t.history.confirmDelete
+                          : t.history.delete
+                      }
+                      aria-label={
+                        pendingDeleteKey === entry.cache_key
+                          ? t.history.confirmDelete
+                          : t.history.delete
+                      }
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      {pendingDeleteKey === entry.cache_key ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
                     </button>
                   </div>
                 </div>

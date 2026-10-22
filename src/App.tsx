@@ -20,6 +20,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getTranslation, Locale } from './i18n'
 import type { I18nSchema } from './i18n'
 import { useTaskRunner } from './task/useTaskRunner'
+import { useTransientMessage } from './utils/useTransientMessage'
 import { canRetry } from './task/taskState'
 import HistoryPanel from './HistoryPanel'
 import ShortcutRecorder from './ShortcutRecorder'
@@ -124,11 +125,13 @@ export default function App() {
   const [glossaryList, setGlossaryList] = useState<
     Array<{ source: string; target: string; match_case: boolean }>
   >([])
-  const [saveStatus, setSaveStatusState] = useState<string | null>(null)
-  const [saveStatusIsError, setSaveStatusIsError] = useState(false)
-  const setSaveStatus = (msg: string | null, isError = false) => {
-    setSaveStatusState(msg)
-    setSaveStatusIsError(isError)
+  const saveStatusState = useTransientMessage<string | null>(null)
+  const saveStatus = saveStatusState.value
+  const saveStatusIsError = saveStatusState.error
+  // clearAfterMs 取代了此前 18 处裸 `setTimeout(() => setSaveStatus(null), N)`：
+  // 那些定时器从不清理，连续操作时前一次会抢先把后一次提示抹掉，卸载后还会再 setState。
+  const setSaveStatus = (msg: string | null, isError = false, clearAfterMs?: number) => {
+    saveStatusState.set(msg, { error: isError, clearAfterMs })
   }
   const [capabilities, setCapabilities] = useState<EngineCapabilitiesDto | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
@@ -223,6 +226,11 @@ export default function App() {
 
   // 四类入口（输入框 / 划词 / 剪贴板 / 浮窗）共用同一任务状态机
   const runner = useTaskRunner(engine, targetLang)
+  // runner 是每次渲染新建的对象字面量，不能进 effect 依赖：放进去会让事件订阅
+  // 随每个流式 chunk（每个 chunk 都 setSnapshot → 重渲染）反复 unlisten/re-listen。
+  // 用 ref 拿「最新的 run」，订阅本身只建立一次。
+  const runnerRunRef = useRef(runner.run)
+  runnerRunRef.current = runner.run
   const { state, text: translatedText, error, engine: usedEngine } = runner.snapshot
   const isTranslating = state === 'running'
 
@@ -465,7 +473,7 @@ export default function App() {
       const text = event.payload.text ?? ''
       if (!text.trim()) return
       setSourceText(text)
-      runner.run(text, { source: 'input', debounceMs: 0 })
+      runnerRunRef.current(text, { source: 'input', debounceMs: 0 })
     })
       .then((fn) => {
         if (disposed) fn()
@@ -478,7 +486,7 @@ export default function App() {
       disposed = true
       if (unlisten) unlisten()
     }
-  }, [runner])
+  }, [])
 
   // 监听划词原地替换失败事件并弹出 Toast 与桌面原生通知提醒（仅限主窗口处理，防止双窗口重复弹窗）
   useEffect(() => {
@@ -644,8 +652,7 @@ export default function App() {
       const res = await commands.setCacheEnabled(val)
       if (res.status === 'error') {
         setCacheEnabled(!val)
-        setSaveStatus(res.error, true)
-        setTimeout(() => setSaveStatus(null), 2500)
+        setSaveStatus(res.error, true, 2500)
       }
     } catch (err) {
       // typedError 遇到 Error 实例会直接 rethrow：缺 try/catch 时下面的回滚永不执行
@@ -653,8 +660,8 @@ export default function App() {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed,
         true,
+        2500,
       )
-      setTimeout(() => setSaveStatus(null), 2500)
     }
   }
 
@@ -665,16 +672,15 @@ export default function App() {
       const res = await commands.setClipboardMonitor(val)
       if (res.status === 'error') {
         setClipboardMonitor(!val)
-        setSaveStatus(res.error, true)
-        setTimeout(() => setSaveStatus(null), 2500)
+        setSaveStatus(res.error, true, 2500)
       }
     } catch (err) {
       setClipboardMonitor(!val)
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusSaveFailed,
         true,
+        2500,
       )
-      setTimeout(() => setSaveStatus(null), 2500)
     }
   }
 
@@ -682,8 +688,7 @@ export default function App() {
     try {
       const res = await commands.setShortcut(customShortcut.trim())
       if (res.status === 'ok') {
-        setSaveStatus(t.settings.statusShortcutSaved)
-        setTimeout(() => setSaveStatus(null), 2000)
+        setSaveStatus(t.settings.statusShortcutSaved, false, 2000)
         // 保存成功不等于注册成功：组合键可能被其它软件占用。
         // 向后端确认真实注册结果，失败时把原因摆到界面上。
         const status = await commands.getShortcutStatus()
@@ -703,8 +708,7 @@ export default function App() {
     try {
       const res = await commands.setReplaceShortcut(customReplaceShortcut.trim())
       if (res.status === 'ok') {
-        setSaveStatus(t.settings.statusShortcutSaved)
-        setTimeout(() => setSaveStatus(null), 2000)
+        setSaveStatus(t.settings.statusShortcutSaved, false, 2000)
         const status = await commands.getShortcutStatus()
         setReplaceShortcutConflict(status.replace_error || '')
       } else {
@@ -722,8 +726,7 @@ export default function App() {
     try {
       const res = await commands.setScreenshotShortcut(customScreenshotShortcut.trim())
       if (res.status === 'ok') {
-        setSaveStatus(t.settings.statusShortcutSaved)
-        setTimeout(() => setSaveStatus(null), 2000)
+        setSaveStatus(t.settings.statusShortcutSaved, false, 2000)
         const status = await commands.getShortcutStatus()
         setScreenshotShortcutConflict(status.screenshot_error || '')
       } else {
@@ -742,8 +745,7 @@ export default function App() {
     try {
       const res = await commands.savePreferredReplaceEngine(val)
       if (res.status === 'ok') {
-        setSaveStatus(t.settings.statusReplaceEngineSaved)
-        setTimeout(() => setSaveStatus(null), 2000)
+        setSaveStatus(t.settings.statusReplaceEngineSaved, false, 2000)
       } else {
         setSaveStatus(res.error, true)
       }
@@ -765,18 +767,16 @@ export default function App() {
       if (res.status === 'ok') {
         setProxyMode(newMode)
         setProxyUrl(newUrl)
-        setSaveStatus(t.settings.statusProxySaved)
-        setTimeout(() => setSaveStatus(null), 2500)
+        setSaveStatus(t.settings.statusProxySaved, false, 2500)
       } else {
-        setSaveStatus(`${t.settings.statusProxySaveFailed}: ${res.error}`, true)
-        setTimeout(() => setSaveStatus(null), 4000)
+        setSaveStatus(`${t.settings.statusProxySaveFailed}: ${res.error}`, true, 4000)
       }
     } catch (err) {
       setSaveStatus(
         `${t.settings.statusProxySaveFailed}: ${err instanceof Error ? err.message : String(err)}`,
         true,
+        4000,
       )
-      setTimeout(() => setSaveStatus(null), 4000)
     } finally {
       setProxySaving(false)
     }
@@ -790,8 +790,7 @@ export default function App() {
       const res = await commands.rotateServerToken()
       if (res.status === 'ok') {
         setServerToken(res.data)
-        setSaveStatus(t.settings.statusTokenRotated)
-        setTimeout(() => setSaveStatus(null), 2500)
+        setSaveStatus(t.settings.statusTokenRotated, false, 2500)
       } else {
         setSaveStatus(res.error, true)
       }
@@ -854,8 +853,7 @@ export default function App() {
       )
       if (openaiRes.status === 'error') throw new Error(openaiRes.error)
       checkConfiguredKeys()
-      setSaveStatus(t.settings.statusKeysSaved)
-      setTimeout(() => setSaveStatus(null), 2500)
+      setSaveStatus(t.settings.statusKeysSaved, false, 2500)
     } catch (err) {
       // 透传后端校验原因（如「API 密钥长度超出限制」），避免退化为无法自查的通用文案
       setSaveStatus(
@@ -870,8 +868,7 @@ export default function App() {
       const res = await commands.deleteApiKey(eng)
       if (res.status === 'error') throw new Error(res.error)
       checkConfiguredKeys()
-      setSaveStatus(t.settings.statusKeyDeleted)
-      setTimeout(() => setSaveStatus(null), 2000)
+      setSaveStatus(t.settings.statusKeyDeleted, false, 2000)
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusKeyDeleteFailed,
@@ -893,8 +890,7 @@ export default function App() {
       setGlossaryTarget('')
       setGlossaryMatchCase(true)
       loadGlossaryList()
-      setSaveStatus(t.settings.statusGlossaryAdded)
-      setTimeout(() => setSaveStatus(null), 2000)
+      setSaveStatus(t.settings.statusGlossaryAdded, false, 2000)
     } catch (err) {
       setSaveStatus(
         err instanceof Error && err.message ? err.message : t.settings.statusGlossaryFailed,
@@ -1781,9 +1777,11 @@ export default function App() {
                         if (res.status === 'ok') {
                           setSaveStatus(
                             t.settings.statusCacheCleared.replace('{n}', String(res.data)),
+                            false,
+                            2000,
                           )
                         } else {
-                          setSaveStatus(res.error, true)
+                          setSaveStatus(res.error, true, 2000)
                         }
                       } catch (err) {
                         setSaveStatus(
@@ -1791,9 +1789,9 @@ export default function App() {
                             ? err.message
                             : t.settings.statusCacheClearFailed,
                           true,
+                          2000,
                         )
                       }
-                      setTimeout(() => setSaveStatus(null), 2000)
                     }}
                     className="rounded border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/50 px-2.5 py-1 text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50"
                   >
@@ -1849,8 +1847,11 @@ export default function App() {
                             if (!text) return
                             const parsedTerms = parseGlossaryCsv(text)
                             if (parsedTerms.length === 0) {
-                              setSaveStatus(t.settings.glossaryImportDone.replace('{n}', '0'))
-                              setTimeout(() => setSaveStatus(null), 3000)
+                              setSaveStatus(
+                                t.settings.glossaryImportDone.replace('{n}', '0'),
+                                false,
+                                3000,
+                              )
                               return
                             }
                             try {
@@ -1862,7 +1863,7 @@ export default function App() {
                                 })),
                               )
                               if (res.status === 'error') {
-                                setSaveStatus(res.error, true)
+                                setSaveStatus(res.error, true, 3000)
                               } else {
                                 loadGlossaryList()
                                 const imported = res.data
@@ -1877,6 +1878,7 @@ export default function App() {
                                         String(imported),
                                       ),
                                   failed > 0,
+                                  3000,
                                 )
                               }
                             } catch (err) {
@@ -1885,13 +1887,12 @@ export default function App() {
                                   ? err.message
                                   : t.settings.statusGlossaryFailed,
                                 true,
+                                3000,
                               )
                             }
-                            setTimeout(() => setSaveStatus(null), 3000)
                           }
                           reader.onerror = () => {
-                            setSaveStatus(t.settings.statusGlossaryFailed, true)
-                            setTimeout(() => setSaveStatus(null), 3000)
+                            setSaveStatus(t.settings.statusGlossaryFailed, true, 3000)
                           }
                           reader.readAsText(file)
                         }}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Languages, Copy, Check, Volume2, Pin, PinOff } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { commands } from './bindings'
@@ -66,6 +66,10 @@ export default function FloatWindow() {
   }, [])
 
   const runner = useTaskRunner(engine, targetLang, { isPinned: isFloatPinned })
+  // 同 App.tsx：runner 每次渲染都是新对象，进依赖会让 keydown 在流式翻译期
+  // 每个 chunk 都重绑一次。用 ref 取最新快照，监听只建立一次。
+  const runnerRef = useRef(runner)
+  runnerRef.current = runner
   const { state, text: translatedText, error } = runner.snapshot
   const isTranslating = state === 'running'
 
@@ -79,19 +83,22 @@ export default function FloatWindow() {
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault()
         // 对转基准以当前生效语言为准：如果是有效目标为英文，则转为中文，反之转为英文
-        const currentActive = runner.snapshot.effectiveTargetLang || targetLang
+        const currentActive = runnerRef.current.snapshot.effectiveTargetLang || targetLang
         const nextLang =
           currentActive === 'zh-CN' || currentActive.startsWith('zh') ? 'en' : 'zh-CN'
         setTargetLang(nextLang)
-        if (runner.snapshot.sourceText) {
+        if (runnerRef.current.snapshot.sourceText) {
           // 无论当前是否在运行，直接打断并以 forceTargetLang 显式发起新目标语言翻译
-          runner.run(runner.snapshot.sourceText, { targetLang: nextLang, forceTargetLang: true })
+          runnerRef.current.run(runnerRef.current.snapshot.sourceText, {
+            targetLang: nextLang,
+            forceTargetLang: true,
+          })
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [targetLang, runner])
+  }, [targetLang])
 
   const showNetworkEngineHint =
     error?.kind === 'network' && (engine === 'google' || engine === 'google_web')

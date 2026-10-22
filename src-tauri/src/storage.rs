@@ -246,8 +246,11 @@ pub fn migrate_keyring_settings_to_db(cache: &transly_core::TranslationCache) {
                 .ok()
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| default_val.to_string());
-            let _ = cache.set_setting(key, &val);
-            let _ = crate::secrets::delete_secret(key);
+            // 只有落库成功才删 Keyring 原件。写入失败（磁盘满 / 库只读）时若照旧删除，
+            // 用户配置就永久丢在两者之间——既不在库里，也不在凭据库。
+            if cache.set_setting(key, &val).is_ok() {
+                let _ = crate::secrets::delete_secret(key);
+            }
         }
     }
 

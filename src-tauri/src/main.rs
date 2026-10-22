@@ -60,8 +60,9 @@ fn main() {
     let cache = TranslationCache::open_default(resolve_data_dir(&context.config().identifier));
 
     // 执行一次性从系统 Keyring 迁移非敏感配置到 SQLite app_settings
-    // 全新安装或已完成迁移后，app_settings 包含 __migrated_from_keyring 标记，
-    // 后续启动彻底为 0 次系统凭据管理器调用，彻底消除主线程阻塞！
+    // 迁移完成后 app_settings 会写入 __migrated_from_keyring 标记，后续启动不再重跑迁移。
+    // 注意：**服务端 Bearer Token 不在此列**，它必须留在系统凭据库（`secrets::get_or_create_server_token`
+    // 每次启动仍会读一次 Keyring），只有从不敏感配置的迁移是零开销的。
     src_tauri::storage::migrate_keyring_settings_to_db(&cache);
 
     // 启动时将轻量缓存维护（清理超过 90 天条目，并保留最多 100,000 条）投递至后台线程，避免阻塞主线程冷启动

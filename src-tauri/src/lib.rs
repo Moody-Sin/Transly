@@ -21,7 +21,26 @@ pub mod storage;
 pub fn export_bindings() -> Result<(), Box<dyn std::error::Error>> {
     let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts");
     app_command_builder!().export(specta_typescript::Typescript::default(), &output)?;
+    normalize_generated_bindings(&output)?;
     println!("TypeScript 绑定已生成至 {output:?}");
+    Ok(())
+}
+
+/// 纠正 specta 生成 runtime 里唯一一处 `any`。
+///
+/// 模板生成的 `typedError` 写成 `error: e as any`：这让 `status === "error"`
+/// 分支下的 `error` 变成 `any`，把前后端共享的错误分类契约（`ErrorKind` 等）
+/// 在本该最严格的地方整片糊掉。替换为 `as E` 后类型回到调用方声明的错误类型，
+/// 且语义等价（`unknown` 断言到泛型参数）。
+///
+/// 必须在**生成后**改：`src/bindings.ts` 是产物，手改会被下次生成覆盖，
+/// 而 CI 用 `git diff --exit-code src/bindings.ts` 校验同步。
+fn normalize_generated_bindings(path: &std::path::Path) -> std::io::Result<()> {
+    let source = std::fs::read_to_string(path)?;
+    let patched = source.replace("error: e as any", "error: e as E");
+    if patched != source {
+        std::fs::write(path, patched)?;
+    }
     Ok(())
 }
 

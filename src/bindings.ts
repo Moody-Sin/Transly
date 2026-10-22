@@ -325,7 +325,7 @@ async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; dat
         return { status: "ok", data: await result };
     } catch (e) {
         if (e instanceof Error) throw e;
-        return { status: "error", error: e as any };
+        return { status: "error", error: e as E };
     }
 }
 

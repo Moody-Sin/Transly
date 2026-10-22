@@ -178,3 +178,23 @@
 - **现象**：大模型流式翻译时，后端提前通过 `stash_code_blocks` 生成 `⟦TRANSLY_CODE_N⟧` 占位符并通过打字机模式逐字广播。若用户在输出中途主动取消任务，前端设计规范要求“保留已生成的半截译文”，但此时译文末尾或内部残留着未被 `restore_code_blocks` 还原的专有括线占位符。
 - **教训**：
   - 任何包含“预保护占位符”的流水线，在支持“主动打断且保留中间态”时，都必须为取消路径设计专门的文本清洗（Sanitize）或快速还原逻辑，杜绝底层临时占位标记泄漏到面向用户的展示层。
+
+### 27. `chrome.storage.local.get` 的 Promise 会 reject，挂在 `.then` 链上的消息通道会永久悬挂
+- **现象**：扩展 background 的 `TRANSLATE_BATCH` 分支写成 `Promise.all([getServerToken(), getServerUrl()]).then(async (...) => { ... }); return true`，末尾没有 `.catch()`。`getServerToken` / `getServerUrl` 底层是 `chrome.storage.local.get`（MV3 的 Promise 版），存储损坏或配额满时会 reject。
+- **后果**：`.then` 不执行 → `sendResponse` 永远不被调用 → 而 `return true` 已经把消息通道保住了，content script 只能等到 `The message port closed before a response was received` 超时 → 整批静默失败 → 连续 2 批后误触熔断。**用户看到的是「整页翻译毫无反应」，控制台里没有任何报错。**
+- **教训**：
+  - 在 chrome 扩展里，`return true` 是「我会异步回 `sendResponse`」的**承诺**。只要写下它，就必须保证**每一条**路径（成功 / 业务失败 / 意外 reject）都真的调用了 `sendResponse`，`Promise` 链末尾的 `.catch` 不是可选项。
+  - 这类缺陷静态检查抓不到：TypeScript 不认为「缺少 catch」是错误，`no-floating-promises` 规则也没开。**审查时要专门看每个 `return true` 的后续是否有兜底分支。**
+
+### 28. 切批逻辑必须同时受「项数 / 字符总量 / 单条上限」三个约束
+- **现象**：`plan_batch_ranges` 只按项数（30）与字符总量（50000）切批，不看单条上限（10000）。一条 20000 字的段落既没超项数也没超总量，会被安进一个含 29 条正常段落的批里。
+- **后果**：服务端 `translate_batch_handler` 发现某项超 `MAX_ITEM_CHARS` 就返回 **413 拒整批**（不是逐项报错）。那 29 条合法段落跟着一起失败；扩展端虽有 413 对半拆的重试，但会多飞 log₂(30) ≈ 5 轮请求，且首屏译文显著延迟。
+- **教训**：
+  - 切批函数的**每一个上限参数都必须真的用上**。`BatchLimits.maxItemChars` 这个字段被声明、被从 `/health` 拉取、被写进 fallback 常量，却从未参与切批判断——**声明了却不用的参数比没有更坏**，它让读者以为已经处理了。
+  - 服务端「先总量后单条」的校验顺序决定了错误粒度：总量超限 → 整批 413；单条超限 → 也是整批 413。既然后者是整批粒度，客户端就必须提前隔离，不能指望服务端逐项报错。
+  - 单测只在**单条**超限时验证「独占一批」是不够的，必须覆盖「超单条上限但未超总量上限」这一档——那才是真正被漏掉的情形。
+
+### 29. 拆大文件前先算「拆完要几个 props」
+- **现象**：评审建议拆分 2130 行的 `App.tsx`。实测统计：设置面板那段 JSX（686 行）引用了 App 顶层 **74 个** state / handler。
+- **结论**：机械抽取会产出一个 74 props 的组件——比 2000 行单文件更难维护，且每个 props 都是一次新的漏传机会。拆分的正确前置条件是把状态先收敛（`useSettingsState` 这类 hook），那是另一件事，不能混在「拆文件」里做。
+- **教训**：**拆文件的收益取决于边界是否天然。** 纯展示、参数少的（`ScreenshotOverlay` 的模态、`HistoryPanel`）值得拆；逻辑与状态深度缠绕的，机械拆会制造更多问题。测量一次（数 props）比争论一小时便宜。同理 `commands/mod.rs` 值得拆：44 个命令函数各自独立，`pub use` 重导出即可保住原有路径，`generate:bindings` 后 diff 为零——这是天然边界。

@@ -7,7 +7,37 @@
 
 ## [未发布]
 
+### 修复
+- **浏览器扩展 `TRANSLATE_BATCH` 链缺 `.catch()`，整批必然挂死（功能完全失效）**：`background/index.ts` 的 `Promise.all([getServerToken(), getServerUrl()]).then(...)` 没有 catch。这两者底层是 `chrome.storage.local.get`，会 reject（扩展存储损坏、配额满）。一旦 reject，`.then` 不执行、`sendResponse` 永不调用，而 `return true` 已保住消息通道，content script 只能等到 `message port closed` 超时 → 整批静默失败 → 连续 2 批后误触熔断。现补 catch 并回传错误。
+- **切批未隔离「超单条上限」的项，一条长段落连带整批 413（`plan_batch_ranges` / `planBatchRanges`）**：原实现只按项数与字符总量切批。一条 20000 字的项（< 50000 总量上限，> 10000 单条上限）会与最多 29 条正常段落同批，服务端对超限项返回 413 拒掉**整批**（不是逐项报错），那些合法段落被连累。现两端都让超单条上限的项严格独占一个区间，代价只落在它自己。`extension/src/shared/batchPlan.ts` 里长期未被使用的 `maxItemChars` 字段至此真正参与切批。
+- **Keyring 配置迁移「先删后验」，写库失败即永久丢配置（数据丢失）**：`storage.rs::migrate_keyring_settings_to_db` 原本 `let _ = cache.set_setting(...)` 后无条件 `delete_secret`。磁盘满或库只读时，用户配置既不在 SQLite 也不在凭据库。现改为仅在落库成功后删除备份。
+- **流式翻译期每来一个 Token 就重建一次 Tauri 事件订阅（`App.tsx` / `FloatWindow.tsx`）**：`useTaskRunner` 每次渲染返回新的对象字面量，而 `useEffect` 依赖里写了整个 `runner`。流式回答每个 chunk 都 `setSnapshot` → 重渲染 → `transly://screenshot-to-main` 订阅与浮窗 `keydown` 监听各 unlisten/re-listen 一次，一个长回答即数百次；期间还存在「旧 unlisten 未落地、新订阅已建立」的双重订阅窗口。现用 ref 取最新的 `run`，订阅只建立一次。
+- **扩展取消广播的 `generation` 与它描述的任务脱钩（`content/index.ts`）**：`cancelTranslation` 先自增 `currentGeneration` 再发送，导致 `TRANSLATION_CANCELLED` 携带的是**下一个**任务的代际，而 STARTED / PROGRESS / 其余终态发的都是任务自身的代际。当前无消费方依赖，属于未来加代际校验就会误判的语义裂缝。现发送自增前的值。
+- **`CHANGELOG` 的 0.4.1 小节重复且分类错误**：该版本下出现两个 `### 修复`（违反 Keep a Changelog「一个版本一种类型只出现一次」），且「框选截图翻译（三平台）」这项**新功能**被归在 `### 修复` 下。现合并重复小节，并把该功能移到 `### 新增`。
+
+### 无障碍
+- **截图覆盖窗零 `aria-*` 属性**：`ScreenshotOverlay.tsx` 是全屏框选界面，含引擎下拉、语言下拉、复制、发送到主窗口、切换译文、取消共 6+ 个控件，此前屏幕阅读器拿不到任何容器语义，两个下拉也没有可访问名（只念选项不念用途）。现补 `role="application"` + 容器 `aria-label`、两个下拉的 `aria-label`、识别/翻译中状态的 `role="status" aria-live="polite"`、错误条 `role="alert"`。
+- **历史记录删除无确认且无撤销**：`HistoryPanel` 的垃圾桶按钮紧邻「朗读」，一次误点即永久删除。现改为行内二次确认（首次点击转为红色勾选态，3 秒内不确认自动回退），并补 `aria-label`。
+
+### 优化与增强
+- **拆分 `commands/mod.rs`（2152 行 → 8 个领域子模块）**：按领域拆到 `translate` / `glossary` / `history` / `settings` / `float` / `server` / `shortcut_status` / `llm`，`mod.rs` 统一 `pub use` 重导出，命令的 crate 内路径不变，因此 `app_command_builder!` 与 `src/bindings.ts` 的生成结果零差异（已验证 `generate:bindings` 后除下述 `as any` 外无 diff）。测试保留在 `mod.rs` 并显式补齐拆分后不再自动继承的 `use`。
+- **设置面板 18 处裸 `setTimeout(() => setSaveStatus(null), N)` 收敛到 `useTransientMessage`**：这些定时器从不清理，连续操作时前一次会抢先把后一次提示抹掉，组件卸载后还会再 setState 一次。新 hook 统一管理「清除上一个定时器」与「卸载清理」。
+- **`bindings.ts` 生成后消除唯一一处 `as any`（`export_bindings`）**：specta 模板把 `typedError` 的 catch 分支写成 `error: e as any`，让 `status === "error"` 下的 `error` 变成 `any`，把前后端共享的错误分类契约在本该最严格处整片糊掉。现在生成后统一改写为 `as E`（语义等价，类型回到调用方声明的错误类型）；必须改生成器而非产物，否则 CI 的 `git diff --exit-code src/bindings.ts` 会红。
+- **注释与实现对齐（三处）**：`main.rs` 原称「后续启动彻底为 0 次系统凭据管理器调用」不成立（服务端 Bearer Token 每次启动仍读一次 Keyring）；`popup/index.ts` 原称「未申请 tabs 权限」与 `manifest.json` 事实相反（`background` 的 `tabs.onUpdated` 真需要它，误删会破坏站点自动翻译）；`batchPlan.ts` 原称超长项「交由服务端逐项报错」，实际服务端是整批 413。
+- **补齐缺失的目录 README**：`src-tauri/bin`、`src-tauri/tests`，并重写已严重过时的 `src/utils/README.md`（原文只列了 1 个模块，实际有 8 个）。
+- **扩展 `console.log` 收敛到 `DEBUG` 开关**：content script 跑在用户页面的控制台上，常态打日志等于把扩展内部状态广播给每个站点。生产默认静默，排查时改一行开关即可。
+
 ## [0.4.1] - 2026-10-18
+
+### 新增
+- **框选截图翻译（三平台）**：`Alt+Shift+S` / 托盘「截图翻译」/ 主窗口按钮三入口触发，屏幕冻结为覆盖窗后拖拽框选任意区域，自动 OCR 识别并**按原坐标叠加译文**（保排版），可一键「还原原文」；覆盖窗内可直接切换引擎与目标语言即时重译、复制全部译文、把识别/翻译结果发送到主窗口精修重译。
+  - **三平台自研屏幕捕获**（统一入口 `capture_monitor`）：Windows GDI `BitBlt`、macOS `CGDisplayCreateImage`、Linux X11 `xcb`。**刻意不引入 `xcap`** —— 其 Linux 依赖链强制拉入 pipewire/libspa（非 optional），而 `libspa 0.10.1` 无条件引用 pipewire 1.0 才引入的字段，在 Ubuntu 22.04 上编译直接失败；这些依赖只服务于 Wayland，而 Wayland 本就不在支持范围内。
+  - **三平台 OCR**（统一入口 `recognize_words`）：Windows `Windows.Media.Ocr`、macOS Vision、Linux 外呼 `tesseract`（`- - tsv` 管道，全流程内存零落盘）。
+  - **归一化坐标契约 `NormRect`**（原点左上，分量 ∈ `[0,1]`）为全链路唯一坐标语言：截图的物理像素与覆盖窗的 CSS 逻辑像素在任何 DPI 下都不相等，归一化后前端只需 `left: x*100%`，全链路零缩放系数，杜绝混合 DPI 下的漂移。
+  - **冻结帧走自定义 URI 协议 `translyshot`**，绝不走 IPC：4K 帧约 33 MB，走 IPC 需 base64 再 `JSON.parse`，JS 堆峰值可达图像 3 倍；`session_id` 不匹配即 404，防陈旧窗口读到新会话图。
+  - **降级探测**：`get_screenshot_capability` 提前告知环境是否支持（Wayland / 缺 tesseract），不支持时按钮禁用并显示**可执行**的原因，而不是让用户按了才发现不能用。
+  - **新增第三个全局快捷键** `Alt+Shift+S`（支持录制与冲突检测）；`ShortcutStatusSlot` 扩展为三个独立槽位，任一快捷键冲突只影响对应设置卡片。
+  - **Linux 剪贴板图片 OCR 顺带可用**：原先非 Windows 平台返回 `unsupported_platform`，而该文案在 Linux 上是「请改用『识别剪贴板图片』」——若剪贴板路径本身不可用，这句指引就是错的。现三平台统一走同一套 OCR 实现。
 
 ### 优化与增强
 - **批量流水线单事务原子写入优化 (`batch_pipeline.rs`)**：`translate_batch_with_cache` 将原本在循环中逐条单事务写入缓存的模式，重构为收集全部成功项后单次调用 `cache.set_batch` 原子批量写入，极大降低磁盘 I/O 争用与锁开销；同时移除 `translate_screenshot_blocks` 中的 `spawn_blocking + block_on` 嵌套反模式，直接异步执行。
@@ -21,19 +51,6 @@
 ### 修复
 - **全局快捷键重复注销导致静默抢占他人按键缺陷 (`commands/mod.rs`)**：`set_shortcut` 与 `set_replace_shortcut` 移除 `if old_shortcut != clean { let _ = app.global_shortcut().unregister(clean); }`，严格遵循 `LESSONS.md` 第 24 条教训，仅注销自身旧键 `old_shortcut`；当目标新键已被其他功能或系统占用时，如实让 `on_shortcut` 抛出 `AlreadyRegistered` 错误并回滚通知用户，杜绝静默抢占。
 - **大模型流式翻译打断取消时占位符未还原泄漏至界面 (`useTaskRunner.ts`, `outcome.ts`)**：新增 `sanitizeCancelledStreamText` 纯函数，对流式打字中途取消（`cancel()`）时的残缺文本进行安全清洗，将内部专有括线占位符（如 `⟦TRANSLY_CODE_0⟧`）替换为友好的 `[代码]` 提示并剔除残缺标记，彻底消除内部标记泄露；新增单元测试覆盖。
-- **框选截图翻译（三平台）**：`Alt+Shift+S` / 托盘「截图翻译」/ 主窗口按钮三入口触发，屏幕冻结为覆盖窗后拖拽框选任意区域，自动 OCR 识别并**按原坐标叠加译文**（保排版），可一键「还原原文」；覆盖窗内可直接切换引擎与目标语言即时重译、复制全部译文、把识别/翻译结果发送到主窗口精修重译。
-  - **三平台自研屏幕捕获**（统一入口 `capture_monitor`）：Windows GDI `BitBlt`、macOS `CGDisplayCreateImage`、Linux X11 `xcb`。**刻意不引入 `xcap`** —— 其 Linux 依赖链强制拉入 pipewire/libspa（非 optional），而 `libspa 0.10.1` 无条件引用 pipewire 1.0 才引入的字段，在 Ubuntu 22.04 上编译直接失败；这些依赖只服务于 Wayland，而 Wayland 本就不在支持范围内。
-  - **三平台 OCR**（统一入口 `recognize_words`）：Windows `Windows.Media.Ocr`、macOS Vision、Linux 外呼 `tesseract`（`- - tsv` 管道，全流程内存零落盘）。
-  - **归一化坐标契约 `NormRect`**（原点左上，分量 ∈ `[0,1]`）为全链路唯一坐标语言：截图的物理像素与覆盖窗的 CSS 逻辑像素在任何 DPI 下都不相等，归一化后前端只需 `left: x*100%`，全链路零缩放系数，杜绝混合 DPI 下的漂移。
-  - **冻结帧走自定义 URI 协议 `translyshot`**，绝不走 IPC：4K 帧约 33 MB，走 IPC 需 base64 再 `JSON.parse`，JS 堆峰值可达图像 3 倍；`session_id` 不匹配即 404，防陈旧窗口读到新会话图。
-  - **降级探测**：`get_screenshot_capability` 提前告知环境是否支持（Wayland / 缺 tesseract），不支持时按钮禁用并显示**可执行**的原因，而不是让用户按了才发现不能用。
-  - **新增第三个全局快捷键** `Alt+Shift+S`（支持录制与冲突检测）；`ShortcutStatusSlot` 扩展为三个独立槽位，任一快捷键冲突只影响对应设置卡片。
-  - **Linux 剪贴板图片 OCR 顺带可用**：原先非 Windows 平台返回 `unsupported_platform`，而该文案在 Linux 上是「请改用『识别剪贴板图片』」——若剪贴板路径本身不可用，这句指引就是错的。现三平台统一走同一套 OCR 实现。
-
-### 安全
-- **升级 `rustls` 至 0.23.46 修复 4 项 TLS 层已知漏洞**：依赖审计（`cargo audit`）暴露 `rustls 0.23.45` 命中 RUSTSEC-2026-0346（客户端会话 `Debug` 实现泄漏 TLS 密钥，中危）、RUSTSEC-2026-0347（ECH 拒绝后缓冲的应用数据仍发往外层服务器）、RUSTSEC-2026-0348（Brotli 证书解压在认证完成前最多可分配 1 GiB）、RUSTSEC-2026-0349（未认证的 ServerHello 可将后续连接降级到经典密钥交换）。四者均为 reqwest 传输路径（`hyper-rustls` / `tokio-rustls`）的上游依赖，翻译请求与本地服务均受其影响。升到 0.23.46 后 `cargo audit` 漏洞数归零（仅剩 3 条 unmaintained/unsound 警告，暂不影响）。
-
-### 修复
 - **配对全局限流的稳态容纳量超过会话表容量，可被持续请求占满（配对拒绝服务）**：全局限流只约束了瞬时突发（10 秒窗口内 3 个新会话），未约束「有耐心的攻击者」跨窗口的持续速率。长期稳态下同时在世的会话数趋近 `burst / window × TTL` = 3/10×60 = **18**，而 `MAX_PENDING_SESSIONS` 仅 16 —— 攻击者按窗口节奏稳定请求约 **50 秒**即可占满全部槽位并长期保持，此后正常浏览器扩展的每次配对都收到 429。原注释声称「灌满 16 个会话至少需要约 50 秒，其间早先的会话已过期」并不成立：首个会话要到 60 秒才过期，50 秒时容量已打满。现有测试只覆盖同一窗口内的密集请求，未覆盖跨窗口的持续请求。现将窗口调整为 15 秒（稳态 12 < 16，对真实用户与 10 秒窗口无感知差别），并新增守护该不变式的常量算术断言 `test_pairing_global_throttle_steady_state_below_capacity`；该测试在旧参数下实测 FAILED（报出 18 > 16），修正后通过。
 - **历史导出 CSV 时间戳错乱，debug 构建直接 panic（数据损坏）**：`format_timestamp_iso` 手写民用历法算法时把闰年修正除数抄错——正确值是 `1460 / 36524 / 146096`（4 年一闰、100 年不闰、400 年再闰），实际写成了 `1024 / 1461 / 142401`（后者与 `146097/4` 形近，属典型手抄串行）。后果分两档：`yoe` 偏大 1 后 `doy = doe - (365*yoe + yoe/4 - yoe/100)` 触发 u32 下溢，debug/测试构建在 1970–2037 年间共 **1672 天**直接 panic；release 构建则产出 `1970-28071671-3435973839T00:00:00Z` 这类畸形字段，**1674 天**的日期错误，用户导出 CSV 后按时间排序与归档全部错乱。原测试只断言了 `format_timestamp_iso(0)` 与 `(-100)`，这两点恰好是错误实现下也正确的值，属 LESSONS 第 11 条所述的「迎合实现的假测试」。现修正除数并补两个回归测试：表驱动真实日期对照（期望值由独立可信来源生成，含闰世纪与普通闰年 2 月）与连续 60 年逐日扫描。按 LESSONS 第 11 条要求，已将实现临时改回缺陷版确认两个测试均 FAILED（命中 `cache.rs:916` 下溢 panic）后再恢复。
 - **扩展「重试失败项」丢弃 `compositeInfo`，导致占位符泄漏与段落破版**：`retryFailedTranslations` 用解构 `({ node, text, id })` 重建条目，把富文本段落赖以还原的 `compositeInfo` 丢掉了。富文本失败项的 `text` 是含 `⟦T_i⟧` 占位符的**复合文本**而非用户可见原文，重试时因 `compositeInfo` 缺失而走普通写回分支，把整段译文连同未还原的占位符一起塞进该段落第一个文本节点，而 `<a>`/`<strong>` 内的原文文本节点保持不动——用户看到「Unicode 私用括号占位符泄漏 + 整句译文与残留原文碎片混排」。首轮翻译路径不受影响（它持有完整条目），属重试路径独有缺陷。现改为整体浅拷贝保留全部字段。
@@ -53,6 +70,9 @@
 - **划词悬浮微标与术语搜索框硬编码中文**：微标 `'译'` 与术语库搜索占位符未走 i18n，英文环境下仍显示中文；同时界面语言偏好未持久化、悬浮窗语言写死为 `zh-CN`，现统一存入 `localStorage` 并跨窗口同步。
 - **配对弹窗、OCR 确认弹窗与历史面板缺失暗色模式**：补全 `dark:*` 类名，消除暗色模式下的刺眼白底与对比度失衡。
 - **Toast 与服务状态轮询定时器未在卸载时清理**：补上 cleanup，避免组件销毁后仍触发 `setState` 与残留 IPC 轮询。
+
+### 安全
+- **升级 `rustls` 至 0.23.46 修复 4 项 TLS 层已知漏洞**：依赖审计（`cargo audit`）暴露 `rustls 0.23.45` 命中 RUSTSEC-2026-0346（客户端会话 `Debug` 实现泄漏 TLS 密钥，中危）、RUSTSEC-2026-0347（ECH 拒绝后缓冲的应用数据仍发往外层服务器）、RUSTSEC-2026-0348（Brotli 证书解压在认证完成前最多可分配 1 GiB）、RUSTSEC-2026-0349（未认证的 ServerHello 可将后续连接降级到经典密钥交换）。四者均为 reqwest 传输路径（`hyper-rustls` / `tokio-rustls`）的上游依赖，翻译请求与本地服务均受其影响。升到 0.23.46 后 `cargo audit` 漏洞数归零（仅剩 3 条 unmaintained/unsound 警告，暂不影响）。
 
 ### 变更
 - **E2E 断言由「静默跳过」改为显式失败**：`test-desktop-ui-e2e.mjs` 中原有 10 余处 `if (await x.isVisible())` 守卫，选择器漂移或组件未挂载时只会静默跳过并照常打印通过。移除守卫后立即暴露出术语库用例的选择器自诞生起就从未匹配成功（placeholder 实际为「源术语」而非「原文」、按钮文案为「添加术语」而非「添加规则」），即该用例此前从未真正执行；同时修正 Mock 数据 `created_at` 由 ISO 字符串改为契约要求的 Unix 秒级整数（原值会渲染成 `Invalid Date`）并新增显式守护断言。

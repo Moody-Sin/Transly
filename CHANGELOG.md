@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 并且本项目严格遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 修复
+- **切批漏掉「单条上限」维度 (`engine/mod.rs`, `batchPlan.ts`)**：`maxItemChars` 此前被声明、被 `/health` 下发、被写进 fallback，却从未参与切批判断。一条 20000 字的项既不超项数（30）也不超字符总量（50000），会被安进含 29 条正常段落的批次；服务端因单项超限整批返回 413，29 条合法段落一起失败。现在两端（Rust `plan_batch_ranges` 与 TS `planBatchRanges`）都让超单条上限的项严格独占一个区间。
+- **扩展消息通道永久悬挂 (`background/index.ts`)**：`TRANSLATE_BATCH` 的 `Promise.all(...).then(...)` 末尾没有 `.catch()`。`chrome.storage.local.get` 在存储损坏或配额满时 reject，`.then` 不执行、`sendResponse` 永不调用，而 `return true` 已保住消息通道——整页翻译静默无反应且控制台无报错。补齐 `.catch` 兜底；同时修正取消事件广播的代际（此前发的是下一个任务的代际）。
+- **Keyring 配置在落库失败时永久丢失 (`storage.rs`)**：`migrate_keyring_settings_to_db` 原本无条件 `delete_secret`，磁盘满或库只读导致 SQLite 写入失败时，用户配置既不在库里也不在凭据库。改为仅在 `set_setting` 返回 `Ok` 时才删除凭据库备份。
+- **流式回答期间事件订阅反复重建 (`App.tsx`, `FloatWindow.tsx`)**：`useTaskRunner` 每次渲染返回新对象字面量，而两处 `useEffect` 依赖整个 runner，LLM 每个 chunk 的 `setSnapshot` 都触发一次 `unlisten`/`re-listen`，长回答达数百次，并存在双重订阅窗口。改用 ref 持有最新 `run`/`snapshot`，订阅只建立一次；设置面板 18 处裸 `setTimeout` 收敛到 `useTransientMessage`，统一清理与卸载。
+
+### 优化与增强
+- **截图覆盖窗无障碍语义 (`ScreenshotOverlay.tsx`)**：此前零 `aria-*`，屏幕阅读器拿不到容器语义，两个下拉也无可访问名。补 `role="application"` + `aria-label`、下拉 `aria-label`、识别/翻译中 `role="status" aria-live="polite"`、错误条 `role="alert"`。
+- **历史删除二次确认 (`HistoryPanel.tsx`)**：垃圾桶按钮紧邻「朗读」，一次误点即永久删除且无撤销。改为行内二次确认（确认/取消双按钮，超时自动回退），并补 `aria-label`。
+- **`typedError` 消除 `any` 逃逸 (`lib.rs`, `export_bindings.rs`)**：specta 模板把 catch 分支写成 `error: e as any`，让 `status === "error"` 下的 error 变成 any，糊掉前后端共享的错误分类契约。改为生成后统一改写为 `as E`：语义等价，类型回到调用方声明的错误类型。
+- **模块拆分**：`commands/mod.rs` 按领域拆为 `translation`/`history`/`runtime`/`settings`/`shortcuts`/`document`/`updater`，`cache.rs` 拆为 `cache/{mod,export,tests}.rs`，`engine/offline.rs` 拆为 `engine/offline/{mod,lexicon,model}.rs`。
+
 ## [0.6.0] - 2026-10-20
 
 ### 新增
